@@ -1,0 +1,325 @@
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
+
+import '../../application/playback/playback_controller.dart';
+import '../../domain/models/local_track.dart';
+import '../../infrastructure/services/local_music_service.dart';
+import '../../presentation/cyrene/cyrene_overlays.dart';
+import '../../presentation/cyrene/cyrene_page.dart';
+import '../../presentation/cyrene/cyrene_toast.dart';
+import '../player/cyrene_track_tile.dart';
+
+class LocalMusicPage extends StatefulWidget {
+  const LocalMusicPage({super.key, required this.playback});
+
+  final PlaybackController playback;
+
+  @override
+  State<LocalMusicPage> createState() => _LocalMusicPageState();
+}
+
+class _LocalMusicPageState extends State<LocalMusicPage> {
+  final _searchController = TextEditingController();
+  List<LocalTrackEntry> _entries = const [];
+  String? _errorMessage;
+  var _isLoading = true;
+  var _isImporting = false;
+  var _requestId = 0;
+
+  List<LocalTrackEntry> get _filteredEntries {
+    final query = _searchController.text.trim().toLowerCase();
+    if (query.isEmpty) return _entries;
+    return _entries
+        .where(
+          (entry) =>
+              entry.name.toLowerCase().contains(query) ||
+              entry.artists.toLowerCase().contains(query) ||
+              entry.album.toLowerCase().contains(query),
+        )
+        .toList(growable: false);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _requestId++;
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final requestId = ++_requestId;
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+    }
+    try {
+      final entries = await LocalMusicService.instance.getAll();
+      if (!mounted || requestId != _requestId) return;
+      setState(() {
+        _entries = entries;
+        _isLoading = false;
+      });
+    } catch (_) {
+      if (!mounted || requestId != _requestId) return;
+      setState(() {
+        _errorMessage = '无法读取本地音乐，请稍后重试。';
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _importFiles() async {
+    try {
+      final result = await FilePicker.pickFiles(
+        allowMultiple: true,
+        type: FileType.custom,
+        allowedExtensions: const ['mp3', 'flac', 'wav', 'm4a', 'ape', 'ogg'],
+      );
+      if (!mounted || result == null) return;
+      final paths = result.files
+          .map((file) => file.path)
+          .whereType<String>()
+          .where((path) => path.isNotEmpty)
+          .toList(growable: false);
+      if (paths.isEmpty) {
+        _showToast('未获取到可导入的文件路径');
+        return;
+      }
+
+      setState(() => _isImporting = true);
+      final count = await LocalMusicService.instance.importFiles(paths);
+      if (!mounted) return;
+      if (count == 0) {
+        _showToast('未导入任何歌曲', description: '当前设备暂不支持音频元数据导入。');
+      } else {
+        _showToast('已导入 $count 首歌曲');
+      }
+      await _load();
+    } catch (_) {
+      if (mounted) {
+        _showToast('导入失败', description: '无法读取所选音频文件。');
+      }
+    } finally {
+      if (mounted) setState(() => _isImporting = false);
+    }
+  }
+
+  Future<void> _remove(LocalTrackEntry entry) async {
+    final confirmed = await showCyreneDialog<bool>(
+      context: context,
+      title: '移除本地歌曲？',
+      summary: '“${entry.name}”将从本地音乐列表移除，不会删除原始文件。',
+      builder: (context, dismiss) {
+        final theme = MiuixTheme.of(context);
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: MiuixTextButton('取消', onPressed: () => dismiss()),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: MiuixButton(
+                    onPressed: () => dismiss(true),
+                    colors: MiuixButtonColors(
+                      color: theme.colors.error,
+                      disabledColor: theme.colors.disabledPrimaryButton,
+                      contentColor: theme.colors.onError,
+                      disabledContentColor:
+                          theme.colors.disabledOnPrimaryButton,
+                    ),
+                    child: MiuixText('移除', style: theme.textStyles.button),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) return;
+    try {
+      await LocalMusicService.instance.remove(entry.filePath);
+      if (!mounted) return;
+      setState(
+        () => _entries = _entries.where((item) => item != entry).toList(),
+      );
+      _showToast('已移除 ${entry.name}');
+    } catch (_) {
+      if (mounted) _showToast('移除失败，请稍后重试');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = MiuixTheme.of(context);
+    return CyrenePage(
+      title: '本地音乐',
+      actions: [
+        MiuixIconButton(
+          key: const Key('refresh-local-music-button'),
+          enabled: !_isLoading && !_isImporting,
+          onPressed: _load,
+          child: MiuixIcon(
+            vector: MiuixIcons.extended.byName('refresh')!,
+            size: 20,
+          ),
+        ),
+        const SizedBox(width: 8),
+      ],
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: MiuixTextField(
+                    controller: _searchController,
+                    label: '搜索歌曲、歌手或专辑',
+                    singleLine: true,
+                    leadingIcon: Padding(
+                      padding: const EdgeInsets.only(left: 16, right: 8),
+                      child: MiuixIcon(
+                        vector: MiuixIcons.extended.byName('search')!,
+                        size: 18,
+                        tint: theme.colors.onSecondaryContainer,
+                      ),
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                MiuixButton(
+                  key: const Key('import-local-music-button'),
+                  enabled: !_isImporting,
+                  onPressed: _importFiles,
+                  colors: MiuixButtonDefaults.buttonColorsPrimary(context),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_isImporting)
+                        MiuixCircularProgressIndicator(
+                          size: 16,
+                          strokeWidth: 2,
+                          colors: MiuixProgressIndicatorColors(
+                            foregroundColor: theme.colors.onPrimary,
+                            disabledForegroundColor: theme.colors.onPrimary,
+                            backgroundColor: Colors.transparent,
+                          ),
+                        )
+                      else
+                        MiuixIcon(
+                          vector: MiuixIcons.extended.byName('import')!,
+                          size: 18,
+                        ),
+                      const SizedBox(width: 8),
+                      MiuixText('导入', style: theme.textStyles.button),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(child: _buildContent()),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContent() {
+    final theme = MiuixTheme.of(context);
+    if (_isLoading) {
+      return const Center(child: MiuixCircularProgressIndicator());
+    }
+    if (_errorMessage != null) {
+      return CyreneEmptyState(
+        icon: Icons.error_outline,
+        title: '本地音乐加载失败',
+        description: _errorMessage!,
+        action: MiuixButton(
+          onPressed: _load,
+          child: MiuixText('重试', style: theme.textStyles.button),
+        ),
+      );
+    }
+
+    final entries = _filteredEntries;
+    if (entries.isEmpty) {
+      final searching = _searchController.text.trim().isNotEmpty;
+      return CyrenePullToRefresh(
+        onRefresh: _load,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(
+            parent: ClampingScrollPhysics(),
+          ),
+          children: [
+            const SizedBox(height: 80),
+            CyreneEmptyState(
+              icon: searching ? Icons.search_off : Icons.music_note,
+              title: searching ? '没有匹配的歌曲' : '还没有本地音乐',
+              description: searching ? '换个关键词试试。' : '选择设备上的音频文件，将它们加入本地音乐。',
+              action: searching
+                  ? null
+                  : MiuixButton(
+                      onPressed: _importFiles,
+                      child: MiuixText(
+                        '选择音频文件',
+                        style: theme.textStyles.button,
+                      ),
+                    ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final tracks = entries
+        .map(LocalMusicService.instance.toTrack)
+        .map((track) => track.copyWith(playbackUrl: Uri.file(track.filePath!)))
+        .toList(growable: false);
+    return CyrenePullToRefresh(
+      onRefresh: _load,
+      child: ListView.separated(
+        physics: const AlwaysScrollableScrollPhysics(
+          parent: ClampingScrollPhysics(),
+        ),
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 40),
+        itemCount: entries.length,
+        separatorBuilder: (_, _) => const SizedBox(height: 10),
+        itemBuilder: (context, index) {
+          final entry = entries[index];
+          final track = tracks[index];
+          return CyreneTrackTile(
+            track: track,
+            onPlay: () => widget.playback.playTrack(track, queue: tracks),
+            trailing: MiuixIconButton(
+              key: Key('remove-local-${entry.filePath}'),
+              onPressed: () => _remove(entry),
+              child: MiuixIcon(
+                vector: MiuixIcons.extended.byName('delete')!,
+                size: 20,
+                tint: theme.colors.error,
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _showToast(String title, {String? description}) {
+    CyreneToast.show(description == null ? title : '$title：$description');
+  }
+}

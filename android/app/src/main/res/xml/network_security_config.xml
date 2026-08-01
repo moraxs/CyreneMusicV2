@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- 允许本地代理服务器的 HTTP 明文流量 -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+
+        <!-- QQ 音乐和其他音乐平台的 HTTP 解析地址 -->
+        <domain includeSubdomains="true">sycdn.kuwo.cn</domain>
+        <domain includeSubdomains="true">kuwo.cn</domain>
+        <domain includeSubdomains="true">music.126.net</domain>
+        <domain includeSubdomains="true">qq.com</domain>
+        <domain includeSubdomains="true">kugou.com</domain>
+    </domain-config>
+
+    <!-- 默认配置：允许所有 HTTP 流量以兼容更多代理和音频源，但这存在安全风险 -->
+    <!-- 由于音乐播放经常遇到各种不知名的 CDN 或者代理地址 -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
