@@ -37,6 +37,10 @@ class _DesktopSearchBarState extends State<DesktopSearchBar> {
   /// 面板宽度与输入框对齐，浮层左对齐贴在输入框正下方。
   static const _panelWidth = 360.0;
 
+  /// MiuixInputField 默认最小高度为 45dp；桌面标题栏使用其 80%，避免在
+  /// 48dp 的标题栏内显得过于饱满。
+  static const _fieldHeight = 36.0;
+
   /// 输入防抖 300ms（与移动端 SearchPage 一致）；seq 丢弃过期响应。
   Timer? _suggestDebounce;
   int _suggestSeq = 0;
@@ -151,14 +155,17 @@ class _DesktopSearchBarState extends State<DesktopSearchBar> {
 
   // 胶囊形状的 Miuix 搜索输入（MiuixSearchBar 的输入部件）：自带搜索图标、
   // 清除按钮与占位标签，圆角为全椭圆胶囊。受控于 _query / _expanded。
-  Widget _buildField() => MiuixInputField(
-    query: _query,
-    onQueryChange: _onQueryChanged,
-    onSearch: _submit,
-    expanded: _expanded,
-    onExpandedChange: (value) => setState(() => _expanded = value),
-    focusNode: _focusNode,
-    label: '搜索音乐、歌手',
+  Widget _buildField() => SizedBox(
+    height: _fieldHeight,
+    child: MiuixInputField(
+      query: _query,
+      onQueryChange: _onQueryChanged,
+      onSearch: _submit,
+      expanded: _expanded,
+      onExpandedChange: (value) => setState(() => _expanded = value),
+      focusNode: _focusNode,
+      label: '搜索音乐、歌手',
+    ),
   );
 
   Widget _buildOverlay(BuildContext context) {
