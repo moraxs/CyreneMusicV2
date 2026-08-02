@@ -102,27 +102,27 @@ class DesktopShell extends StatefulWidget {
 typedef _NavEntry = ({String label, IconData icon, String title});
 
 class _DesktopShellState extends State<DesktopShell> {
-  /// 侧栏选中项(0..7),驱动 IndexedStack 与标题栏区块标题。
+  /// 侧栏选中项(0..7),驱动 IndexedStack 页面切换。
   int _index = 0;
 
-  /// 首页当前的二级页(歌单详情/每日推荐/播放历史)。非 null 时内容区整个
-  /// 覆盖为该页:窗口外壳(侧栏/标题栏/迷你播放器)保持原样,只有内容区
-  /// 切换,不再整窗 push 路由。从二级页返回首页:置回 null。
-  Widget? _homeBody;
-
-  /// 首页当前覆盖的二级页;非 null 时标题栏标题回退为「正在听」。
-  bool get _homeCovered => _homeBody != null;
+  /// 首页二级页导航栈(歌单详情/每日推荐/播放历史)。栈非空时内容区整个
+  /// 覆盖为栈顶:窗口外壳(侧栏/标题栏/迷你播放器)保持原样,只有内容区
+  /// 切换,不再整窗 push 路由。上一级/下一级按钮驱动后退/前进,栈空即首页。
+  final _homeStack = DesktopHomeStack();
 
   /// 打开首页歌单详情(内容区二级页);「放松时刻/工作学习」等推荐卡、榜单
-  /// 卡片、你的歌单、推荐歌单都走这里,覆盖 `_homeBody` 而非整窗 push 路由。
+  /// 卡片、你的歌单、推荐歌单都走这里,压入 `_homeStack` 而非整窗 push 路由。
   void _openHomePlaylist(int id, String title, String coverUrl) {
     setState(() {
-      _homeBody = PlaylistDetailPage(
-        playlistId: id,
-        title: title,
-        coverUrl: coverUrl,
-        playback: widget.playback,
-        token: widget.account.token,
+      _homeStack.push(
+        PlaylistDetailPage(
+          playlistId: id,
+          title: title,
+          coverUrl: coverUrl,
+          playback: widget.playback,
+          token: widget.account.token,
+          onOpenPlaylist: _openHomePlaylist,
+        ),
       );
     });
   }
@@ -131,6 +131,24 @@ class _DesktopShellState extends State<DesktopShell> {
   /// 汉堡按钮驱动:显示模式固定 expanded,fluent 自带的 togglePane() 在这个
   /// 模式下是空实现,收展只能自己管。
   bool _paneOpen = false;
+
+  /// 标题栏搜索框最近一次提交的关键词与序号。序号驱动 [SearchPage] 重建:
+  /// 换 key 触发它 `initState` 里的 `search(initialQuery)`,同词也能重搜。
+  /// 从侧栏正常进入「搜索」时序号不变,该页保留原有状态。
+  String _searchKeyword = '';
+  int _searchSeq = 0;
+
+  /// 标题栏搜索框提交:切到「搜索」导航项,并让搜索页以该关键词重建搜索。
+  void _onTitleBarSearch(String keyword) {
+    final k = keyword.trim();
+    if (k.isEmpty) return;
+    setState(() {
+      _index = 3; // 「搜索」在 _entries 里的下标(见 _mainEntries)。
+      _homeStack.clear(); // 离开首页,清二级页栈。
+      _searchKeyword = k;
+      _searchSeq++;
+    });
+  }
 
   /// 主导航项。前 4 项与移动端 tab 语义对应(首页/发现/我的/搜索);后 2 项
   /// 原属「更多」子菜单,现在直接作为独立导航项,点击即切 IndexedStack。
@@ -174,22 +192,24 @@ class _DesktopShellState extends State<DesktopShell> {
                 data: desktopFluentTheme(context),
                 child: NavigationView(
                   titleBar: DesktopTitleBar(
-                    title: _homeCovered
-                        ? '正在听'
-                        : _entries[_index].title,
+                    title: _entries[_index].title,
                     paneOpen: _paneOpen,
                     onTogglePane: () => setState(() => _paneOpen = !_paneOpen),
-                    // 首页二级页覆盖时:标题栏最左侧出现返回按钮,点击回首页。
-                    onBack: _homeCovered
-                        ? () => setState(() => _homeBody = null)
-                        : null,
+                    // 首页二级页导航栈驱动后退/前进;按钮常驻显示,栈状态只
+                    // 决定可点态。
+                    canGoBack: _homeStack.canGoBack,
+                    canGoForward: _homeStack.canGoForward,
+                    onBack: () => setState(() => _homeStack.back()),
+                    onForward: () => setState(() => _homeStack.forward()),
+                    // 正中搜索框提交 → 切到搜索页展示结果。
+                    onSubmitSearch: _onTitleBarSearch,
                   ),
                   pane: NavigationPane(
                     selected: _index,
                     onChanged: (index) => setState(() {
                       _index = index;
-                      // 切走首页时清理二级页覆盖,避免回来后还是歌单详情。
-                      if (_index != 0) _homeBody = null;
+                      // 切走首页时清空二级页栈,避免回来后还是歌单详情。
+                      if (_index != 0) _homeStack.clear();
                     }),                    // 固定 expanded,收展改由 size.openWidth 承担(理由见类文档)。
                     displayMode: PaneDisplayMode.expanded,
                     size: NavigationPaneSize(
@@ -283,8 +303,8 @@ class _DesktopShellState extends State<DesktopShell> {
       onOpenPlayer: widget.onOpenPlayer,
       onOpenPlaylist: widget.onOpenHomePlaylist ?? _openHomePlaylist,
       // 首页二级页覆盖:见 [DesktopHomePage] 类文档「桌面端次级页面不走路由」。
-      onOpenSecondary: (page) => setState(() => _homeBody = page),
-      body: _homeBody,
+      onOpenSecondary: (page) => setState(() => _homeStack.push(page)),
+      body: _homeStack.current,
     ),
     DiscoverPage(
       discover: widget.discover,
@@ -308,10 +328,54 @@ class _DesktopShellState extends State<DesktopShell> {
       playback: widget.playback,
       playlists: widget.playlists,
     ),
-    SearchPage(search: widget.search, playback: widget.playback),
+    SearchPage(
+      // key 随标题栏提交序号变化 → 该页重建,initState 里以 initialQuery
+      // 自动搜索并回填输入框;侧栏正常进入时 key 不变,保留原有状态。
+      key: ValueKey('search-$_searchSeq'),
+      search: widget.search,
+      playback: widget.playback,
+      initialQuery: _searchKeyword,
+    ),
     HistoryPage(playback: widget.playback),
     LocalMusicPage(playback: widget.playback),
     SettingsPage(account: widget.account, audioSources: widget.audioSources),
     SupportPage(account: widget.account),
   ];
+}
+
+/// 首页二级页导航栈:后退/前进都按「栈模型」语义——后退把当前页弹回上一页
+/// (弹到首页即栈空),前进把刚弹出的页再放回。进栈即断掉前进分支,与浏览器
+/// 行为一致(见 [push] 注释)。逐页渲染靠 [current] 取栈顶,页面保活由
+/// [IndexedStack] 承担,故本类只存 Widget 不掺状态。
+class DesktopHomeStack {
+  final List<Widget> _back = [];
+  final List<Widget> _forward = [];
+
+  /// 有可后退的上级页面。栈非空即可后退:栈顶就是当前二级页,后退把它弹回
+  /// (弹到栈空即回首页)。首页本体不在栈里,栈空时无法后退。
+  bool get canGoBack => _back.isNotEmpty;
+  bool get canGoForward => _forward.isNotEmpty;
+  Widget? get current => _back.isEmpty ? null : _back.last;
+
+  /// 压入新页。回退后又前进到新位置时,旧的前进分支作废(与浏览器一致)。
+  void push(Widget page) {
+    _back.add(page);
+    _forward.clear();
+  }
+
+  void back() {
+    if (!canGoBack) return;
+    final current = _back.removeLast();
+    _forward.add(current);
+  }
+
+  void forward() {
+    if (!canGoForward) return;
+    _back.add(_forward.removeLast());
+  }
+
+  void clear() {
+    _back.clear();
+    _forward.clear();
+  }
 }

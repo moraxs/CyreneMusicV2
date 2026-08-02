@@ -90,6 +90,8 @@ flutter:
 
   assets:
     - assets/icons/new_ico_white.png
+    - assets/icons/OouiNextLtr.svg
+    - assets/icons/OouiNextRtl.svg
     - assets/icons/icon_forward.svg
     - assets/icons/icon_lyrics.svg
     - assets/icons/icon_pause.svg

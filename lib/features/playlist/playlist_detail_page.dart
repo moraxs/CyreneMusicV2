@@ -23,6 +23,7 @@ class PlaylistDetailPage extends StatefulWidget {
     required this.coverUrl,
     required this.playback,
     this.token,
+    this.onOpenPlaylist,
   }) : isPersonal = false,
        trackCount = 0;
 
@@ -35,6 +36,7 @@ class PlaylistDetailPage extends StatefulWidget {
     required this.playback,
     required String this.token,
     this.trackCount = 0,
+    this.onOpenPlaylist,
   }) : isPersonal = true;
 
   final int playlistId;
@@ -44,6 +46,11 @@ class PlaylistDetailPage extends StatefulWidget {
   final String? token;
   final bool isPersonal;
   final int trackCount;
+
+  /// 详情页内再打开歌单（如个人歌单里关联的在线歌单）时的跳转回调。桌面端
+  /// 由外壳提供并压入首页二级页导航栈（见 `desktop_shell.dart`），支持逐级
+  /// 向下钻取；null（移动端）则回退为整窗 push 路由。
+  final void Function(int id, String title, String coverUrl)? onOpenPlaylist;
 
   @override
   State<PlaylistDetailPage> createState() => _PlaylistDetailPageState();
@@ -254,6 +261,7 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
                 onPlayAll: tracks.isEmpty
                     ? null
                     : () => _play(tracks.first, tracks),
+                onOpenPlaylist: widget.onOpenPlaylist,
               ),
             ),
           ),
@@ -312,11 +320,15 @@ class _PlaylistHeader extends StatelessWidget {
     required this.playlist,
     required this.fallbackCoverUrl,
     required this.onPlayAll,
+    this.onOpenPlaylist,
   });
 
   final PlaylistDetail playlist;
   final String fallbackCoverUrl;
   final VoidCallback? onPlayAll;
+
+  /// 详情页内再打开歌单（个人歌单子项）的跳转回调。null 则不渲染入口。
+  final void Function(int id, String title, String coverUrl)? onOpenPlaylist;
 
   @override
   Widget build(BuildContext context) {
@@ -396,6 +408,25 @@ class _PlaylistHeader extends StatelessWidget {
               const SizedBox(height: 14),
               _ExpandableDescription(text: playlist.description.trim()),
             ],
+            // 个人歌单：把关联的在线歌单项再打开时继续向下钻取（桌面端压
+            // 二级栈，支持逐级后退/前进；移动端不传回调，此处不渲染）。
+            if (onOpenPlaylist != null &&
+                _LinkedPlaylistRow.childrenOf(playlist).isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Column(
+                children: [
+                  for (final child in _LinkedPlaylistRow.childrenOf(playlist))
+                    _LinkedPlaylistRow(
+                      playlist: child,
+                      onTap: () => onOpenPlaylist!(
+                        child.id,
+                        child.name,
+                        child.coverImgUrl,
+                      ),
+                    ),
+                ],
+              ),
+            ],
             const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,
@@ -427,6 +458,67 @@ class _PlaylistHeader extends StatelessWidget {
     }
     if (count >= 10000) return '${(count / 10000).toStringAsFixed(1)}万';
     return count.toString();
+  }
+}
+
+/// 个人歌单里的「关联在线歌单」行：封面 + 名称 + 跳转提示，点击继续向下
+/// 钻取（桌面端由外壳压入首页二级页导航栈，见 `desktop_shell.dart`）。
+class _LinkedPlaylistRow extends StatelessWidget {
+  const _LinkedPlaylistRow({required this.playlist, required this.onTap});
+
+  final DiscoveryPlaylist playlist;
+  final VoidCallback onTap;
+
+  /// 个人歌单的子项（关联的在线歌单，表现为 playlist 结构的 entry）。
+  /// 原始 JSON 里这些子项的 id/名称/封面等字段与歌曲不同，当前个人歌单
+  /// 模式只装歌曲，没有子歌单概念，故恒为空；将来后端返回子歌单时在此
+  /// 展开即可（桌面端可继续向下钻取，配合标题栏上一级/下一级）。
+  static List<DiscoveryPlaylist> childrenOf(PlaylistDetail detail) =>
+      const [];
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = MiuixTheme.of(context);
+    final colors = theme.colors;
+    return MiuixPressable(
+      onPressed: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: ShapeDecoration(
+          color: colors.secondaryContainer,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+        ),
+        child: Row(
+          children: [
+            _CoverImage(
+              url: playlist.coverImgUrl,
+              size: 40,
+              icon: MiuixIcons.extended.byName('playlist')!,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                playlist.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textStyles.body2.copyWith(
+                  color: colors.onSurfaceContainer,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            MiuixIcon(
+              icon: Icons.chevron_right_rounded,
+              size: 18,
+              tint: colors.onSurfaceVariantActions,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

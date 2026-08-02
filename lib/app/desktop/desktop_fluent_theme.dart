@@ -27,6 +27,15 @@ FluentThemeData desktopFluentTheme(BuildContext context) {
       backgroundColor: surface,
       overlayBackgroundColor: surface,
     ),
+    // 标题栏上一级/下一级等按钮的提示延迟:与 Material Tooltip 的 500ms
+    // 体验对齐(fluent 默认悬停 0 延迟即显,偏急躁)。**不要动 showDuration**:
+    // merge 时非空的 showDuration 会覆盖掉默认的 1500ms,导致拖拽区里的
+    // Tooltip 按 150ms tick 高频显隐、整条标题栏子树反复重建,进而打断
+    // DragToMoveArea 的 pan 识别,窗口变成不可拖动(见 desktop_title_bar.dart
+    // 顶部类文档对《拖不动》问题的完整分析)。
+    tooltipTheme: const TooltipThemeData(
+      waitDuration: Duration(milliseconds: 500),
+    ),
   );
 }
 
