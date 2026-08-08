@@ -72,8 +72,10 @@ class FullscreenSettingsStore extends ChangeNotifier {
     _superCyrenePlayerEnabled =
         prefs.getBool(_kSuperCyrenePlayerEnabled) ?? _superCyrenePlayerEnabled;
     final storedSuperCyreneTheme = prefs.getString(_kSuperCyreneLyricsTheme);
-    _superCyreneLyricsTheme = storedSuperCyreneTheme == 'chat'
-        ? 'chat'
+    _superCyreneLyricsTheme =
+        (storedSuperCyreneTheme == 'chat' ||
+            storedSuperCyreneTheme == 'pixel')
+        ? storedSuperCyreneTheme!
         : 'default';
     notifyListeners();
   }
@@ -147,7 +149,8 @@ class FullscreenSettingsStore extends ChangeNotifier {
   }
 
   void setSuperCyreneLyricsTheme(String value) {
-    final normalized = value == 'chat' ? 'chat' : 'default';
+    final normalized =
+        (value == 'chat' || value == 'pixel') ? value : 'default';
     if (_superCyreneLyricsTheme == normalized) return;
     _superCyreneLyricsTheme = normalized;
     _prefs?.setString(_kSuperCyreneLyricsTheme, normalized);

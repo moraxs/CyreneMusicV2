@@ -20,16 +20,16 @@ class SuperCyreneControlPanel extends StatefulWidget {
     required this.account,
     required this.track,
     required this.cover,
-    required this.chatLyrics,
-    required this.onChatLyricsChanged,
+    required this.lyricsTheme,
+    required this.onLyricsThemeChanged,
   });
 
   final PlaybackController playback;
   final AccountSessionController account;
   final Track? track;
   final ImageProvider? cover;
-  final bool chatLyrics;
-  final ValueChanged<bool> onChatLyricsChanged;
+  final String lyricsTheme;
+  final ValueChanged<String> onLyricsThemeChanged;
 
   @override
   State<SuperCyreneControlPanel> createState() =>
@@ -140,8 +140,8 @@ class _SuperCyreneControlPanelState extends State<SuperCyreneControlPanel> {
                       track: widget.track,
                       cover: widget.cover,
                       favorite: _playlistIds.isNotEmpty,
-                      chatLyrics: widget.chatLyrics,
-                      onChatLyricsChanged: widget.onChatLyricsChanged,
+                      lyricsTheme: widget.lyricsTheme,
+                      onLyricsThemeChanged: widget.onLyricsThemeChanged,
                       onClose: () => setState(() => _open = false),
                       onFavorite: _toggleFavorite,
                       onQueue: () => Navigator.of(context, rootNavigator: true)
@@ -224,8 +224,8 @@ class _Panel extends StatelessWidget {
     required this.track,
     required this.cover,
     required this.favorite,
-    required this.chatLyrics,
-    required this.onChatLyricsChanged,
+    required this.lyricsTheme,
+    required this.onLyricsThemeChanged,
     required this.onClose,
     required this.onFavorite,
     required this.onQueue,
@@ -236,8 +236,8 @@ class _Panel extends StatelessWidget {
   final Track? track;
   final ImageProvider? cover;
   final bool favorite;
-  final bool chatLyrics;
-  final ValueChanged<bool> onChatLyricsChanged;
+  final String lyricsTheme;
+  final ValueChanged<String> onLyricsThemeChanged;
   final VoidCallback onClose;
   final VoidCallback onFavorite;
   final VoidCallback onQueue;
@@ -270,8 +270,8 @@ class _Panel extends StatelessWidget {
             _Artwork(track: track, cover: cover, onClose: onClose),
             _SongInfo(track: track),
             _LyricsThemeRow(
-              chatLyrics: chatLyrics,
-              onChanged: onChatLyricsChanged,
+              lyricsTheme: lyricsTheme,
+              onChanged: onLyricsThemeChanged,
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
@@ -415,10 +415,16 @@ class _SongInfo extends StatelessWidget {
 }
 
 class _LyricsThemeRow extends StatelessWidget {
-  const _LyricsThemeRow({required this.chatLyrics, required this.onChanged});
+  const _LyricsThemeRow({required this.lyricsTheme, required this.onChanged});
 
-  final bool chatLyrics;
-  final ValueChanged<bool> onChanged;
+  final String lyricsTheme;
+  final ValueChanged<String> onChanged;
+
+  String get _label => switch (lyricsTheme) {
+    'chat' => '对话',
+    'pixel' => '像素',
+    _ => '默认',
+  };
 
   @override
   Widget build(BuildContext context) => Container(
@@ -442,8 +448,8 @@ class _LyricsThemeRow extends StatelessWidget {
             letterSpacing: 1.4,
           ),
         ),
-        PopupMenuButton<bool>(
-          initialValue: chatLyrics,
+        PopupMenuButton<String>(
+          initialValue: lyricsTheme,
           onSelected: onChanged,
           color: const Color(0xE6141418),
           elevation: 16,
@@ -453,8 +459,30 @@ class _LyricsThemeRow extends StatelessWidget {
             side: BorderSide(color: Colors.white.withValues(alpha: .10)),
           ),
           itemBuilder: (context) => const [
-            PopupMenuItem(value: false, height: 34, child: Text('默认')),
-            PopupMenuItem(value: true, height: 34, child: Text('对话')),
+            PopupMenuItem(
+              value: 'default',
+              height: 34,
+              child: Text(
+                '默认',
+                style: TextStyle(color: Colors.white, fontSize: 13),
+              ),
+            ),
+            PopupMenuItem(
+              value: 'chat',
+              height: 34,
+              child: Text(
+                '对话',
+                style: TextStyle(color: Colors.white, fontSize: 13),
+              ),
+            ),
+            PopupMenuItem(
+              value: 'pixel',
+              height: 34,
+              child: Text(
+                '像素',
+                style: TextStyle(color: Colors.white, fontSize: 13),
+              ),
+            ),
           ],
           child: Container(
             width: 112,
@@ -469,7 +497,7 @@ class _LyricsThemeRow extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  chatLyrics ? '对话' : '默认',
+                  _label,
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: .80),
                     fontSize: 11,

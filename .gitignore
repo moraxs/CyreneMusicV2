@@ -54,3 +54,9 @@ app.*.map.json
 .research_tmp/
 .workbuddy/
 test/failures/
+
+# Z-code plans
+/.zcode/
+
+# Build logs
+build_smtc_log.txt
