@@ -62,7 +62,7 @@ static void my_application_activate(GApplication* application) {
   GdkRGBA background_color;
   // Background defaults to black, override it here if necessary, e.g. #00000000
   // for transparent.
-  gdk_rgba_parse(&background_color, "#000000");
+  gdk_rgba_parse(&background_color, "#00000000");
   fl_view_set_background_color(view, &background_color);
   gtk_widget_show(GTK_WIDGET(view));
   gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
@@ -71,6 +71,13 @@ static void my_application_activate(GApplication* application) {
   // Requires the view to be realized so we can start rendering.
   g_signal_connect_swapped(view, "first-frame", G_CALLBACK(first_frame_cb),
                            self);
+  // Critical: calling gtk_widget_show(GTK_WIDGET(view)) here presents the
+  // window too early, so the backdrop blur (window transparency) has no
+  // rounded corners applied. The window then renders as a solid rectangle
+  // with square corners. The first frame callback only shows the top-level
+  // window, which is the right place to show the view.
+  // See: https://github.com/alexmercerind/flutter_acrylic/blob/master/linux/README.md#adding-blur-to-the-window
+  // gtk_widget_show(GTK_WIDGET(view));
   gtk_widget_realize(GTK_WIDGET(view));
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));

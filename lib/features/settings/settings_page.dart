@@ -31,10 +31,14 @@ class SettingsPage extends StatelessWidget {
     super.key,
     required this.account,
     required this.audioSources,
+    this.onOpenSecondary,
+    this.body,
   });
 
   final AccountSessionController account;
   final AudioSourcePreferencesController audioSources;
+  final ValueChanged<Widget>? onOpenSecondary;
+  final Widget? body;
 
   // HyperOS 系统设置的彩色图标底色（对照官方设置页取色）。
   static const _iconBlue = Color(0xFF3482FF);
@@ -43,13 +47,17 @@ class SettingsPage extends StatelessWidget {
   static const _iconOrange = Color(0xFFFF9F0A);
 
   @override
-  Widget build(BuildContext context) => CyrenePage(
-    title: '设置',
-    bodyBuilder: (context, topPadding) => AnimatedBuilder(
-      animation: account,
-      builder: (context, _) {
-        final state = account.state;
-        return ListView(
+  Widget build(BuildContext context) {
+    final secondaryBody = body;
+    if (secondaryBody != null) return secondaryBody;
+
+    return CyrenePage(
+      title: '设置',
+      bodyBuilder: (context, topPadding) => AnimatedBuilder(
+        animation: account,
+        builder: (context, _) {
+          final state = account.state;
+          return ListView(
           physics: const BouncingScrollPhysics(),
           // HyperOS：卡片距屏幕两侧 12，组间距 12，节标题走 MiuixSmallTitle
           //（水平内边距 28 = 页边 12 + 卡内 16，与卡片内容左缘对齐）。
@@ -74,13 +82,13 @@ class SettingsPage extends StatelessWidget {
                   iconBackground: _iconBlue,
                   title: '播放与音源',
                   subtitle: '音质、解析服务与播放偏好',
-                  onTap: () => Navigator.of(context).push(
-                    CupertinoPageRoute<void>(
-                      builder: (_) => AudioSourceSettingsPage(
-                        controller: audioSources,
-                        account: account,
-                        token: state.isLoggedIn ? account.token : null,
-                      ),
+                  onTap: () => _openPage(
+                    context,
+                    AudioSourceSettingsPage(
+                      controller: audioSources,
+                      account: account,
+                      token: state.isLoggedIn ? account.token : null,
+                      desktopLayout: onOpenSecondary != null,
                     ),
                   ),
                 ),
@@ -92,11 +100,7 @@ class SettingsPage extends StatelessWidget {
                     title: '音效与均衡器',
                     subtitle: '自定义音频频率响应',
                     value: EqualizerService.instance.enabled ? '已开启' : '已关闭',
-                    onTap: () => Navigator.of(context).push(
-                      CupertinoPageRoute<void>(
-                        builder: (_) => const EqualizerPage(),
-                      ),
-                    ),
+                    onTap: () => _openPage(context, const EqualizerPage()),
                   ),
                 ),
               ],
@@ -112,11 +116,9 @@ class SettingsPage extends StatelessWidget {
                     iconBackground: _iconPurple,
                     title: '外观',
                     subtitle: '主题、播放器样式与背景',
-                    onTap: () => Navigator.of(context).push(
-                      CupertinoPageRoute<void>(
-                        builder: (_) =>
-                            AppearanceSettingsPage(account: account),
-                      ),
+                    onTap: () => _openPage(
+                      context,
+                      AppearanceSettingsPage(account: account),
                     ),
                   ),
                 ),
@@ -138,9 +140,7 @@ class SettingsPage extends StatelessWidget {
                   vector: MiuixIcons.extended.byName('info')!,
                   iconBackground: _iconOrange,
                   title: '关于 Cyrene Music',
-                  onTap: () => Navigator.of(context).push(
-                    CupertinoPageRoute<void>(builder: (_) => const AboutPage()),
-                  ),
+                  onTap: () => _openPage(context, const AboutPage()),
                 ),
                 // 连点关于页版本号 5 次开启后才出现（对应原版开发者模式）。
                 ListenableBuilder(
@@ -152,10 +152,9 @@ class SettingsPage extends StatelessWidget {
                           iconBackground: const Color(0xFF5F6368),
                           title: '开发者选项',
                           subtitle: '性能叠加层与运行日志',
-                          onTap: () => Navigator.of(context).push(
-                            CupertinoPageRoute<void>(
-                              builder: (_) => const DeveloperOptionsPage(),
-                            ),
+                          onTap: () => _openPage(
+                            context,
+                            const DeveloperOptionsPage(),
                           ),
                         )
                       : const SizedBox.shrink(),
@@ -163,10 +162,22 @@ class SettingsPage extends StatelessWidget {
               ],
             ),
           ],
-        );
-      },
-    ),
-  );
+          );
+        },
+      ),
+    );
+  }
+
+  void _openPage(BuildContext context, Widget page) {
+    final openSecondary = onOpenSecondary;
+    if (openSecondary != null) {
+      openSecondary(page);
+      return;
+    }
+    Navigator.of(
+      context,
+    ).push(CupertinoPageRoute<void>(builder: (_) => page));
+  }
 
   /// 查看服务端公告（对应原版启动公告的手动入口）。
   Future<void> _showAnnouncement(BuildContext context) async {
@@ -311,17 +322,19 @@ class SettingsPage extends StatelessWidget {
         leading: _AccountAvatar(user: user),
         title: user.username,
         subtitle: user.email,
-        onTap: () => Navigator.of(context).push(
-          CupertinoPageRoute<void>(
-            builder: (_) => PersonalCenterPage(account: account),
-          ),
-        ),
+        onTap: () =>
+            _openPage(context, PersonalCenterPage(account: account)),
       ),
     ];
   }
 
   Future<void> _openLoginPage(BuildContext context) async {
     account.clearError();
+    final openSecondary = onOpenSecondary;
+    if (openSecondary != null) {
+      openSecondary(LoginPage(account: account));
+      return;
+    }
     final loggedIn = await Navigator.of(context).push<bool>(
       CupertinoPageRoute(builder: (_) => LoginPage(account: account)),
     );

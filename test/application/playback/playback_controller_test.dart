@@ -114,6 +114,70 @@ void main() {
     expect(audio.loaded, isEmpty);
     expect(controller.state.errorMessage, isNotNull);
   });
+
+  test('设置智能续播供给方后，「下一首」改走供给方', () async {
+    final first = _track('one');
+    final second = _track('two');
+    final smart = _track('smart');
+    await controller.playTrack(first, queue: [first, second]);
+    controller.setSmartNextProvider(() async => smart);
+
+    await controller.playNext();
+
+    expect(controller.state.currentTrack, smart);
+    expect(audio.loaded.last, smart.playbackUrl);
+  });
+
+  test('播放自然结束同样走智能续播供给方', () async {
+    final first = _track('one');
+    final smart = _track('smart');
+    await controller.playTrack(first, queue: [first]);
+    controller.setSmartNextProvider(() async => smart);
+
+    audio.statuses.add(PlaybackStatus.completed);
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.state.currentTrack, smart);
+  });
+
+  test('智能续播返回 null 时回退队列导航', () async {
+    final first = _track('one');
+    final second = _track('two');
+    await controller.playTrack(first, queue: [first, second]);
+    controller.setSmartNextProvider(() async => null);
+
+    await controller.playNext();
+
+    expect(controller.state.currentTrack, second);
+  });
+
+  test('智能续播抛错时回退队列导航', () async {
+    final first = _track('one');
+    final second = _track('two');
+    await controller.playTrack(first, queue: [first, second]);
+    controller.setSmartNextProvider(() async => throw StateError('boom'));
+
+    await controller.playNext();
+
+    expect(controller.state.currentTrack, second);
+  });
+
+  test('「上一首」不参与智能续播', () async {
+    final first = _track('one');
+    final second = _track('two');
+    await controller.playTrack(second, queue: [first, second]);
+    var consulted = false;
+    controller.setSmartNextProvider(() async {
+      consulted = true;
+      return null;
+    });
+
+    await controller.playPrevious();
+
+    expect(controller.state.currentTrack, first);
+    expect(consulted, isFalse);
+  });
 }
 
 Track _track(String id) => Track(

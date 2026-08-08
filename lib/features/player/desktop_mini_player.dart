@@ -1,4 +1,3 @@
-import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 // material 自身也导出一个 RepeatMode(RepeatingAnimationBuilder 用),与本项目的
 // 播放循环模式撞名,hide 掉即可——本文件不用 material 那个。
 import 'package:flutter/material.dart' hide RepeatMode;
@@ -9,8 +8,12 @@ import '../../application/audio_sources/audio_source_preferences_controller.dart
 import '../../application/auth/account_session_controller.dart';
 import '../../application/playback/playback_controller.dart';
 import '../../domain/playback/repeat_mode.dart';
+import '../../infrastructure/services/heart_mode_service.dart';
+import '../../infrastructure/services/playlist_service.dart';
 import '../../presentation/cyrene/cyrene_toast.dart';
-import 'mobile/mobile_player_page.dart';
+import 'desktop_fullscreen_player_host.dart';
+import 'desktop_fullscreen_player_route.dart';
+import 'fullscreen/add_to_playlist_sheet.dart';
 import 'track_artwork.dart';
 
 /// 桌面端专用底部迷你播放器底栏（WinUI 扁平语言，铺满窗口宽度）。
@@ -49,8 +52,8 @@ class DesktopMiniPlayer extends StatelessWidget {
 
     void openPlayer() {
       Navigator.of(context).push(
-        CupertinoPageRoute<void>(
-          builder: (_) => MobilePlayerPage(
+        DesktopFullscreenPlayerRoute(
+          builder: (_) => DesktopFullscreenPlayerHost(
             playback: playback,
             audioSources: audioSources,
             account: account,
@@ -91,6 +94,7 @@ class DesktopMiniPlayer extends StatelessWidget {
                         Expanded(
                           child: _LeftSection(
                             playback: playback,
+                            token: account.token,
                             onOpenPlayer: openPlayer,
                           ),
                         ),
@@ -98,6 +102,7 @@ class DesktopMiniPlayer extends StatelessWidget {
                         Expanded(
                           child: _RightControls(
                             playback: playback,
+                            token: account.token,
                             onOpenLyrics: openPlayer,
                           ),
                         ),
@@ -212,9 +217,14 @@ class _SeekBarState extends State<_SeekBar> {
 
 /// 左段：封面 + 标题/歌手（点击进全屏播放页）+ 喜欢按钮。
 class _LeftSection extends StatelessWidget {
-  const _LeftSection({required this.playback, required this.onOpenPlayer});
+  const _LeftSection({
+    required this.playback,
+    required this.token,
+    required this.onOpenPlayer,
+  });
 
   final PlaybackController playback;
+  final String? token;
   final VoidCallback onOpenPlayer;
 
   @override
@@ -273,12 +283,7 @@ class _LeftSection extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          _HoverIconButton(
-            icon: Icons.favorite_border_rounded,
-            tooltip: '喜欢',
-            color: colors.onSurfaceContainer,
-            onPressed: () => CyreneToast.show('收藏功能即将上线'),
-          ),
+          _LikeButton(playback: playback, token: token),
         ],
       ),
     );
@@ -416,11 +421,16 @@ class _BigPlayButtonState extends State<_BigPlayButton> {
   }
 }
 
-/// 右段：时间 / 歌词 / 音量 / 播放列表。
+/// 右段：时间 / 歌词 / 音量 / 心动模式 / 播放列表。
 class _RightControls extends StatelessWidget {
-  const _RightControls({required this.playback, required this.onOpenLyrics});
+  const _RightControls({
+    required this.playback,
+    required this.token,
+    required this.onOpenLyrics,
+  });
 
   final PlaybackController playback;
+  final String? token;
   final VoidCallback onOpenLyrics;
 
   @override
@@ -443,6 +453,8 @@ class _RightControls extends StatelessWidget {
           ),
           const SizedBox(width: 4),
           _VolumeControl(playback: playback),
+          const SizedBox(width: 4),
+          _HeartModeButton(playback: playback, token: token),
           const SizedBox(width: 4),
           _HoverIconButton(
             icon: Icons.queue_music_rounded,
@@ -617,6 +629,241 @@ class _VolumeControlState extends State<_VolumeControl> {
 ///
 /// 用 Material [Tooltip]（简单 label 语义，不同于会崩的 Slider 语义节点），且外层
 /// [DesktopMiniPlayer] 的 [ExcludeSemantics] 已兜底，启动首帧不产生任何语义节点。
+/// 喜欢（收藏）按钮：把当前曲目加入 / 移出「我们的后端歌单」，与网易云绑定
+/// 无关。空心 / 实心反映当前曲是否已在任一歌单中；切歌时自动刷新。
+///
+/// 点击交互沿用应用既有范式（SuperCyrene 播放器 control_panel）：
+/// - 已在一个歌单 → 直接移除（不弹层）；
+/// - 已在多个歌单 → 弹「管理所在歌单」，勾选要移除的；
+/// - 未在任何歌单 → 只有一个歌单则直接添加，多个则弹出选择加到哪个。
+class _LikeButton extends StatefulWidget {
+  const _LikeButton({required this.playback, required this.token});
+
+  final PlaybackController playback;
+  final String? token;
+
+  @override
+  State<_LikeButton> createState() => _LikeButtonState();
+}
+
+class _LikeButtonState extends State<_LikeButton> {
+  final _service = PlaylistService.instance;
+
+  List<int> _playlistIds = const [];
+  int _favoriteRequest = 0;
+  String? _lastTrackKey;
+
+  @override
+  void initState() {
+    super.initState();
+    _lastTrackKey = widget.playback.state.currentTrack?.key;
+    widget.playback.addListener(_onPlaybackChanged);
+    _refreshLike();
+  }
+
+  @override
+  void dispose() {
+    widget.playback.removeListener(_onPlaybackChanged);
+    super.dispose();
+  }
+
+  /// 仅在当前曲目变化时刷新收藏态；进度 tick 走独立通知、播放/暂停等结构
+  /// 变更不换曲，都不会触发网络查询。
+  void _onPlaybackChanged() {
+    final key = widget.playback.state.currentTrack?.key;
+    if (key == _lastTrackKey) return;
+    _lastTrackKey = key;
+    _refreshLike();
+  }
+
+  Future<void> _refreshLike() async {
+    final request = ++_favoriteRequest;
+    final track = widget.playback.state.currentTrack;
+    final token = widget.token;
+    if (track == null || token == null) {
+      if (mounted && _playlistIds.isNotEmpty) {
+        setState(() => _playlistIds = const []);
+      }
+      return;
+    }
+    final result = await _service.checkTrackInPlaylists(
+      token,
+      track.id,
+      track.source.wireName,
+    );
+    if (!mounted || request != _favoriteRequest) return;
+    setState(() => _playlistIds = result.playlistIds);
+  }
+
+  Future<void> _toggleLike() async {
+    final track = widget.playback.state.currentTrack;
+    if (track == null) return;
+    final token = widget.token;
+    if (token == null) {
+      CyreneToast.show('请先登录后再收藏');
+      return;
+    }
+    // 以最新歌单归属为准（图标可能因切歌略滞后）。
+    await _refreshLike();
+    if (!mounted) return;
+
+    // 已在歌单中 → 移除。
+    if (_playlistIds.isNotEmpty) {
+      if (_playlistIds.length == 1) {
+        final ok = await _service.removeTrackFromPlaylist(
+          token,
+          _playlistIds.first,
+          track.id,
+          track.source.wireName,
+        );
+        CyreneToast.show(ok ? '已从歌单中移除' : '从歌单移除失败');
+        if (ok) await _refreshLike();
+        return;
+      }
+      final changed = await AddToPlaylistSheet.show(
+        context,
+        token: token,
+        track: track,
+        showOnlyJoinedInitially: true,
+      );
+      if (changed == true) await _refreshLike();
+      return;
+    }
+
+    // 未在任何歌单中 → 添加。
+    final playlists = await _service.getPlaylists(token);
+    if (!mounted) return;
+    if (playlists.isEmpty) {
+      CyreneToast.show('还没有歌单，请先在歌单页创建');
+      return;
+    }
+    if (playlists.length == 1) {
+      final playlist = playlists.first;
+      final ok = await _service.addTrackToPlaylist(
+        token,
+        playlist.id,
+        track.id,
+        track.name,
+        track.artists,
+        track.album,
+        track.picUrl,
+        track.source.wireName,
+      );
+      CyreneToast.show(ok ? '已收藏到「${playlist.name}」' : '收藏失败');
+      if (ok) await _refreshLike();
+      return;
+    }
+    final changed = await AddToPlaylistSheet.show(
+      context,
+      token: token,
+      track: track,
+      showOnlyJoinedInitially: false,
+    );
+    if (changed == true) await _refreshLike();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MiuixTheme.of(context).colors;
+    final liked = _playlistIds.isNotEmpty;
+    return _HoverIconButton(
+      icon: liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+      tooltip: liked ? '取消收藏' : '收藏',
+      color: liked ? colors.primary : colors.onSurfaceContainer,
+      onPressed: _toggleLike,
+    );
+  }
+}
+
+/// 心动模式开关（桌面迷你条右段「播放列表」旁）：利用闲置的
+/// HeartModeService 实现「为你收听智能续播」——以当前曲为种子，下一首/
+/// 播放自然结束都改走智能推荐。✨ 图标与左侧「喜欢」爱心区分开（爱心留给
+/// 将来的收藏/取消功能）。
+///
+/// 自包含：本地持开关态，开启时给 [PlaybackController] 挂智能续播供给方
+/// （见 [PlaybackController.setSmartNextProvider]）并监听切歌喂给
+/// HeartModeService 做续拉种子；关闭/销毁时全部还原。这样迷你条本体保持
+/// Stateless 不变。
+class _HeartModeButton extends StatefulWidget {
+  const _HeartModeButton({required this.playback, required this.token});
+
+  final PlaybackController playback;
+  final String? token;
+
+  @override
+  State<_HeartModeButton> createState() => _HeartModeButtonState();
+}
+
+class _HeartModeButtonState extends State<_HeartModeButton> {
+  bool _active = false;
+  String? _lastTrackKey;
+
+  @override
+  void dispose() {
+    _deactivate();
+    super.dispose();
+  }
+
+  /// 切歌时把新曲目喂给心动模式作为续拉种子（仅开启时挂监听）。
+  void _onPlaybackChanged() {
+    final key = widget.playback.state.currentTrack?.key;
+    if (key == null || key == _lastTrackKey) return;
+    _lastTrackKey = key;
+    HeartModeService.instance.updateSeed(key);
+  }
+
+  Future<void> _toggle() async {
+    if (_active) {
+      _deactivate();
+      setState(() => _active = false);
+      CyreneToast.show('已关闭心动模式');
+      return;
+    }
+    final track = widget.playback.state.currentTrack;
+    final token = widget.token;
+    if (track == null) {
+      CyreneToast.show('请先播放一首歌曲');
+      return;
+    }
+    if (token == null || token.isEmpty) {
+      CyreneToast.show('请先登录后再使用心动模式');
+      return;
+    }
+    try {
+      await HeartModeService.instance.start(track.id, token);
+      if (!mounted) return;
+      widget.playback.setSmartNextProvider(
+        () => HeartModeService.instance.getNextTrack(token),
+      );
+      widget.playback.addListener(_onPlaybackChanged);
+      _lastTrackKey = track.key;
+      setState(() => _active = true);
+      CyreneToast.show('已开启心动模式，将按你的喜好智能续播');
+    } catch (e) {
+      if (mounted) CyreneToast.show('心动模式启动失败，请稍后重试');
+      debugPrint('[HeartMode] 启动失败: $e');
+    }
+  }
+
+  void _deactivate() {
+    if (!_active) return;
+    widget.playback.removeListener(_onPlaybackChanged);
+    widget.playback.setSmartNextProvider(null);
+    HeartModeService.instance.stop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MiuixTheme.of(context).colors;
+    return _HoverIconButton(
+      icon: Icons.auto_awesome_rounded,
+      tooltip: _active ? '关闭心动模式' : '心动模式',
+      color: _active ? colors.primary : colors.onSurfaceContainer,
+      onPressed: _toggle,
+    );
+  }
+}
+
 class _HoverIconButton extends StatefulWidget {
   const _HoverIconButton({
     required this.icon,

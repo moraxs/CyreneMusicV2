@@ -75,7 +75,7 @@ void installProbe() {
   void afterFrame(Duration _) {
     frame++;
     if (probeDumpSemantics) _dumpSemantics(frame);
-    debugPrint('[PROBE] frame#$frame done');
+    // debugPrint('[PROBE] frame#$frame done');
     binding.addPostFrameCallback(afterFrame);
   }
 

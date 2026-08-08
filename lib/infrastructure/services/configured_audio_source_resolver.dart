@@ -45,10 +45,24 @@ class ConfiguredAudioSourceResolver implements AudioSourceResolver {
         final sourceTrack = track.withSource(sourceRef);
 
         final cached = await _cache.find(sourceTrack, preferences.quality);
+        LyricData? prefetchedLyric;
+        int? cachedCandidateIndex;
         if (cached != null) {
+          // 自动切到队列下一首时通常会直接命中音频缓存。旧逻辑把
+          // 不含歌词的缓存候选放在最前面，播放器成功加载它后就不会
+          // 继续使用后面已携带歌词的网络候选，因此第二首会显示暂无歌词。
+          prefetchedLyric = await _sourceClient.fetchLyrics(sourceTrack);
+          final lyric = prefetchedLyric ?? const LyricData();
+          cachedCandidateIndex = candidates.length;
           candidates.add(
             PlaybackCandidate(
-              track: sourceTrack.copyWith(playbackUrl: cached),
+              track: sourceTrack.copyWith(
+                playbackUrl: cached,
+                lyric: lyric.lyric,
+                yrc: lyric.yrc,
+                tlyric: lyric.tlyric,
+                ytlrc: lyric.ytlrc,
+              ),
               sourceId: '${config.id}:cache',
             ),
           );
@@ -62,8 +76,23 @@ class ConfiguredAudioSourceResolver implements AudioSourceResolver {
           );
           final lyric =
               resolved.lyrics ??
+              prefetchedLyric ??
               await _sourceClient.fetchLyrics(sourceTrack) ??
               const LyricData();
+          // resolveUrlFromSource 有可能直接返回歌词。即使前面的独立
+          // fetchLyrics 没有结果，也要回填到排在第一位的缓存候选中。
+          if (cached != null && cachedCandidateIndex != null) {
+            candidates[cachedCandidateIndex] = PlaybackCandidate(
+              track: sourceTrack.copyWith(
+                playbackUrl: cached,
+                lyric: lyric.lyric,
+                yrc: lyric.yrc,
+                tlyric: lyric.tlyric,
+                ytlrc: lyric.ytlrc,
+              ),
+              sourceId: '${config.id}:cache',
+            );
+          }
           final playable = sourceTrack.copyWith(
             playbackUrl: _parsePlaybackUri(resolved.url),
             lyric: lyric.lyric,

@@ -26,6 +26,7 @@ class AudioSourceSettingsPage extends StatelessWidget {
     required this.controller,
     required this.account,
     required this.token,
+    this.desktopLayout = false,
   });
 
   final AudioSourcePreferencesController controller;
@@ -36,6 +37,7 @@ class AudioSourceSettingsPage extends StatelessWidget {
 
   /// 登录态 token，用于 Cyrene Premium 购买/状态/下发接口鉴权；为空则隐藏该区块。
   final String? token;
+  final bool desktopLayout;
 
   @override
   Widget build(BuildContext context) => CyrenePage(
@@ -48,6 +50,7 @@ class AudioSourceSettingsPage extends StatelessWidget {
         state: controller.state,
         topPadding: topPadding,
         token: token,
+        desktopLayout: desktopLayout,
       ),
     ),
   );
@@ -60,6 +63,7 @@ class _AudioSourceSettingsBody extends StatelessWidget {
     required this.state,
     required this.topPadding,
     required this.token,
+    required this.desktopLayout,
   });
 
   final AudioSourcePreferencesController controller;
@@ -67,6 +71,7 @@ class _AudioSourceSettingsBody extends StatelessWidget {
   final AudioSourcePreferencesState state;
   final EdgeInsets topPadding;
   final String? token;
+  final bool desktopLayout;
 
   @override
   Widget build(BuildContext context) {
@@ -76,19 +81,43 @@ class _AudioSourceSettingsBody extends StatelessWidget {
     }
 
     final theme = MiuixTheme.of(context);
-    return ListView(
+    final content = ListView(
       physics: const BouncingScrollPhysics(),
-      // HyperOS：卡片距屏幕两侧 12，与设置主页一致。
-      padding: topPadding + const EdgeInsets.fromLTRB(12, 4, 12, 40),
+      // 桌面端内容区居中后增加留白；移动端继续沿用 HyperOS 的 12px 页边距。
+      padding: topPadding +
+          EdgeInsets.fromLTRB(
+            desktopLayout ? 24 : 12,
+            4,
+            desktopLayout ? 24 : 12,
+            40,
+          ),
       children: [
         // Cyrene Premium：付款后后端自动下发 OmniParse 音源配置。仅登录用户显示。
         if (token != null && token!.isNotEmpty) ...[
-          _ListeningCardCard(
-            controller: controller,
-            account: account,
-            sources: state.sources,
-            token: token!,
-          ),
+          if (desktopLayout)
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 260,
+                  child: _ListeningCardCard(
+                    controller: controller,
+                    account: account,
+                    sources: state.sources,
+                    token: token!,
+                  ),
+                ),
+                const SizedBox(width: 24),
+                const Expanded(child: _PremiumIntroduction()),
+              ],
+            )
+          else
+            _ListeningCardCard(
+              controller: controller,
+              account: account,
+              sources: state.sources,
+              token: token!,
+            ),
           const SizedBox(height: 28),
         ],
         const MiuixSmallTitle(
@@ -182,14 +211,23 @@ class _AudioSourceSettingsBody extends StatelessWidget {
           enabled: !state.isBusy,
           onChanged: controller.setQuality,
         ),
-        const SizedBox(height: 20),
-        CyreneInlineAlert(
-          vector: MiuixIcons.extended.byName('info')!,
-          title: 'Lx Music 运行时未启用',
-          description:
-              '当前 Android 版本可以导入、排序和持久化洛雪脚本，但尚不能执行 JavaScript。播放时会跳过该音源并继续尝试后续 OmniParse。',
-        ),
+        // 暂停适配 Lx Music，先隐藏页面级运行时说明；恢复适配时解除注释。
+        // const SizedBox(height: 20),
+        // CyreneInlineAlert(
+        //   vector: MiuixIcons.extended.byName('info')!,
+        //   title: 'Lx Music 运行时未启用',
+        //   description:
+        //       '当前 Android 版本可以导入、排序和持久化洛雪脚本，但尚不能执行 JavaScript。播放时会跳过该音源并继续尝试后续 OmniParse。',
+        // ),
       ],
+    );
+
+    if (!desktopLayout) return content;
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1040),
+        child: SizedBox(width: double.infinity, child: content),
+      ),
     );
   }
 
@@ -236,21 +274,22 @@ class _AudioSourceSettingsBody extends StatelessWidget {
                 ],
               ),
             ),
-            MiuixButton(
-              key: const Key('choose-lx-music-source'),
-              minHeight: 58,
-              onPressed: () => dismiss(_SourceSetupAction.lxMusic),
-              child: Row(
-                children: [
-                  MiuixIcon(
-                    vector: MiuixIcons.extended.byName('file')!,
-                    size: 19,
-                  ),
-                  const SizedBox(width: 10),
-                  MiuixText('Lx Music', style: theme.textStyles.button),
-                ],
-              ),
-            ),
+            // 暂停适配 Lx Music，保留入口代码以便后续恢复。
+            // MiuixButton(
+            //   key: const Key('choose-lx-music-source'),
+            //   minHeight: 58,
+            //   onPressed: () => dismiss(_SourceSetupAction.lxMusic),
+            //   child: Row(
+            //     children: [
+            //       MiuixIcon(
+            //         vector: MiuixIcons.extended.byName('file')!,
+            //         size: 19,
+            //       ),
+            //       const SizedBox(width: 10),
+            //       MiuixText('Lx Music', style: theme.textStyles.button),
+            //     ],
+            //   ),
+            // ),
           ],
         );
       },
@@ -526,15 +565,16 @@ class _SourceCard extends StatelessWidget {
               ),
             ],
           ),
-          if (source.type == AudioSourceType.lxMusic) ...[
-            const SizedBox(height: 12),
-            CyreneInlineAlert(
-              vector: MiuixIcons.extended.byName('info')!,
-              title: '运行时未启用',
-              description: '该脚本当前不会在 Android 上执行。',
-              destructive: true,
-            ),
-          ],
+          // 暂停适配 Lx Music，隐藏旧配置卡片内的运行时警告。
+          // if (source.type == AudioSourceType.lxMusic) ...[
+          //   const SizedBox(height: 12),
+          //   CyreneInlineAlert(
+          //     vector: MiuixIcons.extended.byName('info')!,
+          //     title: '运行时未启用',
+          //     description: '该脚本当前不会在 Android 上执行。',
+          //     destructive: true,
+          //   ),
+          // ],
           const SizedBox(height: 10),
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
@@ -1415,6 +1455,51 @@ class _PremiumMembershipCard extends StatelessWidget {
   }
 }
 
+/// 桌面端 Premium 说明，与左侧仿真卡形成紧凑的横向信息区。
+class _PremiumIntroduction extends StatelessWidget {
+  const _PremiumIntroduction();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = MiuixTheme.of(context);
+    return MiuixCard(
+      insideMargin: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              MiuixIcon(
+                vector: MiuixIcons.extended.byName('promotions')!,
+                size: 24,
+                tint: theme.colors.primary,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'CyreneMusic Premium',
+                  style: theme.textStyles.title3.copyWith(
+                    color: theme.colors.onSurfaceContainer,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'CyreneMusic Premium 是一项买断制的订阅服务，让您可以畅享主流平台的音乐。',
+            style: theme.textStyles.body1.copyWith(
+              color: theme.colors.onSurfaceVariantSummary,
+              height: 1.6,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// 卡面本体：渐变 + 光泽 + 芯片 + 文案。固定高度，比例接近真实卡（1.585）。
 class _MembershipCardFace extends StatelessWidget {
   const _MembershipCardFace({required this.grantedAt});
@@ -1477,42 +1562,46 @@ class _MembershipCardFace extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   // 顶部：品牌 wordmark + 永久买断标。
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      MiuixIcon(
-                        vector: MiuixIcons.extended.byName('promotions')!,
-                        size: 20,
-                        tint: Colors.white,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Cyrene Premium',
-                        style: theme.textStyles.body1.copyWith(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.3,
+                  LayoutBuilder(
+                    builder: (context, constraints) => Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        MiuixIcon(
+                          vector: MiuixIcons.extended.byName('promotions')!,
+                          size: 20,
+                          tint: Colors.white,
                         ),
-                      ),
-                      const Spacer(),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 3,
-                        ),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(8),
-                          color: Colors.white.withValues(alpha: .16),
-                        ),
-                        child: Text(
-                          '永久买断',
-                          style: theme.textStyles.footnote2.copyWith(
-                            color: Colors.white.withValues(alpha: .92),
-                            fontWeight: FontWeight.w600,
+                        const SizedBox(width: 8),
+                        Text(
+                          'Cyrene Premium',
+                          style: theme.textStyles.body1.copyWith(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.3,
                           ),
                         ),
-                      ),
-                    ],
+                        if (constraints.maxWidth >= 300) ...[
+                          const Spacer(),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(8),
+                              color: Colors.white.withValues(alpha: .16),
+                            ),
+                            child: Text(
+                              '永久买断',
+                              style: theme.textStyles.footnote2.copyWith(
+                                color: Colors.white.withValues(alpha: .92),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
                   // 中部：金色 EMV 芯片。
                   _EmvChip(),

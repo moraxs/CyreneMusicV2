@@ -118,6 +118,8 @@ class UrlService extends ChangeNotifier {
 
   // Spotify
   String get spotifySearchUrl => _path('/spotify/search');
+  String spotifyPlaylistUrl(String playlistId, {int limit = 50}) =>
+      _path('/spotify/playlist/$playlistId?limit=$limit');
 
   // Qishui
   String get qishuiSearchUrl => _path('/qishui/search');

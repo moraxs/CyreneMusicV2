@@ -4,6 +4,7 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   dynamic_color
+  flutter_acrylic
   media_kit_libs_windows_audio
   screen_retriever_windows
   url_launcher_windows

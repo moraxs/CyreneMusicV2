@@ -1,4 +1,5 @@
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
 
@@ -19,10 +20,12 @@ class ListeningFootprintPage extends StatefulWidget {
     super.key,
     required this.account,
     this.playback,
+    this.desktopLayout = false,
   });
 
   final AccountSessionController account;
   final PlaybackController? playback;
+  final bool desktopLayout;
 
   @override
   State<ListeningFootprintPage> createState() => _ListeningFootprintPageState();
@@ -144,9 +147,31 @@ class _ListeningFootprintPageState extends State<ListeningFootprintPage> {
               const SizedBox(height: 16),
               _StatsRow(stats: _stats),
               const SizedBox(height: 24),
-              _WeeklyAlbumWall(weeklyPlays: _weekly),
-              const SizedBox(height: 24),
-              _LanguageStatsSection(languageStats: _languages),
+              // 新增字段在 Flutter 热重载保留的旧 Widget 实例上可能暂时为
+              // null；显式比较可保证条件表达式始终返回 bool。
+              if (widget.desktopLayout == true)
+                SizedBox(
+                  height: 300,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(
+                        child: _WeeklyAlbumWall(weeklyPlays: _weekly),
+                      ),
+                      const SizedBox(width: 20),
+                      Expanded(
+                        child: _LanguageStatsSection(
+                          languageStats: _languages,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else ...[
+                _WeeklyAlbumWall(weeklyPlays: _weekly),
+                const SizedBox(height: 24),
+                _LanguageStatsSection(languageStats: _languages),
+              ],
               const SizedBox(height: 24),
               _TopRankingSection(
                 topPlays: _stats?.playCounts.take(10).toList() ?? const [],
@@ -356,53 +381,149 @@ class _WeeklyAlbumWall extends StatelessWidget {
 }
 
 /// 封面网格背景：循环填充铺满，无封面时留底色。
-class _CoverGrid extends StatelessWidget {
+class _CoverGrid extends StatefulWidget {
   const _CoverGrid({required this.covers});
 
   final List<String> covers;
 
   @override
-  Widget build(BuildContext context) => GridView.builder(
-    physics: const NeverScrollableScrollPhysics(),
-    padding: EdgeInsets.zero,
-    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-      crossAxisCount: 4,
-    ),
-    itemCount: 16,
-    itemBuilder: (context, index) {
-      final url = covers[index % covers.length];
-      return LayoutBuilder(
-        builder: (context, constraints) => CachedNetworkImage(
-          imageUrl: url,
-          httpHeaders: imageHeaders(url),
-          fit: BoxFit.cover,
-          // 4 列网格,按 cell 实际宽降采样解码(见 coverDecodeWidth)。
-          memCacheWidth: coverDecodeWidth(
-            constraints.maxWidth.isFinite && constraints.maxWidth > 0
-                ? constraints.maxWidth
-                : 110,
-            MediaQuery.devicePixelRatioOf(context),
-          ),
-          errorWidget: (_, _, _) => ColoredBox(
-            color: MiuixTheme.of(context).colors.secondaryContainer,
-          ),
+  State<_CoverGrid> createState() => _CoverGridState();
+}
+
+class _CoverGridState extends State<_CoverGrid> {
+  final _scrollController = ScrollController();
+  int _scrollGeneration = 0;
+  double _cycleDistance = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startAutoScroll());
+  }
+
+  @override
+  void didUpdateWidget(covariant _CoverGrid oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.covers != widget.covers) {
+      _scrollGeneration++;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _startAutoScroll());
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollGeneration++;
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _startAutoScroll() async {
+    final generation = ++_scrollGeneration;
+    await Future<void>.delayed(const Duration(milliseconds: 700));
+    while (mounted && generation == _scrollGeneration) {
+      if (!_scrollController.hasClients ||
+          _scrollController.position.maxScrollExtent <= 0) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        continue;
+      }
+
+      final position = _scrollController.position;
+      // 32 个单元由两份相同的 4×4 封面墙组成；滚过前半段后无缝复位。
+      final cycleDistance = _cycleDistance.clamp(
+        0.0,
+        position.maxScrollExtent,
+      ).toDouble();
+      if (cycleDistance <= 0) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        continue;
+      }
+      await _scrollController.animateTo(
+        cycleDistance,
+        duration: Duration(milliseconds: (cycleDistance * 32).round()),
+        curve: Curves.linear,
+      );
+      if (!mounted || generation != _scrollGeneration) return;
+      _scrollController.jumpTo(0);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, gridConstraints) {
+      // 4×4 正方形网格的高度等于网格宽度，即一份封面墙的循环距离。
+      _cycleDistance = gridConstraints.maxWidth;
+      return GridView.builder(
+        controller: _scrollController,
+        physics: const NeverScrollableScrollPhysics(),
+        padding: EdgeInsets.zero,
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 4,
         ),
+        itemCount: 32,
+        itemBuilder: (context, index) {
+          final url = widget.covers[index % widget.covers.length];
+          return LayoutBuilder(
+            builder: (context, constraints) => CachedNetworkImage(
+              imageUrl: url,
+              httpHeaders: imageHeaders(url),
+              fit: BoxFit.cover,
+              // 4 列网格,按 cell 实际宽降采样解码(见 coverDecodeWidth)。
+              memCacheWidth: coverDecodeWidth(
+                constraints.maxWidth.isFinite && constraints.maxWidth > 0
+                    ? constraints.maxWidth
+                    : 110,
+                MediaQuery.devicePixelRatioOf(context),
+              ),
+              errorWidget: (_, _, _) => ColoredBox(
+                color: MiuixTheme.of(context).colors.secondaryContainer,
+              ),
+            ),
+          );
+        },
       );
     },
   );
 }
 
 /// 听歌语言占比（对应 LanguageStatsSection）：横向柱状，按播放次数倒序。
-class _LanguageStatsSection extends StatelessWidget {
+class _LanguageStatsSection extends StatefulWidget {
   const _LanguageStatsSection({required this.languageStats});
 
   final LanguageStatsData? languageStats;
 
   @override
+  State<_LanguageStatsSection> createState() =>
+      _LanguageStatsSectionState();
+}
+
+class _LanguageStatsSectionState extends State<_LanguageStatsSection> {
+  final _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _handlePointerSignal(PointerSignalEvent event) {
+    if (event is! PointerScrollEvent || !_scrollController.hasClients) return;
+    final delta = event.scrollDelta.dy != 0
+        ? event.scrollDelta.dy
+        : event.scrollDelta.dx;
+    final position = _scrollController.position;
+    _scrollController.jumpTo(
+      (position.pixels + delta).clamp(
+        position.minScrollExtent,
+        position.maxScrollExtent,
+      ).toDouble(),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = MiuixTheme.of(context);
     final colors = theme.colors;
-    final data = languageStats;
+    final data = widget.languageStats;
     final items = data?.languages ?? const [];
     if (items.isEmpty) {
       return const _SectionEmpty(
@@ -434,55 +555,65 @@ class _LanguageStatsSection extends StatelessWidget {
               children: [
                 SizedBox(
                   height: 150,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    physics: const BouncingScrollPhysics(),
-                    itemCount: sorted.length,
-                    separatorBuilder: (_, _) => const SizedBox(width: 20),
-                    itemBuilder: (context, index) {
-                      final item = sorted[index];
-                      final ratio = totalPlayCount > 0
-                          ? item.playCount / totalPlayCount
-                          : 0.0;
-                      final barHeight = 12 + ratio * 80;
-                      final percent = (ratio * 100).round();
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '$percent%',
-                            style: theme.textStyles.title3.copyWith(
-                              color: colors.onSurfaceContainer,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            item.language,
-                            style: theme.textStyles.body2.copyWith(
-                              color: colors.onSurfaceContainer,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          const Spacer(),
-                          Container(
-                            width: 56,
-                            height: barHeight,
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(14),
-                              gradient: LinearGradient(
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                                colors: [
-                                  colors.primary,
-                                  colors.primary.withValues(alpha: 0.6),
-                                ],
+                  child: Listener(
+                    onPointerSignal: _handlePointerSignal,
+                    child: Scrollbar(
+                      controller: _scrollController,
+                      thumbVisibility: true,
+                      scrollbarOrientation: ScrollbarOrientation.bottom,
+                      child: ListView.separated(
+                        controller: _scrollController,
+                        scrollDirection: Axis.horizontal,
+                        physics: const BouncingScrollPhysics(),
+                        padding: const EdgeInsets.only(bottom: 10),
+                        itemCount: sorted.length,
+                        separatorBuilder: (_, _) => const SizedBox(width: 20),
+                        itemBuilder: (context, index) {
+                          final item = sorted[index];
+                          final ratio = totalPlayCount > 0
+                              ? item.playCount / totalPlayCount
+                              : 0.0;
+                          final barHeight = 12 + ratio * 80;
+                          final percent = (ratio * 100).round();
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '$percent%',
+                                style: theme.textStyles.title3.copyWith(
+                                  color: colors.onSurfaceContainer,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
-                            ),
-                          ),
-                        ],
-                      );
-                    },
+                              const SizedBox(height: 2),
+                              Text(
+                                item.language,
+                                style: theme.textStyles.body2.copyWith(
+                                  color: colors.onSurfaceContainer,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const Spacer(),
+                              Container(
+                                width: 56,
+                                height: barHeight,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(14),
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                    colors: [
+                                      colors.primary,
+                                      colors.primary.withValues(alpha: 0.6),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 14),

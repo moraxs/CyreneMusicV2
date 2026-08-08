@@ -19,6 +19,7 @@ library;
 import 'dart:collection';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
@@ -54,6 +55,7 @@ class FluidCloudWordLine extends StatefulWidget {
     this.baseColor = const Color(0xFFFFFFFF),
     this.inactiveAlpha = _kInactiveAlpha,
     this.fallbackMaxWidth = 320,
+    this.positionListenable,
   });
 
   /// 要渲染的歌词行
@@ -85,6 +87,13 @@ class FluidCloudWordLine extends StatefulWidget {
 
   /// 约束无界时的兜底最大宽度
   final double fallbackMaxWidth;
+
+  /// Optional playback clock used by isolated players such as SuperCyrene.
+  ///
+  /// Legacy mobile layouts omit this and continue to use [PlayerService].
+  /// Passing the clock explicitly prevents the active-line selector and the
+  /// word painter from reading different playback positions.
+  final ValueListenable<Duration>? positionListenable;
 
   @override
   State<FluidCloudWordLine> createState() => _FluidCloudWordLineState();
@@ -120,31 +129,90 @@ class FluidCloudLineSolution {
 
   /// 逐词动画解算，首次访问时计算
   List<WordAnimations> get animations => _animations ??= solveWordAnimations(
-        layout: layout,
-        lineStartTime: lineStartMs,
-        lineEndTime: lineEndMs,
-        lineWords: _lineWords,
-        isBG: false,
-        wordFadeWidth: _wordFadeWidth,
-      );
+    layout: layout,
+    lineStartTime: lineStartMs,
+    lineEndTime: lineEndMs,
+    lineWords: _lineWords,
+    isBG: false,
+    wordFadeWidth: _wordFadeWidth,
+  );
 
   /// 整行渐变总时长（毫秒，至少 1）
   int get fadeDurationMs => _fadeDurationMs ??= math.max(
-        1,
-        lineFadeDuration(
-          words: layout.words
-              .map(
-                (w) => FadeMaskWord(
-                  startTime: w.word.startTime,
-                  endTime: w.word.endTime,
-                  width: w.size.width,
-                ),
-              )
-              .toList(),
-          lineStartTime: lineStartMs,
-          lineEndTime: lineEndMs,
-        ),
-      );
+    1,
+    lineFadeDuration(
+      words: layout.words
+          .map(
+            (w) => FadeMaskWord(
+              startTime: w.word.startTime,
+              endTime: w.word.endTime,
+              width: w.size.width,
+            ),
+          )
+          .toList(),
+      lineStartTime: lineStartMs,
+      lineEndTime: lineEndMs,
+    ),
+  );
+}
+
+/// Paint-only animation driver used by the active lyric line.
+///
+/// Listening through [CustomPainter.repaint] bypasses build and layout for
+/// every animation tick. Only the paint phase runs while the word mask moves.
+class FluidCloudAnimatedLinePainter extends CustomPainter {
+  FluidCloudAnimatedLinePainter({
+    required this.timeMs,
+    required this.solution,
+    required this.textStyle,
+    required this.brightAlpha,
+    required this.darkAlpha,
+    required this.baseColor,
+    required this.enableGlow,
+  }) : super(repaint: timeMs);
+
+  final ValueListenable<int> timeMs;
+  final FluidCloudLineSolution solution;
+  final TextStyle textStyle;
+  final double brightAlpha;
+  final double darkAlpha;
+  final Color baseColor;
+  final bool enableGlow;
+
+  double get relativeTimeMs => (timeMs.value - solution.lineStartMs).toDouble();
+
+  double get fadeProgress {
+    final relative = relativeTimeMs;
+    if (relative <= 0) return 0;
+    if (relative >= solution.fadeDurationMs) return 1;
+    return relative / solution.fadeDurationMs;
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    LyricLinePainter(
+      layout: solution.layout,
+      animations: solution.animations,
+      textStyle: textStyle,
+      relativeTimeMs: relativeTimeMs,
+      fadeProgress: fadeProgress,
+      brightAlpha: brightAlpha,
+      darkAlpha: darkAlpha,
+      baseColor: baseColor,
+      renderMode: LyricLineRenderMode.gradient,
+      enableGlow: enableGlow,
+    ).paint(canvas, size);
+  }
+
+  @override
+  bool shouldRepaint(covariant FluidCloudAnimatedLinePainter oldDelegate) =>
+      oldDelegate.timeMs != timeMs ||
+      oldDelegate.solution != solution ||
+      oldDelegate.textStyle != textStyle ||
+      oldDelegate.brightAlpha != brightAlpha ||
+      oldDelegate.darkAlpha != darkAlpha ||
+      oldDelegate.baseColor != baseColor ||
+      oldDelegate.enableGlow != enableGlow;
 }
 
 /// 把项目的单行歌词转成 AMLL 引擎行。
@@ -152,6 +220,11 @@ class FluidCloudLineSolution {
 /// 行结束时间优先取逐字末词的结束时间，其次 lineDuration，最后兜底 5s。
 AmllLyricLine _toAmllLine(LyricLine lyric) {
   final startMs = lyric.startTime.inMilliseconds;
+  final fallbackEndMs =
+      startMs +
+      ((lyric.lineDuration != null && lyric.lineDuration! > Duration.zero)
+          ? lyric.lineDuration!.inMilliseconds
+          : _kFallbackLineDurationMs);
 
   final words = <AmllLyricWord>[];
   var latestEnd = startMs;
@@ -163,21 +236,60 @@ AmllLyricLine _toAmllLine(LyricLine lyric) {
       if (e > latestEnd) latestEnd = e;
     }
   } else {
-    words.add(
-      AmllLyricWord(word: lyric.text, startTime: startMs, endTime: startMs),
+    words.addAll(
+      _evenlyTimedGraphemes(
+        lyric.text,
+        startTimeMs: startMs,
+        endTimeMs: fallbackEndMs,
+      ),
     );
+    latestEnd = fallbackEndMs;
   }
 
   int endMs;
   if (latestEnd > startMs) {
     endMs = latestEnd;
-  } else if (lyric.lineDuration != null && lyric.lineDuration! > Duration.zero) {
-    endMs = startMs + lyric.lineDuration!.inMilliseconds;
+  } else if (fallbackEndMs > startMs) {
+    endMs = fallbackEndMs;
   } else {
     endMs = startMs + _kFallbackLineDurationMs;
   }
 
   return AmllLyricLine(words: words, startTime: startMs, endTime: endMs);
+}
+
+/// Creates approximate word timing for plain LRC lines.
+///
+/// Every visible grapheme receives an equal slice of the line duration. Spaces
+/// are attached to the preceding grapheme so they keep the original layout but
+/// do not introduce a visually empty animation step.
+List<AmllLyricWord> _evenlyTimedGraphemes(
+  String text, {
+  required int startTimeMs,
+  required int endTimeMs,
+}) {
+  final tokens = <String>[];
+  for (final grapheme in text.characters) {
+    if (grapheme.trim().isEmpty && tokens.isNotEmpty) {
+      tokens[tokens.length - 1] += grapheme;
+    } else {
+      tokens.add(grapheme);
+    }
+  }
+
+  if (tokens.isEmpty) return const [];
+  final durationMs = math.max(1, endTimeMs - startTimeMs);
+  return List<AmllLyricWord>.generate(tokens.length, (index) {
+    final wordStart =
+        startTimeMs + (durationMs * index / tokens.length).round();
+    final wordEnd =
+        startTimeMs + (durationMs * (index + 1) / tokens.length).round();
+    return AmllLyricWord(
+      word: tokens[index],
+      startTime: wordStart,
+      endTime: math.max(wordStart + 1, wordEnd),
+    );
+  }, growable: false);
 }
 
 /// 解算（并缓存）一行歌词的流体云排版。
@@ -198,7 +310,17 @@ FluidCloudLineSolution fluidCloudLineLayout({
     lineKey: Object.hash(
       lyric.startTime.inMilliseconds,
       lyric.text,
-      lyric.words?.length ?? 0,
+      lyric.lineDuration?.inMilliseconds,
+      Object.hashAll(
+        lyric.words?.map(
+              (word) => Object.hash(
+                word.text,
+                word.startTime.inMilliseconds,
+                word.duration.inMilliseconds,
+              ),
+            ) ??
+            const <Object>[],
+      ),
     ),
     style: textStyle,
     maxWidth: quantizedWidth,
@@ -230,7 +352,8 @@ FluidCloudLineSolution fluidCloudLineLayout({
   );
 
   if (_solutionCache.length >= _kSolutionCacheMax) {
-    for (final k in _solutionCache.keys.take(_kSolutionCacheMax ~/ 4).toList()) {
+    for (final k
+        in _solutionCache.keys.take(_kSolutionCacheMax ~/ 4).toList()) {
       _solutionCache.remove(k);
     }
   }
@@ -337,8 +460,13 @@ class _FluidCloudWordLineState extends State<FluidCloudWordLine>
     if (widget.active && !oldWidget.active) {
       _startTicker();
     } else if (!widget.active && oldWidget.active) {
-      _ticker?..stop()..dispose();
+      _ticker
+        ?..stop()
+        ..dispose();
       _ticker = null;
+    } else if (widget.active &&
+        oldWidget.positionListenable != widget.positionListenable) {
+      _syncTime(_position, Duration.zero);
     }
   }
 
@@ -350,9 +478,12 @@ class _FluidCloudWordLineState extends State<FluidCloudWordLine>
   }
 
   void _startTicker() {
-    _syncTime(PlayerService().position, Duration.zero);
+    _syncTime(_position, Duration.zero);
     _ticker = createTicker(_onTick)..start();
   }
+
+  Duration get _position =>
+      widget.positionListenable?.value ?? PlayerService().position;
 
   void _syncTime(Duration pos, Duration elapsed) {
     _lastSyncPos = pos;
@@ -362,7 +493,7 @@ class _FluidCloudWordLineState extends State<FluidCloudWordLine>
 
   void _onTick(Duration elapsed) {
     if (!mounted) return;
-    final pos = PlayerService().position;
+    final pos = _position;
     if (pos != _lastSyncPos) {
       _lastSyncPos = pos;
       _lastSyncElapsed = elapsed;
@@ -406,6 +537,8 @@ class _FluidCloudWordLineState extends State<FluidCloudWordLine>
             size: size,
             child: CustomPaint(
               size: size,
+              isComplex: true,
+              willChange: false,
               painter: LyricLinePainter(
                 layout: layout,
                 animations: const [],
@@ -422,38 +555,21 @@ class _FluidCloudWordLineState extends State<FluidCloudWordLine>
           );
         }
 
-        final animations = solution.animations;
-        final fadeDurationMs = solution.fadeDurationMs;
-        final lineStartMs = solution.lineStartMs;
-
         return SizedBox.fromSize(
           size: size,
-          child: ValueListenableBuilder<int>(
-            valueListenable: _timeMs,
-            builder: (context, timeMs, _) {
-              final relative = (timeMs - lineStartMs).toDouble();
-              final fadeProgress = relative <= 0
-                  ? 0.0
-                  : (relative >= fadeDurationMs
-                      ? 1.0
-                      : relative / fadeDurationMs);
-
-              return CustomPaint(
-                size: size,
-                painter: LyricLinePainter(
-                  layout: layout,
-                  animations: animations,
-                  textStyle: widget.textStyle,
-                  relativeTimeMs: relative,
-                  fadeProgress: fadeProgress,
-                  brightAlpha: 1.0,
-                  darkAlpha: _kFluidDarkAlpha,
-                  baseColor: widget.baseColor,
-                  renderMode: LyricLineRenderMode.gradient,
-                  enableGlow: widget.enableGlow,
-                ),
-              );
-            },
+          child: CustomPaint(
+            size: size,
+            isComplex: true,
+            willChange: true,
+            painter: FluidCloudAnimatedLinePainter(
+              timeMs: _timeMs,
+              solution: solution,
+              textStyle: widget.textStyle,
+              brightAlpha: 1.0,
+              darkAlpha: _kFluidDarkAlpha,
+              baseColor: widget.baseColor,
+              enableGlow: widget.enableGlow,
+            ),
           ),
         );
       },

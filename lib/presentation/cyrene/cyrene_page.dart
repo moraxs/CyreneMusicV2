@@ -18,6 +18,7 @@ class CyrenePage extends StatefulWidget {
     this.showBackButton = true,
     this.largeTitle = true,
     this.topBarTintAlpha,
+    this.containerColor,
   }) : assert(
          (body == null) != (bodyBuilder == null),
          'body 与 bodyBuilder 必须二选一',
@@ -39,7 +40,15 @@ class CyrenePage extends StatefulWidget {
   /// 顶栏毛玻璃色调不透明度 [0,1]，仅 [largeTitle] 为 true 时生效。
   /// 不传时走 [MiuixTopAppBar] 默认 0.55；登录页等需要让背景渐变/光斑
   /// 透到栏内、栏与内容区连成一片时传 0 即可得到「栏完全透明、只有模糊」。
+  ///
+  /// 注意：桌面端外壳会把 MiuixTheme.surface 覆写为透明（透出 Mica），
+  /// 此时该参数默认会按 0 处理——透明 surface 作为色调基准会被替换成 55%
+  /// 黑色深色遮罩，须保持栏不含色调。
   final double? topBarTintAlpha;
+
+  /// 脚手架背景色，透传给 [MiuixScaffold.containerColor]。
+  /// 桌面端传 [Colors.transparent] 以让系统 Mica 效果透出。
+  final Color? containerColor;
 
   @override
   State<CyrenePage> createState() => _CyrenePageState();
@@ -55,7 +64,13 @@ class _CyrenePageState extends State<CyrenePage> {
         ? CyreneBackButton(onPressed: () => Navigator.maybePop(context))
         : null;
     final actions = widget.actions.isEmpty ? null : widget.actions;
+    // 桌面端外壳把 MiuixTheme.surface 覆写为透明（为透出系统 Mica）。顶栏毛
+    // 玻璃若仍按默认 0.55 叠色调，Colors.transparent（黑 + alpha 0）会被
+    // withValues(alpha:) 替换成 55% 黑 → 大标题区变成整条深色遮罩。surface
+    // 透明即“无底色”，色调应同步为 0（栏完全透明、只有模糊，见 topBarTintAlpha）。
+    final noSurfaceTint = MiuixTheme.of(context).colors.surface.a == 0.0;
     return MiuixScaffold(
+      containerColor: widget.containerColor,
       topBar: widget.largeTitle
           ? MiuixTopAppBar(
               title: widget.title,
@@ -64,7 +79,8 @@ class _CyrenePageState extends State<CyrenePage> {
               scrollBehavior: _scrollBehavior,
               // 顶栏毛玻璃：BackdropFilter 实时虚化身后滚过的内容。
               blurred: true,
-              blurTintAlpha: widget.topBarTintAlpha ?? 0.55,
+              blurTintAlpha:
+                  widget.topBarTintAlpha ?? (noSurfaceTint ? 0.0 : 0.55),
             )
           : MiuixSmallTopAppBar(
               title: widget.title,

@@ -25,11 +25,21 @@ class ProfilePage extends StatefulWidget {
     required this.accountSessionController,
     required this.playback,
     required this.playlists,
+    this.desktopLayout = false,
+    this.onOpenSecondary,
+    this.body,
   });
 
   final AccountSessionController accountSessionController;
   final PlaybackController playback;
   final PlaylistLibraryController playlists;
+  final bool desktopLayout;
+
+  /// 桌面端由外壳提供，用内容区二级页替代整窗路由跳转。
+  final ValueChanged<Widget>? onOpenSecondary;
+
+  /// 当前桌面端二级页；移动端保持为空并继续使用原有路由。
+  final Widget? body;
 
   @override
   State<ProfilePage> createState() => _ProfilePageState();
@@ -64,77 +74,88 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: Listenable.merge([
-      widget.accountSessionController,
-      widget.playlists,
-    ]),
-    builder: (context, _) {
-      final state = widget.accountSessionController.state;
-      return ListView(
-        physics: const BouncingScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 20, 16, 180),
-        children: [
-          _AccountCard(state: state, onLogin: () => _openLogin(context)),
-          const SizedBox(height: 24),
-          const CyreneSectionTitle(title: '音乐资料库', description: '管理收藏、歌单与设备音乐'),
-          const SizedBox(height: 12),
-          CyreneMenuGroup(
-            children: [
-              CyreneMenuRow(
-                icon: Icons.download_rounded,
-                title: '本地与下载',
-                subtitle: '管理设备上的音乐',
-                onTap: () =>
-                    _open(context, LocalMusicPage(playback: widget.playback)),
-              ),
-              CyreneMenuRow(
-                icon: Icons.history_rounded,
-                title: '播放历史',
-                onTap: () =>
-                    _open(context, HistoryPage(playback: widget.playback)),
-              ),
-              CyreneMenuRow(
-                icon: Icons.bar_chart_rounded,
-                title: '听歌统计',
-                onTap: () => _open(
-                  context,
+  Widget build(BuildContext context) {
+    final body = widget.body;
+    if (body != null) return body;
+
+    return AnimatedBuilder(
+      animation: Listenable.merge([
+        widget.accountSessionController,
+        widget.playlists,
+      ]),
+      builder: (context, _) {
+        final state = widget.accountSessionController.state;
+        return ListView(
+          physics: const BouncingScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 20, 16, 180),
+          children: [
+            _AccountCard(state: state, onLogin: () => _openLogin(context)),
+            const SizedBox(height: 24),
+            const CyreneSectionTitle(
+              title: '音乐资料库',
+              description: '管理收藏、歌单与设备音乐',
+            ),
+            const SizedBox(height: 12),
+            CyreneMenuGroup(
+              children: [
+                CyreneMenuRow(
+                  icon: Icons.download_rounded,
+                  title: '本地与下载',
+                  subtitle: '管理设备上的音乐',
+                  onTap: () => _open(
+                    context,
+                    LocalMusicPage(playback: widget.playback),
+                  ),
+                ),
+                CyreneMenuRow(
+                  icon: Icons.history_rounded,
+                  title: '播放历史',
+                  onTap: () =>
+                      _open(context, HistoryPage(playback: widget.playback)),
+                ),
+                CyreneMenuRow(
+                  icon: Icons.bar_chart_rounded,
+                  title: '听歌统计',
+                  onTap: () => _open(
+                    context,
                   ListeningFootprintPage(
                     account: widget.accountSessionController,
                     playback: widget.playback,
+                    desktopLayout: widget.desktopLayout,
+                  ),
                   ),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
-          _MyPlaylistsSection(
-            isLoggedIn: state.isLoggedIn,
-            state: widget.playlists.state,
-            syncingIds: _syncingIds,
-            onOpen: _openPlaylist,
-            onDelete: _deletePlaylist,
-            onCreate: () => _createPlaylist(context),
-            onSync: _syncPlaylist,
-          ),
-        ],
-      );
-    },
-  );
+              ],
+            ),
+            const SizedBox(height: 24),
+            _MyPlaylistsSection(
+              isLoggedIn: state.isLoggedIn,
+              state: widget.playlists.state,
+              syncingIds: _syncingIds,
+              onOpen: _openPlaylist,
+              onDelete: _deletePlaylist,
+              onCreate: () => _createPlaylist(context),
+              onSync: _syncPlaylist,
+            ),
+          ],
+        );
+      },
+    );
+  }
 
   void _openPlaylist(Playlist playlist) {
     final token = widget.accountSessionController.token;
     if (token == null) return;
-    Navigator.of(context).push(
-      CupertinoPageRoute<void>(
-        builder: (_) => PlaylistDetailPage.personal(
-          playlistId: playlist.id,
-          title: playlist.name,
-          coverUrl: playlist.coverUrl ?? '',
-          playback: widget.playback,
-          token: token,
-          trackCount: playlist.trackCount,
-        ),
+    _open(
+      context,
+      PlaylistDetailPage.personal(
+        playlistId: playlist.id,
+        title: playlist.name,
+        coverUrl: playlist.coverUrl ?? '',
+        playback: widget.playback,
+        token: token,
+        trackCount: playlist.trackCount,
+        desktopLayout: widget.desktopLayout,
       ),
     );
   }
@@ -249,14 +270,18 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   void _open(BuildContext context, Widget page) {
+    final onOpenSecondary = widget.onOpenSecondary;
+    if (onOpenSecondary != null) {
+      onOpenSecondary(page);
+      return;
+    }
     Navigator.of(context).push(CupertinoPageRoute<void>(builder: (_) => page));
   }
 
   void _openLogin(BuildContext context) {
-    Navigator.of(context).push(
-      CupertinoPageRoute<void>(
-        builder: (_) => LoginPage(account: widget.accountSessionController),
-      ),
+    _open(
+      context,
+      LoginPage(account: widget.accountSessionController),
     );
   }
 }

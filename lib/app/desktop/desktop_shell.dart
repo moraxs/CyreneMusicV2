@@ -3,7 +3,7 @@ import 'package:flutter/material.dart' as m;
 // 侧栏与标题栏走 fluent,这里只借 Miuix 的配色给外壳其余部分。底部迷你播放器
 // 由独立的 [DesktopMiniPlayer] 自绘(零 fluent_ui,取 Miuix 配色)。仍用 show
 // 限定,避免与 fluent_ui 的同名导出撞车。
-import 'package:flutter_miuix/miuix.dart' show MiuixTheme;
+import 'package:flutter_miuix/miuix.dart' show MiuixTheme, MiuixColors;
 
 import '../debug_probe.dart';
 
@@ -15,6 +15,7 @@ import '../../application/playback/playback_controller.dart';
 import '../../application/playlists/playlist_library_controller.dart';
 import '../../application/search/search_controller.dart';
 import '../../domain/models/discovery.dart';
+import '../../domain/models/playlist.dart';
 import '../../features/discover/discover_page.dart';
 import '../../features/history/history_page.dart';
 import '../../features/home/desktop_home_page.dart';
@@ -88,7 +89,8 @@ class DesktopShell extends StatefulWidget {
   /// 打开首页歌单详情(id / 标题 / 封面)。桌面端为 null 时改为内容区
   /// 二级页,由本组件自持(见 [_DesktopShellState._homeBody]);非 null
   /// 为兼容层预留(目前移动端走自己的路由,不会进这里)。
-  final void Function(int id, String title, String coverUrl)? onOpenHomePlaylist;
+  final void Function(int id, String title, String coverUrl)?
+  onOpenHomePlaylist;
 
   /// 打开发现页歌单详情。桌面端为 null 时同上,走内容区二级页。
   final void Function(DiscoveryPlaylist playlist)? onOpenDiscoverPlaylist;
@@ -110,6 +112,22 @@ class _DesktopShellState extends State<DesktopShell> {
   /// 切换,不再整窗 push 路由。上一级/下一级按钮驱动后退/前进,栈空即首页。
   final _homeStack = DesktopHomeStack();
 
+  /// 发现页自己的内容区二级页栈，避免歌单详情通过路由覆盖整个桌面窗口。
+  final _discoverStack = DesktopHomeStack();
+
+  /// “我的”页菜单与个人歌单使用的内容区二级页栈。
+  final _profileStack = DesktopHomeStack();
+
+  /// 设置页各分类页面使用的内容区二级页栈。
+  final _settingsStack = DesktopHomeStack();
+
+  DesktopHomeStack get _activeSecondaryStack => switch (_index) {
+    1 => _discoverStack,
+    2 => _profileStack,
+    6 => _settingsStack,
+    _ => _homeStack,
+  };
+
   /// 打开首页歌单详情(内容区二级页);「放松时刻/工作学习」等推荐卡、榜单
   /// 卡片、你的歌单、推荐歌单都走这里,压入 `_homeStack` 而非整窗 push 路由。
   void _openHomePlaylist(int id, String title, String coverUrl) {
@@ -122,6 +140,42 @@ class _DesktopShellState extends State<DesktopShell> {
           playback: widget.playback,
           token: widget.account.token,
           onOpenPlaylist: _openHomePlaylist,
+          desktopLayout: true,
+        ),
+      );
+    });
+  }
+
+  void _openDiscoverPlaylist(DiscoveryPlaylist playlist) {
+    setState(() {
+      _discoverStack.push(
+        PlaylistDetailPage(
+          playlistId: playlist.id,
+          title: playlist.name,
+          coverUrl: playlist.coverImgUrl,
+          playback: widget.playback,
+          token: widget.account.token,
+          desktopLayout: true,
+        ),
+      );
+    });
+  }
+
+  /// 打开首页「你的歌单」中的个人歌单。此处必须使用 personal 构造，令曲目
+  /// 从 Cyrene 后端 `/playlists/:id/tracks` 加载，而不是误走在线发现歌单接口。
+  void _openPersonalPlaylist(Playlist playlist) {
+    final token = widget.account.token;
+    if (token == null || token.isEmpty) return;
+    setState(() {
+      _homeStack.push(
+        PlaylistDetailPage.personal(
+          playlistId: playlist.id,
+          title: playlist.name,
+          coverUrl: playlist.coverUrl ?? '',
+          playback: widget.playback,
+          token: token,
+          trackCount: playlist.trackCount,
+          desktopLayout: true,
         ),
       );
     });
@@ -145,6 +199,9 @@ class _DesktopShellState extends State<DesktopShell> {
     setState(() {
       _index = 3; // 「搜索」在 _entries 里的下标(见 _mainEntries)。
       _homeStack.clear(); // 离开首页,清二级页栈。
+      _discoverStack.clear();
+      _profileStack.clear();
+      _settingsStack.clear();
       _searchKeyword = k;
       _searchSeq++;
     });
@@ -175,16 +232,14 @@ class _DesktopShellState extends State<DesktopShell> {
   @override
   Widget build(BuildContext context) {
     final miuix = MiuixTheme.of(context);
-    // 外壳自己铺底色:迷你播放器横条那一带不归 NavigationView 画,不铺会露出
-    // 窗口的黑色清屏色。注意不能靠 Material 的 color--MaterialType.transparency
-    // 不画任何东西(color 被忽略),故用 ColoredBox 铺色、Material 只用来给下游
-    // Miuix 组件提供 Material 祖先。
-    return ColoredBox(
-      color: miuix.colors.surface,
-      child: m.Material(
-        type: m.MaterialType.transparency,
-        child: Column(
-          children: [
+    // 外壳顶层不走不透明底色,让 flutter_acrylic 的 Win11 Mica 效果透出。
+    // NavigationView 的侧栏面板自带 fluent 的 Mica/Acrylic 背景;内容区
+    // 使用半透明 surface 色,让系统 Mica 透过内容区,同时保持可读性;
+    // 底栏迷你播放器由 DesktopMiniPlayer 自绘,不依赖此外壳底色。
+    return m.Material(
+      type: m.MaterialType.transparency,
+      child: Column(
+        children: [
             Expanded(
               child: FluentTheme(
                 // 与挂在根 Overlay 之上那层同一份主题(见
@@ -197,10 +252,12 @@ class _DesktopShellState extends State<DesktopShell> {
                     onTogglePane: () => setState(() => _paneOpen = !_paneOpen),
                     // 首页二级页导航栈驱动后退/前进;按钮常驻显示,栈状态只
                     // 决定可点态。
-                    canGoBack: _homeStack.canGoBack,
-                    canGoForward: _homeStack.canGoForward,
-                    onBack: () => setState(() => _homeStack.back()),
-                    onForward: () => setState(() => _homeStack.forward()),
+                    canGoBack: _activeSecondaryStack.canGoBack,
+                    canGoForward: _activeSecondaryStack.canGoForward,
+                    onBack: () =>
+                        setState(() => _activeSecondaryStack.back()),
+                    onForward: () =>
+                        setState(() => _activeSecondaryStack.forward()),
                     // 正中搜索框提交 → 切到搜索页展示结果。
                     onSubmitSearch: _onTitleBarSearch,
                   ),
@@ -210,7 +267,13 @@ class _DesktopShellState extends State<DesktopShell> {
                       _index = index;
                       // 切走首页时清空二级页栈,避免回来后还是歌单详情。
                       if (_index != 0) _homeStack.clear();
-                    }),                    // 固定 expanded,收展改由 size.openWidth 承担(理由见类文档)。
+                      // 发现页采用相同语义：切走后回到发现主页。
+                      if (_index != 1) _discoverStack.clear();
+                      // “我的”页切走后同样回到其主页面。
+                      if (_index != 2) _profileStack.clear();
+                      // 设置页切走后回到设置主页。
+                      if (_index != 6) _settingsStack.clear();
+                    }), // 固定 expanded,收展改由 size.openWidth 承担(理由见类文档)。
                     displayMode: PaneDisplayMode.expanded,
                     size: NavigationPaneSize(
                       openWidth: _paneOpen
@@ -218,9 +281,11 @@ class _DesktopShellState extends State<DesktopShell> {
                           : kCompactNavigationPaneWidth,
                     ),
                     items: [
-                      for (final entry in _mainEntries.take(4)) _paneItem(entry),
+                      for (final entry in _mainEntries.take(4))
+                        _paneItem(entry),
                       PaneItemSeparator(),
-                      for (final entry in _mainEntries.skip(4)) _paneItem(entry),
+                      for (final entry in _mainEntries.skip(4))
+                        _paneItem(entry),
                     ],
                     footerItems: [
                       for (final entry in _footerEntries) _paneItem(entry),
@@ -241,8 +306,7 @@ class _DesktopShellState extends State<DesktopShell> {
                 audioSources: widget.audioSources,
                 account: widget.account,
               ),
-          ],
-        ),
+        ],
       ),
     );
   }
@@ -262,10 +326,8 @@ class _DesktopShellState extends State<DesktopShell> {
             height: kPaneItemMinHeight,
             child: probeTooltip(
               child: Icon(entry.icon),
-              build: () => Tooltip(
-                message: entry.label,
-                child: Icon(entry.icon),
-              ),
+              build: () =>
+                  Tooltip(message: entry.label, child: Icon(entry.icon)),
             ),
           ),
     title: Text(entry.label),
@@ -274,20 +336,32 @@ class _DesktopShellState extends State<DesktopShell> {
 
   /// 内容区:全部页面用 [IndexedStack] 保活(切换不丢状态、不重拉)。
   ///
+  /// [background] 为半透明 surface 色,让系统 Mica 透过内容区,增强桌面端
+  /// 沉浸感;内容区的卡片/列表等组件自带背景色,故可读性不受影响。
+  ///
+  /// 子树统一包裹 [MiuixTheme] 将 `colors.surface` 覆盖为透明,使所有
+  /// [CyrenePage] → [MiuixScaffold] 的默认背景色也变为透明,防止其不透明
+  /// surface 底色遮盖系统 Mica。
+  ///
   /// [FluentTheme] 会往子树注入自己的 DefaultTextStyle 与 IconTheme,而这些
   /// 页面是和移动端共用的 Miuix/Material 页,吃到 fluent 的默认字号(14 号
   /// body)与图标色就会和移动端不一致。[m.Material] 本身会把 DefaultTextStyle
   /// 重置回 `textTheme.bodyMedium`,IconTheme 得显式补一层。
   Widget _buildBody(Color background) => ColoredBox(
-    color: background,
+    color: background.withOpacity(0.55),
     child: Builder(
-      builder: (context) => m.IconTheme(
-        data: m.Theme.of(context).iconTheme,
-        child: m.Material(
-          type: m.MaterialType.transparency,
-          child: probeNoIndexedStack
-              ? _pages()[_index]
-              : IndexedStack(index: _index, children: _pages()),
+      builder: (context) => MiuixTheme(
+        data: MiuixTheme.of(context).copyWith(
+          colors: MiuixTheme.of(context).colors.copy(surface: m.Colors.transparent),
+        ),
+        child: m.IconTheme(
+          data: m.Theme.of(context).iconTheme,
+          child: m.Material(
+            type: m.MaterialType.transparency,
+            child: probeNoIndexedStack
+                ? _pages()[_index]
+                : IndexedStack(index: _index, children: _pages()),
+          ),
         ),
       ),
     ),
@@ -302,31 +376,24 @@ class _DesktopShellState extends State<DesktopShell> {
       playback: widget.playback,
       onOpenPlayer: widget.onOpenPlayer,
       onOpenPlaylist: widget.onOpenHomePlaylist ?? _openHomePlaylist,
+      onOpenPersonalPlaylist: _openPersonalPlaylist,
       // 首页二级页覆盖:见 [DesktopHomePage] 类文档「桌面端次级页面不走路由」。
       onOpenSecondary: (page) => setState(() => _homeStack.push(page)),
-      body: _homeStack.current,
+      body: _compactSecondary(_homeStack.current),
     ),
     DiscoverPage(
       discover: widget.discover,
-      // 发现页保持整窗 push(桌面端既有行为);首页的歌单入口才走内容区
-      // 二级页(见 _openHomePlaylist)。两种入口行为不同:首页→二级菜单,
-      // 发现页→独立页面。
-      onOpenPlaylist: (playlist) => Navigator.of(context).push(
-        m.MaterialPageRoute<void>(
-          builder: (_) => PlaylistDetailPage(
-            playlistId: playlist.id,
-            title: playlist.name,
-            coverUrl: playlist.coverImgUrl,
-            playback: widget.playback,
-            token: widget.account.token,
-          ),
-        ),
-      ),
+      onOpenPlaylist:
+          widget.onOpenDiscoverPlaylist ?? _openDiscoverPlaylist,
+      body: _compactSecondary(_discoverStack.current),
     ),
     ProfilePage(
       accountSessionController: widget.account,
       playback: widget.playback,
       playlists: widget.playlists,
+      desktopLayout: true,
+      onOpenSecondary: (page) => setState(() => _profileStack.push(page)),
+      body: _compactSecondary(_profileStack.current),
     ),
     SearchPage(
       // key 随标题栏提交序号变化 → 该页重建,initState 里以 initialQuery
@@ -338,9 +405,41 @@ class _DesktopShellState extends State<DesktopShell> {
     ),
     HistoryPage(playback: widget.playback),
     LocalMusicPage(playback: widget.playback),
-    SettingsPage(account: widget.account, audioSources: widget.audioSources),
+    SettingsPage(
+      account: widget.account,
+      audioSources: widget.audioSources,
+      onOpenSecondary: (page) => setState(() => _settingsStack.push(page)),
+      body: _compactSecondary(_settingsStack.current),
+    ),
     SupportPage(account: widget.account),
   ];
+
+  Widget? _compactSecondary(Widget? page) => page == null
+      ? null
+      : _DesktopCompactSecondary(child: page);
+}
+
+/// 桌面二级内容的统一紧凑层。只调整二级页，不改变一级页面和移动端视觉。
+class _DesktopCompactSecondary extends StatelessWidget {
+  const _DesktopCompactSecondary({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final material = m.Theme.of(context);
+    return MediaQuery(
+      data: media.copyWith(textScaler: const m.TextScaler.linear(0.9)),
+      child: m.Theme(
+        data: material.copyWith(
+          visualDensity: const m.VisualDensity(horizontal: -2, vertical: -2),
+          iconTheme: material.iconTheme.copyWith(size: 20),
+        ),
+        child: child,
+      ),
+    );
+  }
 }
 
 /// 首页二级页导航栈:后退/前进都按「栈模型」语义——后退把当前页弹回上一页

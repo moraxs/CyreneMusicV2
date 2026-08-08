@@ -6,6 +6,8 @@
 
 #include <memory>
 
+#include "accent_acrylic_handler.h"
+#include "smtc_handler.h"
 #include "win32_window.h"
 
 // A window that does nothing but host a Flutter view.
@@ -28,6 +30,12 @@ class FlutterWindow : public Win32Window {
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+
+  // SMTC（系统媒体传输控件）原生桥。
+  std::unique_ptr<SmtcHandler> smtc_handler_;
+
+  // 原生真·亚克力（毛玻璃）桥。
+  std::unique_ptr<AccentAcrylicHandler> accent_acrylic_handler_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

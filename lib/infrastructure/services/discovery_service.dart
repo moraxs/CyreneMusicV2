@@ -19,6 +19,35 @@ class DiscoveryService implements DiscoverRepository {
   DiscoveryService._();
   static final DiscoveryService instance = DiscoveryService._();
 
+  static const _spotifyCharts =
+      <({String id, String title, String description})>[
+        (
+          id: '37i9dQZEVXbMDoHDwVN2tF',
+          title: '全球热门 50',
+          description: 'Spotify 全球播放热度最高的歌曲',
+        ),
+        (
+          id: '37i9dQZEVXbLiRSasKsNU9',
+          title: '全球飙升 50',
+          description: '正在 Spotify 快速走红的歌曲',
+        ),
+        (
+          id: '37i9dQZEVXbLRQDuF5jeBp',
+          title: '美国热门 50',
+          description: 'Spotify 美国地区热门歌曲',
+        ),
+        (
+          id: '37i9dQZEVXbLwpL8TjsxOG',
+          title: '香港热门 50',
+          description: 'Spotify 香港地区热门歌曲',
+        ),
+        (
+          id: '37i9dQZEVXbMnZEatlMSiu',
+          title: '台湾热门 50',
+          description: 'Spotify 台湾地区热门歌曲',
+        ),
+      ];
+
   Map<String, String> _headers(String? token) {
     final headers = <String, String>{'Content-Type': 'application/json'};
     if (token != null && token.isNotEmpty) {
@@ -82,6 +111,113 @@ class DiscoveryService implements DiscoverRepository {
     }
   }
 
+  /// 桌面榜单页使用的 Spotify 精选榜单。每个榜单由后端 librespot
+  /// `/spotify/playlist/:id` 接口读取；移动端不会调用此方法。
+  Future<List<Toplist>> getSpotifyToplists({int limit = 50}) async {
+    final results = await Future.wait(
+      _spotifyCharts.indexed.map((entry) async {
+        final (index, chart) = entry;
+        try {
+          final response = await ApiClient.instance.apiFetch(
+            UrlService.instance.spotifyPlaylistUrl(chart.id, limit: limit),
+          );
+          final result = _decode(response);
+          final data = result['data'];
+          if (result['status'] != 200 || data is! Map) return null;
+          final payload = Map<String, Object?>.from(data);
+          final tracks = (payload['tracks'] as List? ?? const [])
+              .whereType<Map>()
+              .map((raw) {
+                final track = Map<String, Object?>.from(raw);
+                final artistsRaw = track['artists'];
+                final artists = artistsRaw is List
+                    ? artistsRaw
+                          .whereType<Map>()
+                          .map((artist) => artist['name']?.toString() ?? '')
+                          .where((name) => name.isNotEmpty)
+                          .join(' / ')
+                    : track['artist']?.toString() ?? '';
+                final album = track['album'];
+                final albumMap = album is Map
+                    ? Map<String, Object?>.from(album)
+                    : const <String, Object?>{};
+                return ToplistTrack(
+                  id: track['id']?.toString() ?? '',
+                  name: track['name']?.toString() ?? '',
+                  artists: artists,
+                  album: albumMap['name']?.toString() ?? '',
+                  picUrl:
+                      track['picUrl']?.toString() ??
+                      albumMap['coverArt']?.toString() ??
+                      '',
+                  duration: (track['duration'] as num?)?.toInt(),
+                  source: MusicSource.spotify,
+                );
+              })
+              .where((track) => track.id.isNotEmpty)
+              .toList(growable: false);
+          return Toplist(
+            id: -(index + 1),
+            externalId: chart.id,
+            name:
+                payload['name']?.toString().isNotEmpty == true &&
+                    payload['name']?.toString() != 'Spotify 榜单'
+                ? payload['name'].toString()
+                : chart.title,
+            coverImgUrl:
+                payload['coverImgUrl']?.toString() ??
+                (tracks.isEmpty ? '' : tracks.first.picUrl),
+            description: chart.description,
+            tracks: tracks,
+            source: MusicSource.spotify,
+          );
+        } catch (e) {
+          debugPrint('[DiscoveryService] Spotify chart ${chart.id} failed: $e');
+          return null;
+        }
+      }),
+    );
+    final available = results.whereType<Toplist>().toList(growable: false);
+    final standardCharts = available
+        .where((chart) => chart.id >= -3)
+        .toList(growable: false);
+    final chineseSources = available
+        .where((chart) => chart.id < -3)
+        .toList(growable: false);
+    if (chineseSources.isEmpty) return standardCharts;
+
+    // 香港与台湾榜单交错合并，避免其中一个地区的前排歌曲完全占满结果；
+    // 同一 Spotify track id 只保留一次。
+    final mergedTracks = <ToplistTrack>[];
+    final seenIds = <String>{};
+    final maxLength = chineseSources.fold<int>(
+      0,
+      (length, chart) =>
+          chart.tracks.length > length ? chart.tracks.length : length,
+    );
+    for (
+      var index = 0;
+      index < maxLength && mergedTracks.length < limit;
+      index++
+    ) {
+      for (final chart in chineseSources) {
+        if (index >= chart.tracks.length) continue;
+        final track = chart.tracks[index];
+        if (seenIds.add(track.id)) mergedTracks.add(track);
+        if (mergedTracks.length >= limit) break;
+      }
+    }
+    final chineseChart = Toplist(
+      id: -100,
+      name: '华语热门',
+      coverImgUrl: mergedTracks.isEmpty ? '' : mergedTracks.first.picUrl,
+      description: '聚合 Spotify 香港与台湾热门榜单，每日发现流行华语音乐',
+      tracks: mergedTracks,
+      source: MusicSource.spotify,
+    );
+    return [...standardCharts, chineseChart];
+  }
+
   /// 获取「推荐」聚合数据（每日歌曲 / 私人 FM / 推荐歌单等）。
   Future<RecommendData?> getRecommendForYou(
     String token, {
@@ -125,6 +261,67 @@ class DiscoveryService implements DiscoverRepository {
     String qqKind = 'toplist',
   }) async {
     final idStr = id.toString();
+    if (source == 'spotify') {
+      try {
+        final response = await ApiClient.instance.apiFetch(
+          UrlService.instance.spotifyPlaylistUrl(idStr, limit: limit),
+        );
+        final result = _decode(response);
+        final data = result['data'];
+        if (result['status'] != 200 || data is! Map) return null;
+        final payload = Map<String, Object?>.from(data);
+        final tracks = (payload['tracks'] as List? ?? const [])
+            .whereType<Map>()
+            .map((raw) {
+              final track = Map<String, Object?>.from(raw);
+              final artistsRaw = track['artists'];
+              final artists = artistsRaw is List
+                  ? artistsRaw
+                        .whereType<Map>()
+                        .map((artist) => artist['name']?.toString() ?? '')
+                        .where((name) => name.isNotEmpty)
+                        .join(' / ')
+                  : track['artist']?.toString() ?? '';
+              final albumRaw = track['album'];
+              final album = albumRaw is Map
+                  ? Map<String, Object?>.from(albumRaw)
+                  : const <String, Object?>{};
+              return ToplistTrack(
+                id: track['id']?.toString() ?? '',
+                name: track['name']?.toString() ?? '',
+                artists: artists,
+                album: album['name']?.toString() ?? '',
+                picUrl:
+                    track['picUrl']?.toString() ??
+                    album['coverArt']?.toString() ??
+                    '',
+                duration: (track['duration'] as num?)?.toInt(),
+                source: MusicSource.spotify,
+              );
+            })
+            .where((track) => track.id.isNotEmpty)
+            .toList(growable: false);
+        return PlaylistDetail(
+          id: 0,
+          name: payload['name']?.toString() ?? 'Spotify 歌单',
+          coverImgUrl:
+              payload['coverImgUrl']?.toString() ??
+              (tracks.isEmpty ? '' : tracks.first.picUrl),
+          description: payload['description']?.toString() ?? '来自 Spotify 的歌单',
+          source: MusicSource.spotify,
+          tracks: tracks,
+          playCount: 0,
+          creator: 'Spotify',
+          trackCount: (payload['total'] as num?)?.toInt() ?? tracks.length,
+          createTime: 0,
+          updateTime: 0,
+          tags: const ['Spotify'],
+        );
+      } catch (e) {
+        debugPrint('[DiscoveryService] getSpotifyPlaylistDetail failed: $e');
+        return null;
+      }
+    }
     if (source == 'qq') {
       if (qqKind == 'playlist') {
         // QQ 歌单详情走 /qq/playlist?id=<dissid>，后端返回结构（data.playlist）与网易云一致

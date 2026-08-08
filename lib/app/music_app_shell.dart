@@ -16,6 +16,8 @@ import '../features/home/now_listening_page.dart';
 import '../features/more/more_menu_drawer.dart';
 import '../features/player/mini_player.dart';
 import '../features/player/mobile/mobile_player_page.dart';
+import '../features/player/desktop_fullscreen_player_host.dart';
+import '../features/player/desktop_fullscreen_player_route.dart';
 import '../features/playlist/playlist_detail_page.dart';
 import '../features/profile/profile_page.dart';
 import '../features/search/search_page.dart';
@@ -219,6 +221,18 @@ class _MusicAppShellState extends State<MusicAppShell> {
   }
 
   void _openPlayer() {
+    if (isDesktopLayout(context)) {
+      Navigator.of(context).push(
+        DesktopFullscreenPlayerRoute(
+          builder: (_) => DesktopFullscreenPlayerHost(
+            playback: widget.playback,
+            audioSources: widget.audioSources,
+            account: widget.account,
+          ),
+        ),
+      );
+      return;
+    }
     Navigator.of(context).push(
       CupertinoPageRoute<void>(
         builder: (_) => MobilePlayerPage(

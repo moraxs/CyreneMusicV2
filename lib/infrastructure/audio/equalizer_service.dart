@@ -37,7 +37,9 @@ class EqualizerService extends ChangeNotifier {
 
   Player? _player;
   List<double> _gains = List.filled(frequencies.length, 0.0);
-  bool _enabled = true;
+  /// 默认关闭均衡器；仅当用户显式开启时才对音频应用 `af` 滤镜链（原版
+  /// 默认开启，但历史残留增益会在每次启动时静默生效，容易造成失真）。
+  bool _enabled = false;
   Future<void>? _loading;
   Timer? _saveTimer;
 

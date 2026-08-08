@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
 
+import 'breakpoints.dart';
+
 /// 弹层内容构建器。`dismiss([result])` 走 Miuix 退场动画后再关闭路由并返回结果；
 /// 不要在弹层内容里直接 `Navigator.pop`（会跳过退场动画）。
 typedef CyreneOverlayBuilder<T> =
@@ -17,6 +19,7 @@ Future<T?> showCyreneDialog<T>({
   required CyreneOverlayBuilder<T> builder,
   bool barrierDismissible = true,
 }) {
+  final compact = isDesktopLayout(context);
   return Navigator.of(context, rootNavigator: true).push<T>(
     PageRouteBuilder<T>(
       opaque: false,
@@ -31,6 +34,9 @@ Future<T?> showCyreneDialog<T>({
           summary: summary,
           onDismissRequest: barrierDismissible ? state.dismiss : null,
           onDismissFinished: state.onDismissFinished,
+          maxWidth: compact ? 360 : 420,
+          insideMargin: Size.square(compact ? 18 : 24),
+          cornerRadius: compact ? 24 : null,
           content: content,
         ),
       ),
@@ -50,6 +56,7 @@ Future<T?> showCyreneSheet<T>({
   double? insideMargin,
   required CyreneOverlayBuilder<T> builder,
 }) {
+  final compact = isDesktopLayout(context);
   return Navigator.of(context, rootNavigator: true).push<T>(
     PageRouteBuilder<T>(
       opaque: false,
@@ -64,7 +71,9 @@ Future<T?> showCyreneSheet<T>({
           startAction: startAction,
           endAction: endAction,
           allowDismiss: allowDismiss,
-          insideMargin: Size(insideMargin ?? 24, 0),
+          insideMargin: Size(insideMargin ?? (compact ? 18 : 24), 0),
+          sheetMaxWidth: compact ? 520 : 640,
+          cornerRadius: compact ? 22 : 28,
           onDismissRequest: state.dismiss,
           onDismissFinished: state.onDismissFinished,
           content: content,

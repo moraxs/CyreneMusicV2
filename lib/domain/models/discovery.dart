@@ -81,6 +81,7 @@ class Toplist {
     required this.description,
     required this.tracks,
     this.source,
+    this.externalId,
   });
 
   final int id;
@@ -89,6 +90,7 @@ class Toplist {
   final String description;
   final List<ToplistTrack> tracks;
   final MusicSource? source;
+  final String? externalId;
 
   factory Toplist.fromJson(Map<String, Object?> json) => Toplist(
     id: (json['id'] as num?)?.toInt() ?? 0,
@@ -104,6 +106,7 @@ class Toplist {
     source: json['source'] == null
         ? null
         : MusicSource.fromWireName(json['source'].toString()),
+    externalId: json['externalId']?.toString(),
   );
 
   Map<String, Object?> toJson() => {
@@ -113,6 +116,7 @@ class Toplist {
     'description': description,
     'tracks': tracks.map((t) => t.toJson()).toList(),
     'source': source?.wireName,
+    'externalId': externalId,
   };
 
   Toplist copyWith({
@@ -122,6 +126,7 @@ class Toplist {
     String? description,
     List<ToplistTrack>? tracks,
     MusicSource? source,
+    String? externalId,
   }) => Toplist(
     id: id ?? this.id,
     name: name ?? this.name,
@@ -129,6 +134,7 @@ class Toplist {
     description: description ?? this.description,
     tracks: tracks ?? this.tracks,
     source: source ?? this.source,
+    externalId: externalId ?? this.externalId,
   );
 }
 

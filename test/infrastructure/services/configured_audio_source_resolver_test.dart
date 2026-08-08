@@ -80,6 +80,30 @@ void main() {
     expect(resolved.candidates.single.sourceId, 'enabled');
   });
 
+  test('音频命中缓存时第一候选仍会回填解析结果中的歌词', () async {
+    final sourceClient = _FakePlaybackSourceClient()
+      ..fetchedLyrics = null
+      ..resolvedLyrics = const LyricData(
+        lyric: '[00:01]第二首歌词',
+        yrc: '[1000,1000](1000,1000,0)第二首歌词',
+      );
+    final resolver = ConfiguredAudioSourceResolver(
+      preferences: _FakePreferencesStore([
+        _config('cached-source', ['netease']),
+      ]),
+      sourceClient: sourceClient,
+      cache: const _HitAudioCache(),
+    );
+
+    final resolved = await resolver.resolve(_track());
+    final cachedCandidate = resolved.candidates.first;
+
+    expect(cachedCandidate.sourceId, 'cached-source:cache');
+    expect(cachedCandidate.track.playbackUrl, Uri.parse('file:///cached.mp3'));
+    expect(cachedCandidate.track.lyric, '[00:01]第二首歌词');
+    expect(cachedCandidate.track.yrc, isNotEmpty);
+  });
+
   test('Android 未启用 LxMusic 运行时时返回受控解析错误', () async {
     final service = PlaybackUrlResolverService();
 
@@ -150,9 +174,19 @@ class _EmptyAudioCache implements AudioCache {
   Future<Uri?> find(Track track, AudioQuality quality) async => null;
 }
 
+class _HitAudioCache implements AudioCache {
+  const _HitAudioCache();
+
+  @override
+  Future<Uri?> find(Track track, AudioQuality quality) async =>
+      Uri.parse('file:///cached.mp3');
+}
+
 class _FakePlaybackSourceClient implements PlaybackSourceClient {
   final failures = <String>{};
   final calls = <String>[];
+  LyricData? fetchedLyrics = const LyricData(lyric: '[00:01]歌词');
+  LyricData? resolvedLyrics;
 
   @override
   Future<ResolvedPlayback> resolveUrlFromSource(
@@ -163,10 +197,12 @@ class _FakePlaybackSourceClient implements PlaybackSourceClient {
     final call = '${configSource.id}:${track.source.wireName}';
     calls.add(call);
     if (failures.contains(call)) throw AudioSourceError('不可用');
-    return ResolvedPlayback(url: 'https://cdn.test/${track.id}.mp3');
+    return ResolvedPlayback(
+      url: 'https://cdn.test/${track.id}.mp3',
+      lyrics: resolvedLyrics,
+    );
   }
 
   @override
-  Future<LyricData?> fetchLyrics(Track track) async =>
-      const LyricData(lyric: '[00:01]歌词');
+  Future<LyricData?> fetchLyrics(Track track) async => fetchedLyrics;
 }

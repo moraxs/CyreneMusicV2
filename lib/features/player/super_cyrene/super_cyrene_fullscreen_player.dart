@@ -1,0 +1,741 @@
+import 'dart:async';
+import 'dart:ui' show ImageFilter;
+
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+import 'package:window_manager/window_manager.dart';
+
+import '../../../application/audio_sources/audio_source_preferences_controller.dart';
+import '../../../application/auth/account_session_controller.dart';
+import '../../../application/playback/playback_controller.dart';
+import '../../../application/stores/fullscreen_settings_store.dart';
+import '../mobile/compat/player_service.dart';
+import 'super_cyrene_amll_background.dart';
+import 'super_cyrene_chat_lyrics.dart';
+import 'super_cyrene_classic_lyrics.dart';
+import 'super_cyrene_control_panel.dart';
+
+/// SuperCyrene lives in its own feature subtree so every lyric theme can be
+/// added without increasing the classic desktop player's file size.
+class SuperCyreneFullscreenPlayer extends StatefulWidget {
+  const SuperCyreneFullscreenPlayer({
+    super.key,
+    required this.playback,
+    required this.audioSources,
+    required this.account,
+    required this.onSwitchToClassic,
+  });
+
+  final PlaybackController playback;
+  final AudioSourcePreferencesController audioSources;
+  final AccountSessionController account;
+  final VoidCallback onSwitchToClassic;
+
+  @override
+  State<SuperCyreneFullscreenPlayer> createState() =>
+      _SuperCyreneFullscreenPlayerState();
+}
+
+class _SuperCyreneFullscreenPlayerState
+    extends State<SuperCyreneFullscreenPlayer>
+    with WindowListener {
+  Timer? _titleBarTimer;
+  bool _titleBarVisible = false;
+  bool _isMaximized = false;
+  String? _translation;
+  bool _chatLyrics = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _chatLyrics =
+        FullscreenSettingsStore.instance.superCyreneLyricsTheme == 'chat';
+    PlayerService().bind(
+      widget.playback,
+      accountController: widget.account,
+      audioSourcesController: widget.audioSources,
+    );
+    windowManager.addListener(this);
+    _syncMaximizedState();
+  }
+
+  @override
+  void dispose() {
+    _titleBarTimer?.cancel();
+    windowManager.removeListener(this);
+    super.dispose();
+  }
+
+  @override
+  void onWindowMaximize() => _setMaximized(true);
+
+  @override
+  void onWindowUnmaximize() => _setMaximized(false);
+
+  Future<void> _syncMaximizedState() async {
+    _setMaximized(await windowManager.isMaximized());
+  }
+
+  void _setMaximized(bool value) {
+    if (!mounted || value == _isMaximized) return;
+    setState(() => _isMaximized = value);
+  }
+
+  void _showTitleBar() {
+    _titleBarTimer?.cancel();
+    if (!_titleBarVisible) setState(() => _titleBarVisible = true);
+  }
+
+  void _scheduleTitleBarHide() {
+    _titleBarTimer?.cancel();
+    _titleBarTimer = Timer(const Duration(milliseconds: 450), () {
+      if (mounted) setState(() => _titleBarVisible = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => CallbackShortcuts(
+    bindings: {
+      const SingleActivator(LogicalKeyboardKey.escape): () =>
+          Navigator.of(context).pop(),
+      const SingleActivator(LogicalKeyboardKey.space):
+          widget.playback.togglePlay,
+    },
+    child: Focus(
+      autofocus: true,
+      child: Material(
+        type: MaterialType.transparency,
+        child: AnimatedBuilder(
+          animation: widget.playback,
+          builder: (context, _) {
+            final track = widget.playback.state.currentTrack;
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                SuperCyreneAmllBackground(
+                  imageProvider: PlayerService().currentCoverImageProvider,
+                  isPlaying: widget.playback.state.isPlaying,
+                ),
+                const ColoredBox(color: Color(0x26000000)),
+                if (track != null)
+                  Positioned.fill(
+                    child: _chatLyrics
+                        ? SuperCyreneChatLyrics(
+                            playback: widget.playback,
+                            track: track,
+                            cover: PlayerService().currentCoverImageProvider,
+                            rightAvatarUrl:
+                                widget.account.state.user?.avatarUrl,
+                          )
+                        : SuperCyreneClassicLyrics(
+                            playback: widget.playback,
+                            track: track,
+                            onTranslationChanged: (value) {
+                              if (mounted && value != _translation) {
+                                setState(() => _translation = value);
+                              }
+                            },
+                          ),
+                  )
+                else
+                  Center(
+                    child: Text(
+                      '暂无正在播放的歌曲',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: .3),
+                        letterSpacing: 2,
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: 32,
+                  child: MouseRegion(
+                    onEnter: (_) => _showTitleBar(),
+                    child: const SizedBox.expand(),
+                  ),
+                ),
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: IgnorePointer(
+                    ignoring: !_titleBarVisible,
+                    child: AnimatedSlide(
+                      offset: _titleBarVisible
+                          ? Offset.zero
+                          : const Offset(0, -1),
+                      duration: const Duration(milliseconds: 500),
+                      curve: Curves.easeOutCubic,
+                      child: AnimatedOpacity(
+                        opacity: _titleBarVisible ? 1 : 0,
+                        duration: const Duration(milliseconds: 350),
+                        child: MouseRegion(
+                          onEnter: (_) => _showTitleBar(),
+                          onExit: (_) => _scheduleTitleBarHide(),
+                          child: _SuperCyreneTitleBar(
+                            title: track?.name ?? 'SuperCyrene',
+                            isMaximized: _isMaximized,
+                            onSwitchToClassic: widget.onSwitchToClassic,
+                            onExit: () => Navigator.of(context).pop(),
+                            onMinimize: windowManager.minimize,
+                            onToggleMaximize: () => _isMaximized
+                                ? windowManager.unmaximize()
+                                : windowManager.maximize(),
+                            onClose: windowManager.close,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 80,
+                  right: 80,
+                  bottom: 20,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 180),
+                        child: _translation?.isNotEmpty == true
+                            ? Padding(
+                                key: ValueKey(_translation),
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: Text(
+                                  _translation!,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: Colors.white.withValues(alpha: .75),
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                    letterSpacing: .5,
+                                    shadows: const [
+                                      Shadow(
+                                        color: Colors.black87,
+                                        blurRadius: 16,
+                                        offset: Offset(0, 2),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              )
+                            : const SizedBox.shrink(),
+                      ),
+                      Center(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 384),
+                          child: _PlaybackCapsule(playback: widget.playback),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Positioned(
+                  left: 20,
+                  bottom: 20,
+                  child: SuperCyreneControlPanel(
+                    playback: widget.playback,
+                    account: widget.account,
+                    track: track,
+                    cover: PlayerService().currentCoverImageProvider,
+                    chatLyrics: _chatLyrics,
+                    onChatLyricsChanged: (value) {
+                      if (_chatLyrics == value) return;
+                      setState(() {
+                        _chatLyrics = value;
+                        if (value) _translation = null;
+                      });
+                      FullscreenSettingsStore.instance
+                          .setSuperCyreneLyricsTheme(
+                            value ? 'chat' : 'default',
+                          );
+                    },
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    ),
+  );
+}
+
+class _SuperCyreneTitleBar extends StatelessWidget {
+  const _SuperCyreneTitleBar({
+    required this.title,
+    required this.isMaximized,
+    required this.onSwitchToClassic,
+    required this.onExit,
+    required this.onMinimize,
+    required this.onToggleMaximize,
+    required this.onClose,
+  });
+
+  final String title;
+  final bool isMaximized;
+  final VoidCallback onSwitchToClassic;
+  final VoidCallback onExit;
+  final VoidCallback onMinimize;
+  final VoidCallback onToggleMaximize;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) => ClipRect(
+    child: BackdropFilter(
+      filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+      child: Container(
+        height: 52,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Color(0xA6000000),
+              Color(0x59000000),
+              Color(0x1A000000),
+              Colors.transparent,
+            ],
+            stops: [0, .4, .72, 1],
+          ),
+        ),
+        child: Row(
+          children: [
+            const SizedBox(width: 16),
+            Expanded(
+              child: DragToMoveArea(
+                child: SizedBox(
+                  height: 44,
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: .3),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 1.05,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            _CaptionButton(
+              icon: Icons.album_rounded,
+              tooltip: '切换到经典播放器',
+              onPressed: onSwitchToClassic,
+            ),
+            const _Divider(),
+            _CaptionButton(
+              icon: Icons.close_fullscreen_rounded,
+              tooltip: '折叠全屏播放器',
+              onPressed: onExit,
+            ),
+            const _Divider(),
+            _CaptionButton(
+              icon: CupertinoIcons.minus,
+              tooltip: '最小化窗口',
+              onPressed: onMinimize,
+            ),
+            _CaptionButton(
+              icon: isMaximized
+                  ? CupertinoIcons.square_on_square
+                  : CupertinoIcons.square,
+              iconSize: isMaximized ? 13 : 11,
+              tooltip: isMaximized ? '还原窗口' : '最大化窗口',
+              onPressed: onToggleMaximize,
+            ),
+            _CaptionButton(
+              icon: CupertinoIcons.xmark,
+              tooltip: '关闭窗口',
+              closeButton: true,
+              onPressed: onClose,
+            ),
+            const SizedBox(width: 10),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+class _PlaybackCapsule extends StatefulWidget {
+  const _PlaybackCapsule({required this.playback});
+
+  final PlaybackController playback;
+
+  @override
+  State<_PlaybackCapsule> createState() => _PlaybackCapsuleState();
+}
+
+class _PlaybackCapsuleState extends State<_PlaybackCapsule> {
+  double? _dragValue;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: const BoxDecoration(
+      borderRadius: BorderRadius.all(Radius.circular(28)),
+      boxShadow: [
+        BoxShadow(
+          color: Color(0x3D000000),
+          blurRadius: 34,
+          spreadRadius: -4,
+          offset: Offset(0, 12),
+        ),
+      ],
+    ),
+    child: Stack(
+      children: [
+        if (defaultTargetPlatform == TargetPlatform.windows)
+          const Positioned.fill(child: _WindowsGlassRefraction()),
+        GlassContainer(
+          shape: const LiquidRoundedSuperellipse(borderRadius: 28),
+          settings: const LiquidGlassSettings(
+            glassColor: Color(0x0FFFFFFF),
+            thickness: 10,
+            // The Windows refraction layer below owns backdrop sampling. Keep
+            // this at zero so blur kernels cannot pull the translation line
+            // above the controller into the capsule.
+            blur: 0,
+            chromaticAberration: 0,
+            lightIntensity: 0,
+            ambientStrength: 0,
+            ambientRim: 0,
+            glowIntensity: 0,
+            shadowElevation: 0,
+            whitenStrength: 0,
+          ),
+          useOwnLayer: true,
+          clipBehavior: Clip.antiAlias,
+          allowElevation: false,
+          glowIntensity: 0,
+          padding: const EdgeInsets.fromLTRB(18, 11, 18, 10),
+          child: AnimatedBuilder(
+            animation: widget.playback,
+            builder: (context, _) => Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _PlayerButton(
+                      icon: CupertinoIcons.backward_fill,
+                      onPressed: widget.playback.playPrevious,
+                    ),
+                    const SizedBox(width: 22),
+                    _PlayerButton(
+                      icon: widget.playback.state.isPlaying
+                          ? CupertinoIcons.pause_fill
+                          : CupertinoIcons.play_fill,
+                      iconSize: 23,
+                      prominent: true,
+                      onPressed: widget.playback.togglePlay,
+                    ),
+                    const SizedBox(width: 22),
+                    _PlayerButton(
+                      icon: CupertinoIcons.forward_fill,
+                      onPressed: widget.playback.playNext,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                ValueListenableBuilder<Duration>(
+                  valueListenable: widget.playback.positionListenable,
+                  builder: (context, position, _) {
+                    final duration = widget.playback.state.duration;
+                    final value =
+                        _dragValue ??
+                        (duration.inMilliseconds <= 0
+                            ? 0.0
+                            : (position.inMilliseconds /
+                                      duration.inMilliseconds)
+                                  .clamp(0.0, 1.0));
+                    return _GlassProgressTrack(
+                      value: value,
+                      onChanged: (next) => setState(() => _dragValue = next),
+                      onChangeEnd: (next) {
+                        widget.playback.seek(duration * next);
+                        setState(() => _dragValue = null);
+                      },
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+/// Windows/Skia cannot run the package's Impeller-only premium refraction.
+/// This compact fallback samples the live backdrop through one continuous
+/// affine lens. It stays fully GPU-composited and avoids both hard internal
+/// refraction seams and expensive screen-to-image readbacks.
+class _WindowsGlassRefraction extends StatelessWidget {
+  const _WindowsGlassRefraction();
+
+  static const _radius = 28.0;
+
+  Matrix4 _lensMatrix(Size size, double scale) => Matrix4.identity()
+    // Horizontal-only deformation is intentional. Scaling Y would make the
+    // filter sample pixels above/below the capsule, which can drag the nearby
+    // translated lyric into the controller even though the output is clipped.
+    ..setEntry(0, 0, scale)
+    ..setEntry(0, 3, (1 - scale) * size.width * .5);
+
+  Widget _lens(Size size, double scale) => BackdropFilter(
+    filter: ImageFilter.matrix(
+      _lensMatrix(size, scale).storage,
+      filterQuality: FilterQuality.high,
+    ),
+    blendMode: BlendMode.srcOver,
+    child: const SizedBox.expand(),
+  );
+
+  @override
+  Widget build(BuildContext context) => IgnorePointer(
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        final size = constraints.biggest;
+        if (size.isEmpty || !size.isFinite) return const SizedBox.shrink();
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(_radius),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // A horizontal-only frost restores the soft glass appearance
+              // without sampling the translated lyric above the capsule.
+              BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 6, sigmaY: 0),
+                blendMode: BlendMode.srcOver,
+                child: const SizedBox.expand(),
+              ),
+              // One continuous deformation avoids the visible seam produced
+              // by switching to a stronger transform in a hard-clipped rim.
+              _lens(size, 1.018),
+              const CustomPaint(painter: _GlassOpticsPainter()),
+            ],
+          ),
+        );
+      },
+    ),
+  );
+}
+
+class _GlassOpticsPainter extends CustomPainter {
+  const _GlassOpticsPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rim = RRect.fromRectAndRadius(
+      (Offset.zero & size).deflate(.8),
+      const Radius.circular(27.2),
+    );
+
+    // Opposing sub-pixel colored rims imitate wavelength separation at a
+    // curved glass boundary without requiring a sampled fragment shader.
+    canvas.drawRRect(
+      rim.shift(const Offset(-.65, 0)),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.15
+        ..color = const Color(0x405DEBFF),
+    );
+    canvas.drawRRect(
+      rim.shift(const Offset(.65, 0)),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.15
+        ..color = const Color(0x38D86CFF),
+    );
+
+    final bottomRect = Rect.fromLTWH(
+      5,
+      size.height * .65,
+      size.width - 10,
+      size.height * .35,
+    );
+    canvas.drawRect(
+      bottomRect,
+      Paint()
+        ..shader = const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0x00000000), Color(0x20000000)],
+        ).createShader(bottomRect),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _GlassOpticsPainter oldDelegate) => false;
+}
+
+class _GlassProgressTrack extends StatelessWidget {
+  const _GlassProgressTrack({
+    required this.value,
+    required this.onChanged,
+    required this.onChangeEnd,
+  });
+
+  final double value;
+  final ValueChanged<double> onChanged;
+  final ValueChanged<double> onChangeEnd;
+
+  double _valueFor(Offset local, double width) =>
+      (local.dx / width).clamp(0.0, 1.0);
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) => GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (details) =>
+          onChangeEnd(_valueFor(details.localPosition, constraints.maxWidth)),
+      onHorizontalDragUpdate: (details) =>
+          onChanged(_valueFor(details.localPosition, constraints.maxWidth)),
+      onHorizontalDragEnd: (_) => onChangeEnd(value),
+      child: SizedBox(
+        height: 16,
+        child: Center(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(99),
+            child: Stack(
+              children: [
+                Container(
+                  height: 4,
+                  color: Colors.white.withValues(alpha: .18),
+                ),
+                FractionallySizedBox(
+                  widthFactor: value,
+                  child: Container(
+                    height: 4,
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Color(0xFFFFFFFF), Color(0xFFDDD6FE)],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class _PlayerButton extends StatelessWidget {
+  const _PlayerButton({
+    required this.icon,
+    required this.onPressed,
+    this.iconSize = 17,
+    this.prominent = false,
+  });
+
+  final IconData icon;
+  final VoidCallback onPressed;
+  final double iconSize;
+  final bool prominent;
+
+  @override
+  Widget build(BuildContext context) => InkResponse(
+    onTap: onPressed,
+    radius: prominent ? 25 : 20,
+    child: Container(
+      width: prominent ? 44 : 34,
+      height: prominent ? 44 : 34,
+      decoration: prominent
+          ? BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white.withValues(alpha: .92),
+              boxShadow: const [
+                BoxShadow(color: Color(0x448B5CF6), blurRadius: 18),
+              ],
+            )
+          : null,
+      alignment: Alignment.center,
+      child: Icon(
+        icon,
+        size: iconSize,
+        color: prominent ? Colors.black : Colors.white.withValues(alpha: .82),
+      ),
+    ),
+  );
+}
+
+class _Divider extends StatelessWidget {
+  const _Divider();
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 1,
+    height: 12,
+    margin: const EdgeInsets.symmetric(horizontal: 3),
+    color: Colors.white.withValues(alpha: .1),
+  );
+}
+
+class _CaptionButton extends StatefulWidget {
+  const _CaptionButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+    this.iconSize = 15,
+    this.closeButton = false,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onPressed;
+  final double iconSize;
+  final bool closeButton;
+
+  @override
+  State<_CaptionButton> createState() => _CaptionButtonState();
+}
+
+class _CaptionButtonState extends State<_CaptionButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: widget.tooltip,
+    child: MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onPressed,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          width: 28,
+          height: 28,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: _hovered
+                ? (widget.closeButton
+                      ? const Color(0xFFD93B3B).withValues(alpha: .82)
+                      : Colors.white.withValues(alpha: .1))
+                : Colors.transparent,
+          ),
+          child: Icon(
+            widget.icon,
+            size: widget.iconSize,
+            color: Colors.white.withValues(alpha: _hovered ? .8 : .25),
+          ),
+        ),
+      ),
+    ),
+  );
+}

@@ -39,6 +39,11 @@ class PlaybackController extends ChangeNotifier {
   final Random _random;
   late final List<StreamSubscription<Object?>> _subscriptions;
 
+  /// 心动模式等「智能续播」供给方。设置后，每次「下一首」（含播放自然结束
+  /// 的自动接续）都会先向它要下一曲，拿到非空曲目就播，拿不到才回退普通
+  /// 队列导航；「上一首」永不参与。
+  Future<Track?> Function()? _smartNextProvider;
+
   PlaybackState _state = PlaybackState();
   PlaybackState get state => _state;
 
@@ -187,7 +192,27 @@ class PlaybackController extends ChangeNotifier {
 
   Future<void> playPrevious() => _playAdjacent(isNext: false);
 
+  /// 设置/清除智能续播供给方（见 [_smartNextProvider]）。
+  void setSmartNextProvider(Future<Track?> Function()? provider) =>
+      _smartNextProvider = provider;
+
   Future<void> _playAdjacent({required bool isNext}) async {
+    // 心动模式（智能续播）：仅「下一首」先问供给方；供给方抛错或返回 null
+    // 都回退普通队列导航，避免异常中断播放流。
+    if (isNext) {
+      final smartProvider = _smartNextProvider;
+      if (smartProvider != null) {
+        try {
+          final smartTrack = await smartProvider();
+          if (smartTrack != null) {
+            await playTrack(smartTrack, queue: _state.queue);
+            return;
+          }
+        } catch (e) {
+          debugPrint('[PlaybackController] 智能续播失败，回退队列导航: $e');
+        }
+      }
+    }
     final track = isNext
         ? nextTrack(
             queue: _state.queue,

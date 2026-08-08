@@ -53,6 +53,38 @@ const TextStyle _style = TextStyle(
 
 void main() {
   group('fluidCloudLineLayout', () {
+    test('plain LRC evenly distributes grapheme timing across the line', () {
+      final solution = fluidCloudLineLayout(
+        lyric: LyricLine(
+          startTime: const Duration(seconds: 10),
+          text: '你 好呀',
+          lineDuration: const Duration(seconds: 3),
+        ),
+        textStyle: _style,
+        maxWidth: 300,
+      );
+
+      final words = solution.layout.words.map((word) => word.word).toList();
+      expect(words.map((word) => word.word), ['你', '好', '呀']);
+      expect(words.map((word) => word.startTime), [10000, 11000, 12000]);
+      expect(words.map((word) => word.endTime), [11000, 12000, 13000]);
+      expect(solution.lineStartMs, 10000);
+      expect(solution.lineEndMs, 13000);
+    });
+
+    test('plain LRC uses five seconds when line duration is unavailable', () {
+      final solution = fluidCloudLineLayout(
+        lyric: LyricLine(startTime: const Duration(seconds: 2), text: '天地'),
+        textStyle: _style,
+        maxWidth: 300,
+      );
+
+      final words = solution.layout.words.map((word) => word.word).toList();
+      expect(words.map((word) => word.startTime), [2000, 4500]);
+      expect(words.map((word) => word.endTime), [4500, 7000]);
+      expect(solution.lineEndMs, 7000);
+    });
+
     test('同一行在同宽同样式下复用同一份排版（点亮前后必然一致）', () {
       final lyric = _wrappingLine();
       final a = fluidCloudLineLayout(
@@ -130,6 +162,39 @@ void main() {
   });
 
   group('FluidCloudWordLine 点亮前后几何一致', () {
+    testWidgets('SuperCyrene can drive word painting with its explicit clock', (
+      tester,
+    ) async {
+      final position = ValueNotifier(const Duration(milliseconds: 11500));
+      addTearDown(position.dispose);
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox(
+            width: 300,
+            child: FluidCloudWordLine(
+              lyric: LyricLine(
+                startTime: const Duration(seconds: 10),
+                text: '你好',
+                lineDuration: const Duration(seconds: 2),
+              ),
+              active: true,
+              textStyle: _style,
+              positionListenable: position,
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 16));
+
+      final paint = tester
+          .widgetList<CustomPaint>(find.byType(CustomPaint))
+          .last;
+      final painter = paint.painter! as FluidCloudAnimatedLinePainter;
+      expect(painter.relativeTimeMs, closeTo(1500, 20));
+      expect(painter.fadeProgress, closeTo(.75, .02));
+    });
+
     /// 渲染一行并返回它实际占据的尺寸
     Future<Size> renderedSize(
       WidgetTester tester, {

@@ -6,8 +6,10 @@ import 'package:flutter_miuix/miuix.dart'
 
 import '../../../../domain/models/comment.dart';
 import '../../../../domain/models/media_url.dart';
+import '../../../../domain/models/music_source.dart';
 import '../../../../domain/models/track.dart';
 import '../../../../infrastructure/services/netease_comment_service.dart';
+import '../../../../infrastructure/services/qq_comment_service.dart';
 
 /// 移动端歌曲评论面板。
 ///
@@ -31,6 +33,7 @@ class MobilePlayerSongComments extends StatefulWidget {
 class _MobilePlayerSongCommentsState extends State<MobilePlayerSongComments> {
   /// 单页评论数量
   static const int _pageSize = 20;
+
   /// 收起时热门 / 最新评论各自最多展示的条数
   static const int _previewLimit = 3;
 
@@ -38,6 +41,7 @@ class _MobilePlayerSongCommentsState extends State<MobilePlayerSongComments> {
   // 后续分页累计的评论（不含首页），展开后与首页 comments 拼接展示
   List<CommentItem> _latestPage = const [];
   int _offset = 0;
+  int _page = 0;
   // before 分页游标：取上一页最后一条评论的 time，用于超过 5000 条评论后的翻页
   int _before = 0;
 
@@ -55,15 +59,15 @@ class _MobilePlayerSongCommentsState extends State<MobilePlayerSongComments> {
   @override
   void initState() {
     super.initState();
-    _lastTrackId = widget.track.id;
+    _lastTrackId = widget.track.key;
     _fetchFirst();
   }
 
   @override
   void didUpdateWidget(covariant MobilePlayerSongComments oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.track.id != _lastTrackId) {
-      _lastTrackId = widget.track.id;
+    if (widget.track.key != _lastTrackId) {
+      _lastTrackId = widget.track.key;
       _reset();
       _fetchFirst();
     }
@@ -73,6 +77,7 @@ class _MobilePlayerSongCommentsState extends State<MobilePlayerSongComments> {
     _firstPage = null;
     _latestPage = const [];
     _offset = 0;
+    _page = 0;
     _before = 0;
     _expanded = false;
     _error = null;
@@ -88,18 +93,13 @@ class _MobilePlayerSongCommentsState extends State<MobilePlayerSongComments> {
       });
     }
     try {
-      final data = await NeteaseCommentService.instance.fetchSongComments(
-        widget.track.id,
-        limit: _pageSize,
-        offset: 0,
-        before: 0,
-        sortType: _sortType,
-      );
+      final data = await _fetchComments(firstPage: true);
       if (reqId != _reqId) return; // 已被新请求取代
       if (data != null) {
         _firstPage = data;
         _latestPage = const [];
         _offset = _pageSize;
+        _page = 1;
         _before = data.comments.isNotEmpty ? data.comments.last.time : 0;
       } else {
         _firstPage = null;
@@ -118,16 +118,11 @@ class _MobilePlayerSongCommentsState extends State<MobilePlayerSongComments> {
     if (_isLoadingMore || firstPage == null || !firstPage.more) return;
     setState(() => _isLoadingMore = true);
     try {
-      final data = await NeteaseCommentService.instance.fetchSongComments(
-        widget.track.id,
-        limit: _pageSize,
-        offset: _offset,
-        before: _before,
-        sortType: _sortType,
-      );
+      final data = await _fetchComments(firstPage: false);
       if (data != null) {
         _latestPage = [..._latestPage, ...data.comments];
         _offset += _pageSize;
+        _page += 1;
         if (data.comments.isNotEmpty) {
           _before = data.comments.last.time;
         }
@@ -145,6 +140,24 @@ class _MobilePlayerSongCommentsState extends State<MobilePlayerSongComments> {
     } finally {
       if (mounted) setState(() => _isLoadingMore = false);
     }
+  }
+
+  Future<SongComments?> _fetchComments({required bool firstPage}) {
+    if (widget.track.source == MusicSource.qq) {
+      return QqCommentService.instance.fetchSongComments(
+        widget.track.id,
+        pagesize: _pageSize,
+        pagenum: firstPage ? 0 : _page,
+        sortType: _sortType,
+      );
+    }
+    return NeteaseCommentService.instance.fetchSongComments(
+      widget.track.id,
+      limit: _pageSize,
+      offset: firstPage ? 0 : _offset,
+      before: firstPage ? 0 : _before,
+      sortType: _sortType,
+    );
   }
 
   /// 切换排序：重置状态后由 _fetchFirst 重新拉取
@@ -226,7 +239,8 @@ class _MobilePlayerSongCommentsState extends State<MobilePlayerSongComments> {
         ? [...firstPage.comments, ..._latestPage]
         : firstPage.comments.take(_previewLimit).toList();
 
-    final canExpand = !_expanded &&
+    final canExpand =
+        !_expanded &&
         (firstPage.hotComments.length > _previewLimit ||
             firstPage.comments.length > _previewLimit);
 
@@ -312,8 +326,7 @@ class _MobilePlayerSongCommentsState extends State<MobilePlayerSongComments> {
               onTap: () => _changeSort(value),
               behavior: HitTestBehavior.opaque,
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: value == _sortType
                       ? Colors.white.withValues(alpha: 0.12)
@@ -434,8 +447,9 @@ class _MobilePlayerSongCommentsState extends State<MobilePlayerSongComments> {
   Widget _buildCommentRow(CommentItem comment) {
     final user = comment.user;
     final avatarUrl = user?.avatarUrl ?? '';
-    final nickname =
-        (user?.nickname?.isNotEmpty ?? false) ? user!.nickname! : '未知用户';
+    final nickname = (user?.nickname?.isNotEmpty ?? false)
+        ? user!.nickname!
+        : '未知用户';
     final ipLocation = comment.ipLocation;
     final isVip = (user?.vipType ?? 0) > 0;
     final timeStr = comment.timeStr;
@@ -469,10 +483,7 @@ class _MobilePlayerSongCommentsState extends State<MobilePlayerSongComments> {
                         ),
                       ),
                     ),
-                    if (isVip) ...[
-                      const SizedBox(width: 6),
-                      _buildVipBadge(),
-                    ],
+                    if (isVip) ...[const SizedBox(width: 6), _buildVipBadge()],
                   ],
                 ),
                 // 正文
@@ -516,23 +527,22 @@ class _MobilePlayerSongCommentsState extends State<MobilePlayerSongComments> {
                                     text:
                                         '@${(r.user?.nickname?.isNotEmpty ?? false) ? r.user!.nickname! : '未知用户'}: ',
                                     style: TextStyle(
-                                      color:
-                                          Colors.white.withValues(alpha: 0.8),
+                                      color: Colors.white.withValues(
+                                        alpha: 0.8,
+                                      ),
                                     ),
                                   ),
                                   TextSpan(
                                     text: r.content,
                                     style: TextStyle(
-                                      color:
-                                          Colors.white.withValues(alpha: 0.6),
+                                      color: Colors.white.withValues(
+                                        alpha: 0.6,
+                                      ),
                                     ),
                                   ),
                                 ],
                               ),
-                              style: const TextStyle(
-                                fontSize: 12,
-                                height: 1.5,
-                              ),
+                              style: const TextStyle(fontSize: 12, height: 1.5),
                             ),
                           ),
                       ],

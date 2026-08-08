@@ -14,10 +14,14 @@ class DiscoverPage extends StatefulWidget {
     super.key,
     required this.discover,
     required this.onOpenPlaylist,
+    this.body,
   });
 
   final DiscoverController discover;
   final ValueChanged<DiscoveryPlaylist> onOpenPlaylist;
+
+  /// 桌面端内容区二级页。非空时保留桌面外壳，仅用详情页替换发现页内容。
+  final Widget? body;
 
   @override
   State<DiscoverPage> createState() => _DiscoverPageState();
@@ -37,6 +41,9 @@ class _DiscoverPageState extends State<DiscoverPage>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final body = widget.body;
+    if (body != null) return body;
+
     return AnimatedBuilder(
       animation: widget.discover,
       builder: (context, _) {

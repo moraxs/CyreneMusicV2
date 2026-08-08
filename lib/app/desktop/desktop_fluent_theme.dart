@@ -1,6 +1,11 @@
+import 'dart:io' show Platform;
+
 import 'package:fluent_ui/fluent_ui.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_miuix/miuix.dart' show MiuixTheme;
 
+import '../../application/stores/window_material_settings_store.dart';
+import '../../presentation/cyrene/breakpoints.dart' show isDesktopLayout;
 import '../../presentation/cyrene/cyrene_theme.dart';
 
 /// 桌面外壳(融合标题栏 + fluent [NavigationView] 侧栏)统一的 fluent 主题。
@@ -8,12 +13,28 @@ import '../../presentation/cyrene/cyrene_theme.dart';
 /// 亮度与主色同步 Miuix:明暗切换、主题色变更会由上层 MiuixThemeController
 /// 重建整树带动这里重算,每次读到的都是最新值。
 ///
-/// 三处底色统统压成 Miuix 的页面灰(侧栏 Mica、内容区底、浮层):内容页是
-/// HyperOS 灰底白卡,fluent 默认那套灰会和它打架。侧栏与内容区之间的分界改由
-/// fluent 内容卡的 1px 描边 + 左上圆角承担。
+/// **底色透明策略(Windows 11 窗口背景效果)**:由用户选择的窗口材质决定
+/// (见 WindowMaterialSettingsStore)。fluent_ui 的 [Mica] 组件并非系统
+/// 材质,只是一个用 `micaBackgroundColor` 填充的纯色 [DecoratedBox];
+/// [NavigationView] 内部又用它包裹整片区域。若把这些背景色设为不透明的
+/// surface 灰,系统 Mica/Acrylic 就被完全遮住。因此「云母/亚克力」材质下把
+/// `micaBackgroundColor`/`scaffoldBackgroundColor`/`navigationPaneTheme`
+/// 的背景统统设为透明,让 flutter_acrylic 通过 DWM 设置的窗口效果透出;
+/// 内容区可读性由 [DesktopShell._buildBody] 里的半透明 [ColoredBox]
+/// (surface 55% 不透明度) 保证,既维持可读性又让效果透过内容区。选择
+/// 「默认不透明」时则用不透明 surface 底色,由 Flutter 侧自绘。
 FluentThemeData desktopFluentTheme(BuildContext context) {
   final miuix = MiuixTheme.of(context);
-  final surface = miuix.colors.surface;
+  final isWindowsDesktop =
+      !kIsWeb && Platform.isWindows && isDesktopLayout(context);
+  // Windows 桌面端:仅「云母/亚克力」走透明(让 DWM 背景效果透出);
+  // 「默认不透明」及非 Windows 平台(移动端/非 Windows,无窗口效果可透)
+  // 仍用不透明 surface 灰,避免窗口透出桌面壁纸影响可读性。
+  final translucent =
+      isWindowsDesktop &&
+      WindowMaterialSettingsStore.instance.material !=
+          WindowMaterialType.opaque;
+  final backdrop = translucent ? Colors.transparent : miuix.colors.surface;
   return FluentThemeData(
     brightness: miuix.brightness,
     accentColor: miuix.colors.primary.toAccentColor(),
@@ -21,11 +42,11 @@ FluentThemeData desktopFluentTheme(BuildContext context) {
     // fluent 自带一套 Typography(默认 Windows 平台字体),不指定就会让侧栏与
     // 标题栏的字形和用 MiSans 的其余部分不一致。
     fontFamily: cyreneFontFamily,
-    scaffoldBackgroundColor: surface,
-    micaBackgroundColor: surface,
+    scaffoldBackgroundColor: backdrop,
+    micaBackgroundColor: backdrop,
     navigationPaneTheme: NavigationPaneThemeData(
-      backgroundColor: surface,
-      overlayBackgroundColor: surface,
+      backgroundColor: backdrop,
+      overlayBackgroundColor: miuix.colors.surface,
     ),
     // 标题栏上一级/下一级等按钮的提示延迟:与 Material Tooltip 的 500ms
     // 体验对齐(fluent 默认悬停 0 延迟即显,偏急躁)。**不要动 showDuration**:

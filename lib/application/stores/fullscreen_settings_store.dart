@@ -22,6 +22,9 @@ class FullscreenSettingsStore extends ChangeNotifier {
   static const _kLyricFontFamily = 'fullscreen.lyricFontFamily';
   static const _kLyricFontSize = 'fullscreen.lyricFontSize';
   static const _kLyricBlurStrength = 'fullscreen.lyricBlurStrength';
+  static const _kSuperCyrenePlayerEnabled =
+      'fullscreen.superCyrenePlayerEnabled';
+  static const _kSuperCyreneLyricsTheme = 'fullscreen.superCyreneLyricsTheme';
 
   SharedPreferences? _prefs;
 
@@ -34,6 +37,8 @@ class FullscreenSettingsStore extends ChangeNotifier {
   String _lyricFontFamily = defaultLyricFont;
   double _lyricFontSize = 34;
   double _lyricBlurStrength = 10;
+  bool _superCyrenePlayerEnabled = false;
+  String _superCyreneLyricsTheme = 'default';
 
   bool get audioVisualization => _audioVisualization;
   bool get isImmersiveMode => _isImmersiveMode;
@@ -44,6 +49,8 @@ class FullscreenSettingsStore extends ChangeNotifier {
   String get lyricFontFamily => _lyricFontFamily;
   double get lyricFontSize => _lyricFontSize;
   double get lyricBlurStrength => _lyricBlurStrength;
+  bool get superCyrenePlayerEnabled => _superCyrenePlayerEnabled;
+  String get superCyreneLyricsTheme => _superCyreneLyricsTheme;
 
   Future<void> init() async {
     final prefs = _prefs = await SharedPreferences.getInstance();
@@ -62,6 +69,12 @@ class FullscreenSettingsStore extends ChangeNotifier {
     _lyricFontSize = prefs.getDouble(_kLyricFontSize) ?? _lyricFontSize;
     _lyricBlurStrength =
         prefs.getDouble(_kLyricBlurStrength) ?? _lyricBlurStrength;
+    _superCyrenePlayerEnabled =
+        prefs.getBool(_kSuperCyrenePlayerEnabled) ?? _superCyrenePlayerEnabled;
+    final storedSuperCyreneTheme = prefs.getString(_kSuperCyreneLyricsTheme);
+    _superCyreneLyricsTheme = storedSuperCyreneTheme == 'chat'
+        ? 'chat'
+        : 'default';
     notifyListeners();
   }
 
@@ -123,6 +136,21 @@ class FullscreenSettingsStore extends ChangeNotifier {
     if (_lyricBlurStrength == value) return;
     _lyricBlurStrength = value;
     _prefs?.setDouble(_kLyricBlurStrength, value);
+    notifyListeners();
+  }
+
+  void setSuperCyrenePlayerEnabled(bool value) {
+    if (_superCyrenePlayerEnabled == value) return;
+    _superCyrenePlayerEnabled = value;
+    _prefs?.setBool(_kSuperCyrenePlayerEnabled, value);
+    notifyListeners();
+  }
+
+  void setSuperCyreneLyricsTheme(String value) {
+    final normalized = value == 'chat' ? 'chat' : 'default';
+    if (_superCyreneLyricsTheme == normalized) return;
+    _superCyreneLyricsTheme = normalized;
+    _prefs?.setString(_kSuperCyreneLyricsTheme, normalized);
     notifyListeners();
   }
 }

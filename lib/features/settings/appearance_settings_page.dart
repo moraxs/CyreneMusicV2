@@ -1,12 +1,16 @@
+import 'dart:io' show Platform;
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
 
 import '../../application/auth/account_session_controller.dart';
 import '../../application/stores/appearance_settings_store.dart';
+import '../../application/stores/window_material_settings_store.dart';
 import '../../features/player/mobile/compat/lyric_font_service.dart';
 import '../../features/player/mobile/compat/lyric_style_service.dart';
 import '../../features/player/mobile/compat/player_background_service.dart';
+import '../../presentation/cyrene/breakpoints.dart' show isDesktopLayout;
 import '../../presentation/cyrene/cyrene_overlays.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
 import '../../presentation/cyrene/cyrene_toast.dart';
@@ -26,6 +30,7 @@ class AppearanceSettingsPage extends StatelessWidget {
   static const _iconGreen = Color(0xFF3CC756);
   static const _iconPurple = Color(0xFF8A64FF);
   static const _iconOrange = Color(0xFFFF9F0A);
+  static const _iconTeal = Color(0xFF00A3A3);
 
   /// 预设主题色（名称 / 色值，照抄原版 ThemeColors.presets）。
   /// 原版元组第三位的 IconData 在此页从未渲染（色卡只画圆形色块），已去掉。
@@ -141,6 +146,10 @@ class AppearanceSettingsPage extends StatelessWidget {
           listenable: AppearanceSettingsStore.instance,
           builder: (context, _) {
             final store = AppearanceSettingsStore.instance;
+            // 窗口材质仅 Windows 桌面端（>=900 断点）展示：云母/亚克力是
+            // Windows 专属窗口效果，移动端/安卓平板横屏不出现。
+            final isWindowsDesktop =
+                Platform.isWindows && isDesktopLayout(context);
             return CyreneMenuGroup(
               children: [
                 CyreneMenuRow(
@@ -183,6 +192,23 @@ class AppearanceSettingsPage extends StatelessWidget {
                       ? CyreneToast.show('已跟随系统主题色，如需手动选择请先关闭上方开关')
                       : _chooseThemeColor(context),
                 ),
+                // 窗口材质（仅 Windows 桌面端）：默认不透明 / 云母 / 亚克力。
+                if (isWindowsDesktop)
+                  ListenableBuilder(
+                    listenable: WindowMaterialSettingsStore.instance,
+                    builder: (context, _) {
+                      final material =
+                          WindowMaterialSettingsStore.instance.material;
+                      return CyreneMenuRow(
+                        vector: MiuixIcons.extended.byName('filter')!,
+                        iconBackground: _iconTeal,
+                        title: '窗口材质',
+                        subtitle: material.subtitle,
+                        value: material.label,
+                        onTap: () => _chooseWindowMaterial(context),
+                      );
+                    },
+                  ),
               ],
             );
           },
@@ -269,6 +295,48 @@ class AppearanceSettingsPage extends StatelessWidget {
                         : const SizedBox(width: 20),
                     onTap: () {
                       store.setThemeMode(mode);
+                      dismiss();
+                    },
+                  ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // ==================== 窗口材质 ====================
+
+  Future<void> _chooseWindowMaterial(BuildContext context) async {
+    await showCyreneSheet<void>(
+      context: context,
+      title: '窗口材质',
+      builder: (context, dismiss) => ListenableBuilder(
+        listenable: WindowMaterialSettingsStore.instance,
+        builder: (context, _) {
+          final store = WindowMaterialSettingsStore.instance;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final material in WindowMaterialType.values)
+                  CyreneMenuRow(
+                    vector: MiuixIcons.extended.byName('filter')!,
+                    iconBackground: _iconTeal,
+                    title: material.label,
+                    subtitle: material.subtitle,
+                    trailing: store.material == material
+                        ? MiuixIcon(
+                            vector: MiuixIcons.basic.check,
+                            size: 20,
+                            tint: MiuixTheme.of(context).colors.primary,
+                          )
+                        : const SizedBox(width: 20),
+                    onTap: () {
+                      store.setMaterial(material);
                       dismiss();
                     },
                   ),
