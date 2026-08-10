@@ -5,6 +5,7 @@
 #include "flutter/generated_plugin_registrant.h"
 #include "accent_acrylic_handler.h"
 #include "smtc_handler.h"
+#include "workerw_handler.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -40,6 +41,11 @@ bool FlutterWindow::OnCreate() {
       flutter_controller_->engine()->messenger(), GetHandle());
   accent_acrylic_handler_->RegisterChannels();
 
+  // WorkerW 壁纸层桥：注册 MethodChannel。
+  workerw_handler_ = std::make_unique<WorkerWHandler>(
+      flutter_controller_->engine()->messenger(), GetHandle());
+  workerw_handler_->RegisterChannels();
+
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
   });
@@ -54,6 +60,7 @@ bool FlutterWindow::OnCreate() {
 
 void FlutterWindow::OnDestroy() {
   // 先释放原生桥（撤销 WinRT 事件订阅 / 平台通道），再销毁引擎。
+  workerw_handler_.reset();
   accent_acrylic_handler_.reset();
   smtc_handler_.reset();
 

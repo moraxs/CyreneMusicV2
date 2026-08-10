@@ -18,15 +18,44 @@ import 'super_cyrene_hex_grid.dart';
 /// 歌曲卡片按中心外扩的六边形螺旋排布，近大远淡；拖拽/滚轮平移整个卡片场，
 /// 居中卡片出现播放按钮；左侧 Cut-in 信息面板展示当前高亮曲目，右侧滑出
 /// 虚拟化曲目列表。整页 `overflow` 锁死，仅靠拖拽浏览。
+///
+/// 队列的读取恒定走 `playback.state.queue`；**写**操作与关闭动作可由调用方
+/// 接管（[onClose] / [onPlayTrack] / [onRemoveTrack] / [onClearQueue]）。
+/// 桌面歌词覆盖层需要这些钩子：那边是独立引擎，本地 controller 只是显示层，
+/// 写操作必须回传主窗口，且它没有路由栈（展览馆挂在 Stack 里而非 push 出来）。
+/// 全部留空时行为与原先完全一致。
 class SuperCyreneSongGallery extends StatefulWidget {
   const SuperCyreneSongGallery({
     super.key,
     required this.playback,
-    required this.account,
+    this.account,
+    this.onClose,
+    this.onPlayTrack,
+    this.onRemoveTrack,
+    this.onClearQueue,
+    this.backdrop,
   });
 
   final PlaybackController playback;
-  final AccountSessionController account;
+  final AccountSessionController? account;
+
+  /// 关闭展览馆。默认 `Navigator.pop`。
+  final VoidCallback? onClose;
+
+  /// 播放指定曲目。默认 `playback.playTrack(track, queue: 当前队列)`。
+  final void Function(Track track)? onPlayTrack;
+
+  /// 从队列移除。默认 `playback.removeFromQueue(track)`。
+  final void Function(Track track)? onRemoveTrack;
+
+  /// 清空队列。默认 `playback.clearQueue()` 后关闭本页。
+  final Future<void> Function()? onClearQueue;
+
+  /// 替换整层背景（默认是当前曲封面的全屏大模糊 + 一层压暗）。
+  ///
+  /// 桌面歌词覆盖层传 [SizedBox.shrink]：那边整个窗口是透明的，背景由 DWM
+  /// 的壁纸亚克力直接模糊真实桌面，Flutter 侧画任何底都会把它糊死。
+  final Widget? backdrop;
 
   @override
   State<SuperCyreneSongGallery> createState() => _SuperCyreneSongGalleryState();
@@ -51,6 +80,50 @@ class _SuperCyreneSongGalleryState extends State<SuperCyreneSongGallery>
   bool _showInfoPanel = false;
   bool _showSidePanel = false;
   bool _entering = true;
+
+  /// 搜索词（已 trim + 小写）。空串表示不过滤。
+  String _query = '';
+  final TextEditingController _searchController = TextEditingController();
+
+  /// 搜索框焦点。方向键在展览馆里被绑定为卡片跳转，而 [CallbackShortcuts]
+  /// 位于焦点链上 `DefaultTextEditingShortcuts` 之下——不加守卫的话，在输入框
+  /// 里按左右键会被 [_stepFocus] 截走，光标动不了。
+  final FocusNode _searchFocus = FocusNode();
+
+  /// 过滤后的队列。蜂巢坐标、焦点索引、右侧列表**统一**以它为基准——
+  /// 若只过滤显示而索引仍按原队列算，卡片与曲目会整体错位。
+  ///
+  /// 空查询时直接返回原列表本身（不复制），避免每帧构造新 List。
+  List<Track> get _visibleQueue {
+    final queue = widget.playback.state.queue;
+    if (_query.isEmpty) return queue;
+    return [
+      for (final track in queue)
+        if (_matches(track)) track,
+    ];
+  }
+
+  bool _matches(Track track) =>
+      track.name.toLowerCase().contains(_query) ||
+      track.artists.toLowerCase().contains(_query) ||
+      track.album.toLowerCase().contains(_query);
+
+  /// 应用新的搜索词：重排蜂巢并把焦点收回结果集内。
+  void _onQueryChanged(String raw) {
+    final next = raw.trim().toLowerCase();
+    if (next == _query) return;
+    setState(() {
+      _query = next;
+      // 结果集变了，旧坐标缓存必然失效（长度对不上会被 _coords 自动重建，
+      // 但同长度不同内容的情况必须显式作废）。
+      _coordsCache = null;
+      _coordsForLength = -1;
+      _focusedIndex = 0;
+    });
+    // 重排后把焦点居中；清空搜索时回到当前播放曲，符合直觉。
+    final target = _query.isEmpty ? _currentIndex() : 0;
+    if (target >= 0) _centerOnIndex(target, snap: true);
+  }
 
   Offset? _dragStartPan;
   Offset? _dragStartPointer;
@@ -80,15 +153,18 @@ class _SuperCyreneSongGalleryState extends State<SuperCyreneSongGallery>
   void dispose() {
     _spring.dispose();
     _pan.dispose();
+    _searchController.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
   int _currentIndex() {
-    final queue = widget.playback.state.queue;
+    final queue = _visibleQueue;
     final current = widget.playback.state.currentTrack;
     if (current == null) return queue.isEmpty ? -1 : 0;
     final idx = queue.indexWhere((t) => t.key == current.key);
-    return idx >= 0 ? idx : 0;
+    // 当前曲被搜索词过滤掉时退回结果集首项。
+    return idx >= 0 ? idx : (queue.isEmpty ? -1 : 0);
   }
 
   void _centerOnIndex(int index, {bool snap = true}) {
@@ -111,7 +187,7 @@ class _SuperCyreneSongGalleryState extends State<SuperCyreneSongGallery>
   }
 
   List<HexGridCoord> _coords() {
-    final len = widget.playback.state.queue.length;
+    final len = _visibleQueue.length;
     final cached = _coordsCache;
     if (cached != null && len == _coordsForLength) return cached;
     final built = buildHexGridCoords(len, _layout.spacingX, _layout.spacingY);
@@ -155,7 +231,7 @@ class _SuperCyreneSongGalleryState extends State<SuperCyreneSongGallery>
     _layout = HexLayoutConfig.forViewportWidth(size.width);
     _coordsCache = null;
     // 重排后把焦点重新居中，避免布局换挡时焦点跑偏。
-    final len = widget.playback.state.queue.length;
+    final len = _visibleQueue.length;
     if (len > 0) {
       final idx = _focusedIndex.clamp(0, len - 1);
       _centerOnIndex(idx, snap: true);
@@ -247,22 +323,78 @@ class _SuperCyreneSongGalleryState extends State<SuperCyreneSongGallery>
   }
 
   void _play(Track track) {
+    final override = widget.onPlayTrack;
+    if (override != null) {
+      override(track);
+      return;
+    }
+    // 队列传**完整**队列而非筛选结果：搜索只是查找手段，不该把用户的播放
+    // 队列裁成搜索结果——那样播完这几首就没有下一首了。
     widget.playback.playTrack(track, queue: widget.playback.state.queue);
+  }
+
+  void _remove(Track track) {
+    final override = widget.onRemoveTrack;
+    if (override != null) {
+      override(track);
+      return;
+    }
+    widget.playback.removeFromQueue(track);
+  }
+
+  void _close() {
+    final override = widget.onClose;
+    if (override != null) {
+      override();
+      return;
+    }
+    Navigator.of(context).pop();
+  }
+
+  Future<void> _clear() async {
+    final override = widget.onClearQueue;
+    if (override != null) {
+      await override();
+      return;
+    }
+    await widget.playback.clearQueue();
+    if (!mounted) return;
+    _close();
+  }
+
+  /// 方向键跳转卡片。搜索框聚焦时让位给文本光标移动。
+  void _stepFocusUnlessTyping(int dirX, int dirY) {
+    if (_searchFocus.hasFocus) return;
+    _stepFocus(dirX, dirY);
+  }
+
+  /// Esc：有搜索词时先退出搜索，否则关闭展览馆。
+  ///
+  /// 输入框不处理 Esc，按键会冒泡到这里；若直接 [_close]，用户想「取消搜索」
+  /// 却整个页面被关掉。
+  void _onEscape() {
+    if (_query.isEmpty) {
+      _close();
+      return;
+    }
+    _searchController.clear();
+    _onQueryChanged('');
+    // 交还焦点，让方向键重新用于卡片间跳转。
+    _searchFocus.unfocus();
   }
 
   @override
   Widget build(BuildContext context) => CallbackShortcuts(
         bindings: {
-          const SingleActivator(LogicalKeyboardKey.escape):
-              () => Navigator.of(context).pop(),
+          const SingleActivator(LogicalKeyboardKey.escape): _onEscape,
           const SingleActivator(LogicalKeyboardKey.arrowLeft):
-              () => _stepFocus(-1, 0),
+              () => _stepFocusUnlessTyping(-1, 0),
           const SingleActivator(LogicalKeyboardKey.arrowRight):
-              () => _stepFocus(1, 0),
+              () => _stepFocusUnlessTyping(1, 0),
           const SingleActivator(LogicalKeyboardKey.arrowUp):
-              () => _stepFocus(0, -1),
+              () => _stepFocusUnlessTyping(0, -1),
           const SingleActivator(LogicalKeyboardKey.arrowDown):
-              () => _stepFocus(0, 1),
+              () => _stepFocusUnlessTyping(0, 1),
         },
         child: Focus(
           autofocus: true,
@@ -277,23 +409,47 @@ class _SuperCyreneSongGalleryState extends State<SuperCyreneSongGallery>
                     return Stack(
                       fit: StackFit.expand,
                       children: [
-                        _BlurredBackdrop(track: _coverTrack()),
-                        const ColoredBox(color: Color(0x26000000)),
+                        if (widget.backdrop != null)
+                          widget.backdrop!
+                        else ...[
+                          _BlurredBackdrop(track: _coverTrack()),
+                          const ColoredBox(color: Color(0x26000000)),
+                        ],
                         _HoneycombCanvas(owner: this),
                         Positioned(
                           top: 20,
                           left: 24,
-                          child: _BackButton(onTap: () => Navigator.of(context).pop()),
+                          child: _BackButton(onTap: _close),
                         ),
                         Positioned(
                           top: 18,
                           left: 0,
                           right: 0,
                           child: Center(
-                            child: _TitleCapsule(
-                              title: '播放队列',
-                              subtitle: '${widget.playback.state.queue.length} 首歌曲',
-                              onTap: () => setState(() => _showInfoPanel = !_showInfoPanel),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                _TitleCapsule(
+                                  title: '播放队列',
+                                  subtitle: _query.isEmpty
+                                      ? '${widget.playback.state.queue.length} 首歌曲'
+                                      : '${_visibleQueue.length} 首匹配 · '
+                                          '共 ${widget.playback.state.queue.length} 首',
+                                  onTap: () => setState(
+                                    () => _showInfoPanel = !_showInfoPanel,
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                                _SearchBox(
+                                  controller: _searchController,
+                                  focusNode: _searchFocus,
+                                  onChanged: _onQueryChanged,
+                                  onClear: () {
+                                    _searchController.clear();
+                                    _onQueryChanged('');
+                                  },
+                                ),
+                              ],
                             ),
                           ),
                         ),
@@ -307,16 +463,17 @@ class _SuperCyreneSongGalleryState extends State<SuperCyreneSongGallery>
                               if (q.isEmpty) return;
                               _play(q.first);
                             },
-                            onClear: () async {
-                              await widget.playback.clearQueue();
-                              if (!mounted) return;
-                              Navigator.of(this.context).pop();
-                            },
+                            onClear: _clear,
                           ),
                         if (_showSidePanel)
                           _SideTrackPanel(
                             playback: widget.playback,
+                            // 右侧列表与蜂巢共用同一份筛选结果，两边始终一致。
+                            tracks: _visibleQueue,
+                            query: _query,
                             onClose: () => setState(() => _showSidePanel = false),
+                            onPlay: _play,
+                            onRemove: _remove,
                           ),
                         Positioned(
                           right: 24,
@@ -342,7 +499,7 @@ class _SuperCyreneSongGalleryState extends State<SuperCyreneSongGallery>
   }
 
   Track? _focusedTrack() {
-    final queue = widget.playback.state.queue;
+    final queue = _visibleQueue;
     if (queue.isEmpty) return null;
     final idx = _focusedIndex.clamp(0, queue.length - 1);
     return queue[idx];
@@ -393,12 +550,12 @@ class _HoneycombCanvas extends StatelessWidget {
     return AnimatedBuilder(
       animation: owner._pan,
       builder: (context, _) {
-        final queue = owner.widget.playback.state.queue;
+        final queue = owner._visibleQueue;
         if (queue.isEmpty) {
-          return const Center(
+          return Center(
             child: Text(
-              '队列空空如也',
-              style: TextStyle(color: Colors.white30, letterSpacing: 2),
+              owner._query.isEmpty ? '队列空空如也' : '没有匹配的歌曲',
+              style: const TextStyle(color: Colors.white30, letterSpacing: 2),
             ),
           );
         }
@@ -486,7 +643,12 @@ class _HoneycombCanvas extends StatelessWidget {
                 height: owner._layout.cardHeight,
                 child: _PolaroidCard(
                   track: track,
-                  index: idx,
+                  // 序号显示它在**原队列**中的位置：筛选后若重新从 01 编号，
+                  // 就失去了「这首歌在队列第几位」的定位意义。
+                  index: owner._query.isEmpty
+                      ? idx
+                      : owner.widget.playback.state.queue
+                          .indexWhere((t) => t.key == track.key),
                   isActive: track.key == currentKey,
                   isFocused: isFocused,
                   playOpacity: frame.playOpacity,
@@ -960,10 +1122,26 @@ class _CutInInfoPanel extends StatelessWidget {
 
 /// 右侧曲目列表侧滑面板（窗口化 ListView）。
 class _SideTrackPanel extends StatefulWidget {
-  const _SideTrackPanel({required this.playback, required this.onClose});
+  const _SideTrackPanel({
+    required this.playback,
+    required this.tracks,
+    required this.query,
+    required this.onClose,
+    required this.onPlay,
+    required this.onRemove,
+  });
 
   final PlaybackController playback;
+
+  /// 已按搜索词筛选的曲目（与蜂巢卡片场同一份）。
+  final List<Track> tracks;
+
+  /// 当前搜索词，仅用于区分「队列为空」与「无匹配」的空态文案。
+  final String query;
+
   final VoidCallback onClose;
+  final void Function(Track track) onPlay;
+  final void Function(Track track) onRemove;
 
   @override
   State<_SideTrackPanel> createState() => _SideTrackPanelState();
@@ -982,7 +1160,7 @@ class _SideTrackPanelState extends State<_SideTrackPanel> {
 
   void _scrollToCurrent() {
     if (_scrolled) return;
-    final queue = widget.playback.state.queue;
+    final queue = widget.tracks;
     final current = widget.playback.state.currentTrack;
     final idx = current == null ? -1 : queue.indexWhere((t) => t.key == current.key);
     if (idx < 0) return;
@@ -1043,13 +1221,15 @@ class _SideTrackPanelState extends State<_SideTrackPanel> {
                       child: AnimatedBuilder(
                         animation: widget.playback,
                         builder: (context, _) {
-                          final queue = widget.playback.state.queue;
+                          final queue = widget.tracks;
                           final currentKey =
                               widget.playback.state.currentTrack?.key;
                           if (queue.isEmpty) {
                             return Center(
                               child: Text(
-                                '队列空空如也',
+                                widget.query.isEmpty
+                                    ? '队列空空如也'
+                                    : '没有匹配的歌曲',
                                 style: TextStyle(
                                   color: Colors.white.withValues(alpha: .4),
                                 ),
@@ -1068,12 +1248,8 @@ class _SideTrackPanelState extends State<_SideTrackPanel> {
                                 track: track,
                                 index: index,
                                 isActive: isActive,
-                                onPlay: () => widget.playback.playTrack(
-                                  track,
-                                  queue: queue,
-                                ),
-                                onRemove: () =>
-                                    widget.playback.removeFromQueue(track),
+                                onPlay: () => widget.onPlay(track),
+                                onRemove: () => widget.onRemove(track),
                               );
                             },
                           );
@@ -1282,6 +1458,101 @@ class _FloatingListButtonState extends State<_FloatingListButton> {
                   child: Icon(Icons.list_rounded, size: 22, color: Colors.white),
                 ),
               ),
+            ),
+          ),
+        ),
+      );
+}
+
+/// 队列搜索框（标题胶囊下方的玻璃条）。
+///
+/// 只过滤已在队列里的歌，不联网——桌面歌词覆盖层是独立引擎，没有网络与鉴权栈
+/// （见 SuperCyreneSongGallery 的类注释），本地筛选让两端行为完全一致。
+class _SearchBox extends StatefulWidget {
+  const _SearchBox({
+    required this.controller,
+    required this.focusNode,
+    required this.onChanged,
+    required this.onClear,
+  });
+
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+
+  @override
+  State<_SearchBox> createState() => _SearchBoxState();
+}
+
+class _SearchBoxState extends State<_SearchBox> {
+  @override
+  Widget build(BuildContext context) => ClipRRect(
+        borderRadius: BorderRadius.circular(99),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+          child: Container(
+            width: 260,
+            height: 36,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: .25),
+              borderRadius: BorderRadius.circular(99),
+              border: Border.all(color: Colors.white.withValues(alpha: .10)),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.search_rounded,
+                  size: 16,
+                  color: Colors.white.withValues(alpha: .45),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: widget.controller,
+                    focusNode: widget.focusNode,
+                    onChanged: widget.onChanged,
+                    // 展览馆用方向键在卡片间跳转（见 CallbackShortcuts）。
+                    // 输入框获得焦点时那些绑定会拦掉光标移动，因此不自动聚焦，
+                    // 由用户主动点击进入输入态。
+                    autofocus: false,
+                    cursorColor: const Color(0xFFA78BFA),
+                    cursorHeight: 14,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      height: 1.2,
+                    ),
+                    decoration: InputDecoration(
+                      isCollapsed: true,
+                      border: InputBorder.none,
+                      hintText: '搜索队列中的歌曲',
+                      hintStyle: TextStyle(
+                        color: Colors.white.withValues(alpha: .35),
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                ),
+                // 有内容时才占位，避免空搜索时右侧留一块空白。
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: widget.controller,
+                  builder: (context, value, _) => value.text.isEmpty
+                      ? const SizedBox.shrink()
+                      : GestureDetector(
+                          onTap: widget.onClear,
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 6),
+                            child: Icon(
+                              Icons.close_rounded,
+                              size: 15,
+                              color: Colors.white.withValues(alpha: .55),
+                            ),
+                          ),
+                        ),
+                ),
+              ],
             ),
           ),
         ),

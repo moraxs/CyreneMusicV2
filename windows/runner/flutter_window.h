@@ -9,6 +9,7 @@
 #include "accent_acrylic_handler.h"
 #include "smtc_handler.h"
 #include "win32_window.h"
+#include "workerw_handler.h"
 
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
@@ -36,6 +37,9 @@ class FlutterWindow : public Win32Window {
 
   // 原生真·亚克力（毛玻璃）桥。
   std::unique_ptr<AccentAcrylicHandler> accent_acrylic_handler_;
+
+  // WorkerW 壁纸层桥。
+  std::unique_ptr<WorkerWHandler> workerw_handler_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

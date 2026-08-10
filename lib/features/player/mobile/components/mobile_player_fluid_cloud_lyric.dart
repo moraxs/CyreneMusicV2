@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import '../compat/player_service.dart';
@@ -30,11 +31,24 @@ TextStyle mobileFluidCloudTextStyle(String fontFamily) {
 
 /// 移动端流体云样式歌词组件 (v2 - 移植桌面端新版动画)
 /// 核心改进：Stack 布局 + 弹性间距动画 + 波浪式延迟
+///
+/// [positionListenable] / [onSeek] 可选注入：桌面歌词覆盖层等「无 PlayerService
+/// 的隔离场景」可显式传入播放时钟与 seek 回调；移动端调用方不传，继续走
+/// PlayerService 单例（保持原行为）。
 class MobilePlayerFluidCloudLyric extends StatefulWidget {
   final List<LyricLine> lyrics;
   final int currentLyricIndex;
   final bool showTranslation;
   final VoidCallback? onTap;
+
+  /// 播放进度时钟。非空时，行内渐变进度的位置读取改用它而非 PlayerService。
+  /// 传入后仍保留 PlayerService().isPlaying 做帧间外推（隔离场景下该值为
+  /// false，外推停用，仅按 listenable 的离散更新推进，轻微顿挫可接受）。
+  final ValueListenable<Duration>? positionListenable;
+
+  /// 拖拽定位回调。非空时替代 PlayerService().seek；隔离场景可传 null 走 no-op
+  /// （桌面覆盖层不开放拖拽 seek）。
+  final ValueChanged<Duration>? onSeek;
 
   const MobilePlayerFluidCloudLyric({
     super.key,
@@ -42,6 +56,8 @@ class MobilePlayerFluidCloudLyric extends StatefulWidget {
     required this.currentLyricIndex,
     this.showTranslation = true,
     this.onTap,
+    this.positionListenable,
+    this.onSeek,
   });
 
   @override
@@ -130,7 +146,13 @@ class _MobilePlayerFluidCloudLyricState extends State<MobilePlayerFluidCloudLyri
         _selectedLyricIndex! >= 0 &&
         _selectedLyricIndex! < widget.lyrics.length) {
       final selectedLyric = widget.lyrics[_selectedLyricIndex!];
-      PlayerService().seek(selectedLyric.startTime);
+      // 隔离场景注入 onSeek；移动端不传则走 PlayerService 单例。
+      final onSeek = widget.onSeek;
+      if (onSeek != null) {
+        onSeek(selectedLyric.startTime);
+      } else {
+        PlayerService().seek(selectedLyric.startTime);
+      }
     }
     // 立即退出拖拽模式
     _dragResetTimer?.cancel();
@@ -359,6 +381,7 @@ class _MobilePlayerFluidCloudLyricState extends State<MobilePlayerFluidCloudLyri
       delay: Duration(milliseconds: delayMs),
       isDragging: _isDragging,
       showTranslation: widget.showTranslation,
+      positionListenable: widget.positionListenable,
     );
   }
 
@@ -444,6 +467,7 @@ class _MobileElasticLyricLine extends StatefulWidget {
   final Duration delay;
   final bool isDragging;
   final bool showTranslation;
+  final ValueListenable<Duration>? positionListenable;
 
   const _MobileElasticLyricLine({
     super.key,
@@ -461,6 +485,7 @@ class _MobileElasticLyricLine extends StatefulWidget {
     required this.delay,
     required this.isDragging,
     required this.showTranslation,
+    this.positionListenable,
   });
 
   @override
@@ -612,6 +637,7 @@ class _MobileElasticLyricLineState extends State<_MobileElasticLyricLine> with T
         lyrics: widget.lyrics,
         index: widget.index,
         textStyle: textStyle,
+        positionListenable: widget.positionListenable,
       );
     } else {
       textWidget = FluidCloudWordLine(
@@ -620,6 +646,7 @@ class _MobileElasticLyricLineState extends State<_MobileElasticLyricLine> with T
         centered: true,
         textStyle: textStyle,
         inactiveAlpha: 0.35,
+        positionListenable: widget.positionListenable,
       );
     }
 
@@ -681,6 +708,7 @@ class _MobileLineGradientText extends StatefulWidget {
   final List<LyricLine> lyrics;
   final int index;
   final TextStyle textStyle;
+  final ValueListenable<Duration>? positionListenable;
 
   const _MobileLineGradientText({
     required this.text,
@@ -688,6 +716,7 @@ class _MobileLineGradientText extends StatefulWidget {
     required this.lyrics,
     required this.index,
     required this.textStyle,
+    this.positionListenable,
   });
 
   @override
@@ -724,7 +753,9 @@ class _MobileLineGradientTextState extends State<_MobileLineGradientText> with S
 
   void _onTick(Duration elapsed) {
     if (!mounted) return;
-    final currentPos = PlayerService().position;
+    // 隔离场景注入 positionListenable；移动端不传则走 PlayerService 单例。
+    final currentPos =
+        widget.positionListenable?.value ?? PlayerService().position;
     final elapsedFromStart = currentPos - widget.lyric.startTime;
     final newProgress = (elapsedFromStart.inMilliseconds / _duration.inMilliseconds).clamp(0.0, 1.0);
 

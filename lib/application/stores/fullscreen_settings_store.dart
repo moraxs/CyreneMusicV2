@@ -25,6 +25,7 @@ class FullscreenSettingsStore extends ChangeNotifier {
   static const _kSuperCyrenePlayerEnabled =
       'fullscreen.superCyrenePlayerEnabled';
   static const _kSuperCyreneLyricsTheme = 'fullscreen.superCyreneLyricsTheme';
+  static const _kWallpaperPlayerEnabled = 'fullscreen.wallpaperPlayerEnabled';
 
   SharedPreferences? _prefs;
 
@@ -39,6 +40,7 @@ class FullscreenSettingsStore extends ChangeNotifier {
   double _lyricBlurStrength = 10;
   bool _superCyrenePlayerEnabled = false;
   String _superCyreneLyricsTheme = 'default';
+  bool _wallpaperPlayerEnabled = false;
 
   bool get audioVisualization => _audioVisualization;
   bool get isImmersiveMode => _isImmersiveMode;
@@ -51,6 +53,7 @@ class FullscreenSettingsStore extends ChangeNotifier {
   double get lyricBlurStrength => _lyricBlurStrength;
   bool get superCyrenePlayerEnabled => _superCyrenePlayerEnabled;
   String get superCyreneLyricsTheme => _superCyreneLyricsTheme;
+  bool get wallpaperPlayerEnabled => _wallpaperPlayerEnabled;
 
   Future<void> init() async {
     final prefs = _prefs = await SharedPreferences.getInstance();
@@ -77,6 +80,8 @@ class FullscreenSettingsStore extends ChangeNotifier {
             storedSuperCyreneTheme == 'pixel')
         ? storedSuperCyreneTheme!
         : 'default';
+    _wallpaperPlayerEnabled =
+        prefs.getBool(_kWallpaperPlayerEnabled) ?? _wallpaperPlayerEnabled;
     notifyListeners();
   }
 
@@ -154,6 +159,13 @@ class FullscreenSettingsStore extends ChangeNotifier {
     if (_superCyreneLyricsTheme == normalized) return;
     _superCyreneLyricsTheme = normalized;
     _prefs?.setString(_kSuperCyreneLyricsTheme, normalized);
+    notifyListeners();
+  }
+
+  void setWallpaperPlayerEnabled(bool value) {
+    if (_wallpaperPlayerEnabled == value) return;
+    _wallpaperPlayerEnabled = value;
+    _prefs?.setBool(_kWallpaperPlayerEnabled, value);
     notifyListeners();
   }
 }

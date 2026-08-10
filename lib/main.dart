@@ -21,6 +21,8 @@ import 'application/playback/playback_history_recorder.dart';
 import 'application/stores/appearance_settings_store.dart';
 import 'application/stores/fullscreen_settings_store.dart';
 import 'application/stores/window_material_settings_store.dart';
+import 'features/desktop_player/desktop_player_app.dart';
+import 'features/desktop_player/desktop_player_controller.dart';
 import 'features/player/mobile/compat/lyric_font_service.dart';
 import 'features/player/mobile/compat/lyric_style_service.dart';
 import 'features/player/mobile/compat/player_background_service.dart';
@@ -33,8 +35,24 @@ import 'infrastructure/services/update_service.dart';
 import 'presentation/cyrene/cyrene_theme.dart';
 import 'presentation/cyrene/cyrene_toast.dart';
 
-Future<void> main() async {
+/// 应用入口。
+///
+/// runner 自托管的桌面歌词子引擎使用同一个入口，通过 args 区分：
+/// - 主窗口：args 为空或包含 flutter 命令行参数
+/// - 壁纸层子引擎：args 含 'wallpaper-player'（由 desktop_lyrics_window.cpp 的
+///   DartProject 入口参数传入，runner 自建 WS_POPUP 覆盖层并跑第二个引擎）
+/// - 控制条子引擎：args 含 'control-bar'（占位，尚未启用）
+Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // ===== 桌面歌词子引擎入口分支 =====
+  // runner 的 desktop_lyrics_window.cpp 在创建覆盖层时给子引擎传入
+  // entrypoint args = ["wallpaper-player"]，走此分支挂桌面歌词 App。
+  if (args.contains('wallpaper-player')) {
+    runApp(const DesktopPlayerApp());
+    return;
+  }
+
   // 捕获全应用 debugPrint 到开发者日志缓冲（开发者选项 → 运行日志）。
   final defaultDebugPrint = debugPrint;
   debugPrint = (String? message, {int? wrapWidth}) {
@@ -71,7 +89,23 @@ Future<void> main() async {
     LyricFontService().initialize(),
   ]);
   UpdateService.instance.setCurrentVersion(appVersion);
-  Widget app = MyApp(dependencies: AppDependencies.production());
+  final dependencies = AppDependencies.production();
+  // 桌面播放器的播放状态来源：子窗口是独立 isolate，歌词要靠主窗口把状态
+  // 推送过去（见 desktop_player_bridge.dart）。无条件注入——设置页里随时
+  // 可能打开开关，那里拿不到 AppDependencies。
+  DesktopPlayerController.instance.playback = dependencies.playback;
+  // 面板上的收藏按钮由主窗口代为执行（子窗口没有鉴权/网络栈）。
+  DesktopPlayerController.instance.account = dependencies.account;
+  // 启动时恢复桌面播放器：上次退出时如果开关是开着的，重新创建覆盖层窗口。
+  // 否则会出现状态脱节——设置显示"已开启"但实际无窗口运行，关闭时卡死。
+  if (Platform.isWindows &&
+      FullscreenSettingsStore.instance.wallpaperPlayerEnabled) {
+    DesktopPlayerController.instance.enable().catchError((e) {
+      debugPrint('[桌面播放器] 启动恢复失败: $e');
+      return null;
+    });
+  }
+  Widget app = MyApp(dependencies: dependencies);
   if (!probeNoGlass) {
     app = LiquidGlassWidgets.wrap(
       adaptiveQuality: true,

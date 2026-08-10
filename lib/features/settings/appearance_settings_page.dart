@@ -6,7 +6,9 @@ import 'package:flutter_miuix/miuix.dart';
 
 import '../../application/auth/account_session_controller.dart';
 import '../../application/stores/appearance_settings_store.dart';
+import '../../application/stores/fullscreen_settings_store.dart';
 import '../../application/stores/window_material_settings_store.dart';
+import '../../features/desktop_player/desktop_player_controller.dart';
 import '../../features/player/mobile/compat/lyric_font_service.dart';
 import '../../features/player/mobile/compat/lyric_style_service.dart';
 import '../../features/player/mobile/compat/player_background_service.dart';
@@ -63,54 +65,44 @@ class AppearanceSettingsPage extends StatelessWidget {
     return '自定义';
   }
 
-  // 播放器样式入口已隐藏，下列选择器/名称映射暂留注释以备恢复多样式时取消注释。
-  /*
-  static String _playerStyleName(LyricStyle style) => switch (style) {
-    LyricStyle.fluidCloud => '流体云',
-    LyricStyle.immersive => '沉浸',
-    LyricStyle.defaultStyle => '经典',
-    LyricStyle.amll => 'Apple Music',
-  };
+  static String _playerStyleName(bool superCyrene) =>
+      superCyrene ? 'SuperCyrene' : '经典';
 
+  /// 播放器样式选择（经典 / SuperCyrene）。
   Future<void> _choosePlayerStyle(BuildContext context) async {
+    final store = FullscreenSettingsStore.instance;
     await showCyreneSheet<void>(
       context: context,
       title: '播放器样式',
       builder: (context, dismiss) => ListenableBuilder(
-        listenable: LyricStyleService(),
+        listenable: store,
         builder: (context, _) {
-          final current = LyricStyleService().currentStyle;
+          final current = store.superCyrenePlayerEnabled;
           return Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                for (final (style, iconName, name, desc) in const [
+                for (final (enabled, iconName, name, desc) in const [
                   (
-                    LyricStyle.fluidCloud,
-                    'cloudFill',
-                    '流体云',
-                    '动态封面背景 + 弹性逐字歌词面板',
-                  ),
-                  (
-                    LyricStyle.amll,
-                    'notes',
-                    'Apple Music',
-                    '弹簧物理滚动 + 逐字渐变，还原 Apple Music',
-                  ),
-                  (
-                    LyricStyle.defaultStyle,
+                    false,
                     'album',
                     '经典',
-                    '大专辑封面 + 卡拉OK 三行歌词',
+                    '黑胶唱片 + 音臂 + 右侧歌词面板',
+                  ),
+                  (
+                    true,
+                    'play',
+                    'SuperCyrene',
+                    '沉浸式旋转封面背景 + 多主题歌词',
                   ),
                 ])
                   CyreneMenuRow(
                     vector: MiuixIcons.extended.byName(iconName)!,
                     title: name,
                     subtitle: desc,
-                    trailing: current == style
+                    trailing: current == enabled
                         ? MiuixIcon(
                             vector: MiuixIcons.basic.check,
                             size: 20,
@@ -118,7 +110,7 @@ class AppearanceSettingsPage extends StatelessWidget {
                           )
                         : const SizedBox(width: 20),
                     onTap: () {
-                      LyricStyleService().setStyle(style);
+                      store.setSuperCyrenePlayerEnabled(enabled);
                       dismiss();
                     },
                   ),
@@ -129,7 +121,42 @@ class AppearanceSettingsPage extends StatelessWidget {
       ),
     );
   }
-  */
+
+  /// 切换桌面播放器（壁纸层歌词）开关。
+  ///
+  /// 注意：不在当前帧 await，用 microtask 调度避免阻塞 UI 线程导致卡死。
+  void _toggleWallpaperPlayer(BuildContext context) {
+    final store = FullscreenSettingsStore.instance;
+    final newValue = !store.wallpaperPlayerEnabled;
+
+    // 先更新设置状态（UI 立即响应开关变化）
+    store.setWallpaperPlayerEnabled(newValue);
+
+    // 异步执行实际操作，不阻塞 UI
+    Future<void> task;
+    if (newValue) {
+      task = DesktopPlayerController.instance.enable();
+    } else {
+      task = DesktopPlayerController.instance.disable();
+    }
+
+    // 用 .then() 而非 await，让 UI 立即返回
+    task.then((_) {
+      final controller = DesktopPlayerController.instance;
+      if (!newValue || controller.isEnabled) {
+        // 成功
+      }
+    }).catchError((e) {
+      debugPrint('[壁纸播放器] 操作异常: $e');
+      // 操作失败时回滚开关状态
+      store.setWallpaperPlayerEnabled(!newValue);
+      if (context.mounted) {
+        CyreneToast.show('桌面播放器操作失败: $e');
+      }
+    });
+
+    CyreneToast.show(newValue ? '正在开启桌面播放器...' : '正在关闭桌面播放器...');
+  }
 
   @override
   Widget build(BuildContext context) => CyrenePage(
@@ -218,44 +245,64 @@ class AppearanceSettingsPage extends StatelessWidget {
           '播放器',
           insideMargin: EdgeInsets.fromLTRB(16, 8, 16, 8),
         ),
-        CyreneMenuGroup(
-          children: [
-            // 播放器样式入口已隐藏：目前仅保留「流体云」一种样式，
-            // 单一选项无意义，整段注释以备未来恢复多样式时取消注释。
-            // ListenableBuilder(
-            //   listenable: LyricStyleService(),
-            //   builder: (context, _) => CyreneMenuRow(
-            //     vector: MiuixIcons.extended.byName('play')!,
-            //     iconBackground: _iconPurple,
-            //     title: '播放器样式',
-            //     subtitle: '全屏播放器的整体布局',
-            //     value: _playerStyleName(LyricStyleService().currentStyle),
-            //     onTap: () => _choosePlayerStyle(context),
-            //   ),
-            // ),
-            ListenableBuilder(
-              listenable: LyricFontService(),
-              builder: (context, _) => CyreneMenuRow(
-                vector: MiuixIcons.extended.byName('notes')!,
-                iconBackground: _iconGreen,
-                title: '歌词字体',
-                value: LyricFontService().currentFontName,
-                onTap: () => _chooseLyricFont(context),
-              ),
-            ),
-            ListenableBuilder(
-              listenable: PlayerBackgroundService(),
-              builder: (context, _) => CyreneMenuRow(
-                vector: MiuixIcons.extended.byName('background')!,
-                iconBackground: _iconBlue,
-                title: '播放器背景',
-                subtitle: PlayerBackgroundService()
-                    .getBackgroundTypeDescription(),
-                value: PlayerBackgroundService().getBackgroundTypeName(),
-                onTap: () => _chooseBackground(context),
-              ),
-            ),
-          ],
+        ListenableBuilder(
+          listenable: FullscreenSettingsStore.instance,
+          builder: (context, _) {
+            final store = FullscreenSettingsStore.instance;
+            final isWindowsDesktop =
+                Platform.isWindows && isDesktopLayout(context);
+            return CyreneMenuGroup(
+              children: [
+                // 播放器样式（经典 / SuperCyrene）
+                CyreneMenuRow(
+                  vector: MiuixIcons.extended.byName('play')!,
+                  iconBackground: _iconPurple,
+                  title: '播放器样式',
+                  subtitle: '全屏播放器的整体布局',
+                  value: _playerStyleName(store.superCyrenePlayerEnabled),
+                  onTap: () => _choosePlayerStyle(context),
+                ),
+                // 歌词字体
+                ListenableBuilder(
+                  listenable: LyricFontService(),
+                  builder: (context, _) => CyreneMenuRow(
+                    vector: MiuixIcons.extended.byName('notes')!,
+                    iconBackground: _iconGreen,
+                    title: '歌词字体',
+                    value: LyricFontService().currentFontName,
+                    onTap: () => _chooseLyricFont(context),
+                  ),
+                ),
+                // 播放器背景
+                ListenableBuilder(
+                  listenable: PlayerBackgroundService(),
+                  builder: (context, _) => CyreneMenuRow(
+                    vector: MiuixIcons.extended.byName('background')!,
+                    iconBackground: _iconBlue,
+                    title: '播放器背景',
+                    subtitle: PlayerBackgroundService()
+                        .getBackgroundTypeDescription(),
+                    value: PlayerBackgroundService().getBackgroundTypeName(),
+                    onTap: () => _chooseBackground(context),
+                  ),
+                ),
+                // 桌面播放器（壁纸层歌词，仅 Windows 桌面端）
+                if (isWindowsDesktop)
+                  CyreneMenuRow(
+                    vector: MiuixIcons.extended.byName('layers')!,
+                    iconBackground: _iconTeal,
+                    title: '桌面播放器',
+                    subtitle: store.wallpaperPlayerEnabled
+                        ? '歌词已渲染到桌面壁纸层'
+                        : '将歌词显示在桌面壁纸之上、图标之下',
+                    trailing: MiuixSwitch(
+                      value: store.wallpaperPlayerEnabled,
+                      onChanged: (_) => _toggleWallpaperPlayer(context),
+                    ),
+                  ),
+              ],
+            );
+          },
         ),
       ],
     ),
