@@ -115,11 +115,6 @@ class DynamicBackgroundColorExtractor {
     return false;
   }
 
-  static Color _adjustBrightness(Color color, double amount) {
-    final hsl = HSLColor.fromColor(color);
-    return hsl.withLightness((hsl.lightness + amount).clamp(0.0, 1.0)).toColor();
-  }
-
   static List<Color> getDefaultColors() => const [
     Color(0xFF60A5FA), Color(0xFF1E3A5F), Color(0xFF3B82F6),
     Color(0xFF6366F1), Color(0xFF1E1B4B),

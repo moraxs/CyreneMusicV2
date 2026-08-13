@@ -240,9 +240,6 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
     // 封面尺寸：宽度限制(屏幕-64)，高度限制(可用高度)
     final bigCoverSize = (screenWidth - 64).clamp(100.0, availableHeight < 100 ? 100.0 : availableHeight);
     
-    // 水平居中
-    final bigCoverLeft = (screenWidth - bigCoverSize) / 2;
-
     // --- 歌词模式参数 ---
     final smallCoverSize = 56.0;
     final smallCoverTop = safePadding.top + 24.0;
@@ -446,9 +443,6 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
     required double topSpacing,
     bool isGhost = false,
   }) {
-    final name = song?.name ?? track?.name ?? '未知歌曲';
-    final artists = song?.arName ?? track?.artists ?? '未知艺术家';
-    
     return Column(
       key: const ValueKey('CoverModeLayout'),
       children: [
@@ -1732,7 +1726,6 @@ class _AppleMusicSlider extends StatefulWidget {
 }
 
 class _AppleMusicSliderState extends State<_AppleMusicSlider> with SingleTickerProviderStateMixin {
-  bool _isInteracting = false;
   double? _dragValue; // 保存拖动过程中的临时进度
   
   late AnimationController _controller;
@@ -1802,14 +1795,12 @@ class _AppleMusicSliderState extends State<_AppleMusicSlider> with SingleTickerP
             },
             onChangeStart: (_) {
               setState(() {
-                _isInteracting = true;
                 _dragValue = widget.value;
               });
               _controller.forward();
             },
             onChangeEnd: (_) {
               setState(() {
-                _isInteracting = false;
                 _dragValue = null; // 释放拖动，恢复跟随外部进度
               });
               _controller.reverse();

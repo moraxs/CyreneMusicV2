@@ -13,7 +13,6 @@ import '../../application/auth/account_session_controller.dart';
 import '../../application/playback/playback_controller.dart';
 import '../../domain/models/music_source.dart';
 import '../../domain/models/track.dart';
-import '../../presentation/cyrene/cyrene_toast.dart';
 import '../settings/equalizer_page.dart';
 import 'classic_record_stage.dart';
 import 'desktop_favorite_button.dart';

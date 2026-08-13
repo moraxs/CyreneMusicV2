@@ -757,18 +757,37 @@ class _FullscreenPlayerState extends State<FullscreenPlayer> {
     );
   }
 
-  List<(AudioQuality, String, String)> _qualityOptions() => const [
-    (AudioQuality.standard, '标准音质', '128kbps，节省流量'),
-    (AudioQuality.exHigh, '极高音质', '320kbps，音质细腻'),
-    (AudioQuality.lossless, '无损音质', 'FLAC，CD 级音质'),
-    (AudioQuality.hiRes, 'Hi-Res 音质', '24bit/96kHz 及以上'),
-  ];
+  List<(AudioQuality, String, String)> _qualityOptions() {
+    final isNetease =
+        widget.playback.state.currentTrack?.source == MusicSource.netease;
+    // 网易云专属音质（higher/dolby/jyeffect/sky/jymaster）仅网易云可选；
+    // 其余平台只保留通用档位，避免选了不生效的音质。
+    final neteaseExtras = <(AudioQuality, String, String)>[
+      (AudioQuality.higher, '较高音质', '192kbps，介于标准与极高之间'),
+      (AudioQuality.jyeffect, '高清环绕声', 'Audio Vivid，沉浸体验'),
+      (AudioQuality.sky, '沉浸环绕声', '全景声，空间音频'),
+      (AudioQuality.dolby, '杜比全景声', 'Dolby Atmos 空间音频'),
+      (AudioQuality.jymaster, '超清母带', '录音室母带级音质'),
+    ];
+    return [
+      (AudioQuality.standard, '标准音质', '128kbps，节省流量'),
+      (AudioQuality.exHigh, '极高音质', '320kbps，音质细腻'),
+      (AudioQuality.lossless, '无损音质', 'FLAC，CD 级音质'),
+      (AudioQuality.hiRes, 'Hi-Res 音质', '24bit/96kHz 及以上'),
+      if (isNetease) ...neteaseExtras,
+    ];
+  }
 
   String _qualityLabel(AudioQuality quality) => switch (quality) {
     AudioQuality.standard => 'STANDARD',
+    AudioQuality.higher => 'HIGHER',
     AudioQuality.exHigh => 'EXHIGH',
     AudioQuality.lossless => 'LOSSLESS',
     AudioQuality.hiRes => 'HIRES',
+    AudioQuality.jyeffect => 'JYEFFECT',
+    AudioQuality.sky => 'SKY',
+    AudioQuality.dolby => 'DOLBY',
+    AudioQuality.jymaster => 'JYMASTER',
   };
 }
 
@@ -788,17 +807,40 @@ class _AmbientBackground extends StatelessWidget {
           imageFilter: ImageFilter.blur(sigmaX: 60, sigmaY: 60),
           child: Opacity(
             opacity: 0.8,
-            child: CachedNetworkImage(
-              imageUrl: picUrl,
-              httpHeaders: imageHeaders(picUrl),
-              fit: BoxFit.cover,
-              errorWidget: (_, _, _) => const SizedBox.shrink(),
-            ),
+            child: _AmbientImage(picUrl: picUrl),
           ),
         ),
       ColoredBox(color: Colors.black.withValues(alpha: 0.2)),
     ],
   );
+}
+
+/// 环境背景封面图：兼容网络 URL 与本地内嵌 data URI。
+class _AmbientImage extends StatelessWidget {
+  const _AmbientImage({required this.picUrl});
+
+  final String picUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    if (isDataUriImage(picUrl)) {
+      final bytes = decodeDataUriImage(picUrl);
+      if (bytes != null) {
+        return Image.memory(
+          bytes,
+          fit: BoxFit.cover,
+          errorBuilder: (_, _, _) => const SizedBox.shrink(),
+        );
+      }
+      return const SizedBox.shrink();
+    }
+    return CachedNetworkImage(
+      imageUrl: picUrl,
+      httpHeaders: imageHeaders(picUrl),
+      fit: BoxFit.cover,
+      errorWidget: (_, _, _) => const SizedBox.shrink(),
+    );
+  }
 }
 
 /// 沉浸模式顶部封面：顶部 55% 高度，向下渐隐（对应移动端 immersive cover）。
@@ -920,6 +962,20 @@ class _CoverImage extends StatelessWidget {
       ),
     );
     if (picUrl.isEmpty) return fallback;
+    // 本地音轨的内嵌封面是 data:image/...;base64 URI，CachedNetworkImage 不认。
+    if (isDataUriImage(picUrl)) {
+      final bytes = decodeDataUriImage(picUrl);
+      if (bytes != null) {
+        return Image.memory(
+          bytes,
+          width: size,
+          height: size,
+          fit: fit,
+          errorBuilder: (_, _, _) => fallback,
+        );
+      }
+      return fallback;
+    }
     return CachedNetworkImage(
       imageUrl: picUrl,
       httpHeaders: imageHeaders(picUrl),

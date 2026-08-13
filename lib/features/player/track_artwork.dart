@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
@@ -33,6 +36,27 @@ class TrackArtwork extends StatelessWidget {
       return SizedBox(width: size, height: size, child: fallback);
     }
 
+    // 本地音轨的封面是内嵌 `data:image/...;base64,...` URI（由
+    // AudioMetadataReader 解析得到），CachedNetworkImage 无法渲染该 scheme，
+    // 需改为 base64 解码后经 Image.memory 显示，否则本地歌曲始终是占位图标。
+    final dataImage = _decodeDataUri(track.picUrl);
+    if (dataImage != null) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(borderRadius),
+        child: Image.memory(
+          dataImage,
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+          errorBuilder: (_, _, error) {
+            debugPrint('[TrackArtwork] 本地封面解码失败 -> $error');
+            return fallback;
+          },
+        ),
+      );
+    }
+
     return ClipRRect(
       borderRadius: BorderRadius.circular(borderRadius),
       child: CachedNetworkImage(
@@ -53,5 +77,23 @@ class TrackArtwork extends StatelessWidget {
         },
       ),
     );
+  }
+
+  /// 解析 `data:image/<mime>;base64,<payload>` 封面，返回解码后的图片字节。
+  ///
+  /// 非 data URI 或解析失败返回 null（调用方回退到网络图片加载路径）。
+  static Uint8List? _decodeDataUri(String url) {
+    if (!url.startsWith('data:')) return null;
+    final comma = url.indexOf(',');
+    if (comma <= 0) return null;
+    final header = url.substring(0, comma);
+    final payload = url.substring(comma + 1);
+    if (payload.isEmpty) return null;
+    if (!header.toLowerCase().contains(';base64')) return null;
+    try {
+      return base64Decode(payload);
+    } catch (_) {
+      return null;
+    }
   }
 }

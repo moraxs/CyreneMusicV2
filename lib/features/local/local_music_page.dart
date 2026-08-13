@@ -77,6 +77,41 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
     }
   }
 
+  /// 弹出导入方式选择：单个/多个音频文件 或 扫描整个文件夹。
+  Future<void> _chooseImportMode() async {
+    await showCyreneSheet<void>(
+      context: context,
+      title: '导入方式',
+      builder: (context, dismiss) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            CyreneMenuRow(
+              vector: MiuixIcons.extended.byName('notes')!,
+              title: '选择音频文件',
+              subtitle: '导入单个或多个音频文件',
+              onTap: () {
+                dismiss();
+                _importFiles();
+              },
+            ),
+            CyreneMenuRow(
+              vector: MiuixIcons.extended.byName('folder')!,
+              title: '扫描文件夹',
+              subtitle: '自动扫描目录内所有音频与歌词',
+              onTap: () {
+                dismiss();
+                _importFolder();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _importFiles() async {
     try {
       final result = await FilePicker.pickFiles(
@@ -107,6 +142,32 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
     } catch (_) {
       if (mounted) {
         _showToast('导入失败', description: '无法读取所选音频文件。');
+      }
+    } finally {
+      if (mounted) setState(() => _isImporting = false);
+    }
+  }
+
+  /// 选择文件夹并扫描目录内所有音频（含同名 .lrc 歌词）。
+  Future<void> _importFolder() async {
+    try {
+      final folderPath = await FilePicker.getDirectoryPath(
+        dialogTitle: '选择要扫描的文件夹',
+      );
+      if (!mounted || folderPath == null || folderPath.isEmpty) return;
+
+      setState(() => _isImporting = true);
+      final count = await LocalMusicService.instance.scanFolder(folderPath);
+      if (!mounted) return;
+      if (count == 0) {
+        _showToast('未扫描到任何歌曲', description: '该目录下没有支持的音频文件。');
+      } else {
+        _showToast('已导入 $count 首歌曲');
+      }
+      await _load();
+    } catch (_) {
+      if (mounted) {
+        _showToast('导入失败', description: '无法扫描所选文件夹。');
       }
     } finally {
       if (mounted) setState(() => _isImporting = false);
@@ -204,7 +265,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                 MiuixButton(
                   key: const Key('import-local-music-button'),
                   enabled: !_isImporting,
-                  onPressed: _importFiles,
+                  onPressed: _chooseImportMode,
                   colors: MiuixButtonDefaults.buttonColorsPrimary(context),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -269,13 +330,13 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
             CyreneEmptyState(
               icon: searching ? Icons.search_off : Icons.music_note,
               title: searching ? '没有匹配的歌曲' : '还没有本地音乐',
-              description: searching ? '换个关键词试试。' : '选择设备上的音频文件，将它们加入本地音乐。',
+              description: searching ? '换个关键词试试。' : '选择设备上的音频文件或文件夹，将它们加入本地音乐。',
               action: searching
                   ? null
                   : MiuixButton(
-                      onPressed: _importFiles,
+                      onPressed: _chooseImportMode,
                       child: MiuixText(
-                        '选择音频文件',
+                        '导入音乐',
                         style: theme.textStyles.button,
                       ),
                     ),

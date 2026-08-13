@@ -672,7 +672,10 @@ class AppearanceSettingsPage extends StatelessWidget {
         builder: (context, _) {
           final background = PlayerBackgroundService();
           final theme = MiuixTheme.of(context);
-          final isSponsor = account.state.user?.isSponsor ?? false;
+          // 图片/视频背景为赞助用户专属权益：Cyrene Premium（买断）与
+          // 上墙赞助（Sponsor）任一成立即可解锁。
+          final isSponsor =
+              account.state.user?.hasSponsorPrivileges ?? false;
           final current = background.backgroundType;
 
           Widget checkFor(PlayerBackgroundType type) => current == type
@@ -802,7 +805,7 @@ class AppearanceSettingsPage extends StatelessWidget {
   /// 选择图片/视频背景。赞助校验与文案与原版一致；
   /// 已有同类媒体时点击仅切换类型，再次点击可重新选择文件。
   Future<void> _selectMediaBackground({required bool isVideo}) async {
-    final isSponsor = account.state.user?.isSponsor ?? false;
+    final isSponsor = account.state.user?.hasSponsorPrivileges ?? false;
     if (!isSponsor) {
       CyreneToast.show('此功能为赞助用户专属，成为赞助用户即可解锁');
       return;

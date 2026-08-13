@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 /// 封面等媒体 URL 一律按接口返回值原样使用（与原版 cyrene_music 一致），
 /// 不做 http→https 改写：明文 HTTP 由 Android 的 network_security_config 放行。
 ///
@@ -11,6 +14,33 @@ Map<String, String>? imageHeaders(String url) =>
     url.contains('126.net') || url.contains('163.com')
     ? _neteaseImageHeaders
     : null;
+
+/// 是否为内嵌图片的 `data:image/<mime>;base64,<payload>` URI。
+///
+/// 本地音轨的封面由 AudioMetadataReader 解析后以 data URI 写入 Track.picUrl，
+/// CachedNetworkImage 不认该 scheme，需解码为字节后经 Image.memory 渲染。
+bool isDataUriImage(String? url) {
+  if (url == null || url.isEmpty) return false;
+  return url.startsWith('data:image/');
+}
+
+/// 解码 `data:image/<mime>;base64,<payload>` 封面，返回图片字节。
+///
+/// 非 data URI 或解析失败返回 null（调用方回退到网络图片加载路径）。
+Uint8List? decodeDataUriImage(String url) {
+  if (!url.startsWith('data:')) return null;
+  final comma = url.indexOf(',');
+  if (comma <= 0) return null;
+  final header = url.substring(0, comma);
+  final payload = url.substring(comma + 1);
+  if (payload.isEmpty) return null;
+  if (!header.toLowerCase().contains(';base64')) return null;
+  try {
+    return base64Decode(payload);
+  } catch (_) {
+    return null;
+  }
+}
 
 /// 封面解码目标像素宽,供 CachedNetworkImage 的 [memCacheWidth] 使用。
 ///

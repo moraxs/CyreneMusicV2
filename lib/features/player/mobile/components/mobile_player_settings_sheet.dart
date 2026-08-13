@@ -32,7 +32,10 @@ class MobilePlayerSettingsSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isSponsor = AuthService().currentUser?.isSponsor ?? false;
+    // 均衡器为赞助用户专属权益：Cyrene Premium（买断）与上墙赞助（Sponsor）
+    // 任一成立即可解锁。
+    final isSponsor =
+        AuthService().currentUser?.hasSponsorPrivileges ?? false;
     return ConstrainedBox(
       constraints: BoxConstraints(
         maxHeight: MediaQuery.sizeOf(context).height * 0.7,

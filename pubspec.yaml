@@ -70,6 +70,7 @@ dependencies:
   open_filex: ^4.4.0
   path_provider: ^2.1.6
   path: ^1.9.0
+  charset: ^2.0.1
 
   # 暂时停用：该版本在 Windows 上触发 Kotlin 增量编译跨盘符路径异常。
   # adaptive_platform_ui: ^0.1.110

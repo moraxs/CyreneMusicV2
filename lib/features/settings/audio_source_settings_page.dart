@@ -231,7 +231,7 @@ class _AudioSourceSettingsBody extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
           child: Text(
-            '解析服务不支持所选音质时，仍可能自动降级。',
+            'higher / 杜比全景声 / 高清环绕声 / 沉浸环绕声 / 超清母带仅对网易云生效，其余平台使用默认音质。',
             style: theme.textStyles.footnote1.copyWith(
               color: theme.colors.onSurfaceVariantSummary,
             ),
@@ -652,9 +652,14 @@ class _QualityCard extends StatelessWidget {
 
   static const labels = {
     AudioQuality.standard: '标准',
+    AudioQuality.higher: '较高',
     AudioQuality.exHigh: '极高',
     AudioQuality.lossless: '无损',
     AudioQuality.hiRes: 'Hi-Res',
+    AudioQuality.jyeffect: '高清环绕声',
+    AudioQuality.sky: '沉浸环绕声',
+    AudioQuality.dolby: '杜比全景声',
+    AudioQuality.jymaster: '超清母带',
   };
 
   @override

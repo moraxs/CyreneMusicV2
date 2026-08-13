@@ -113,7 +113,7 @@ class _EqualizerPageState extends State<EqualizerPage> {
                       insideMargin: EdgeInsets.fromLTRB(16, 8, 16, 8),
                     ),
                     SizedBox(
-                      height: 44,
+                      height: 48,
                       child: ListView.separated(
                         scrollDirection: Axis.horizontal,
                         physics: const BouncingScrollPhysics(),
@@ -131,6 +131,12 @@ class _EqualizerPageState extends State<EqualizerPage> {
                                     context,
                                   )
                                 : null,
+                            // 横向预设按钮默认 13px 垂直内边距会把文字下半部分挤出
+                            // 固定高度容器（含中文 descender），收紧到 6px 保证完整显示。
+                            insideMargin: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 6,
+                            ),
                             child: MiuixText(
                               name,
                               style: theme.textStyles.button,

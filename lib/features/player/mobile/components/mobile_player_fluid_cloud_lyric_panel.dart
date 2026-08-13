@@ -73,9 +73,6 @@ class MobilePlayerFluidCloudLyricsPanel extends StatefulWidget {
 
 class _MobilePlayerFluidCloudLyricsPanelState extends State<MobilePlayerFluidCloudLyricsPanel> {
   
-  // 核心变量
-  final double _lineHeight = 80.0; 
-
   static const double _maxActiveScale = 1.0; // 1.1 -> 1.0 No magnification
   
   // 滚动/拖拽相关
@@ -237,7 +234,6 @@ class _MobilePlayerFluidCloudLyricsPanelState extends State<MobilePlayerFluidClo
               if (i < widget.lyrics.length - 1) {
                 final currentLine = widget.lyrics[i];
                 final nextLine = widget.lyrics[i+1];
-                final gap = (nextLine.startTime - currentLine.startTime).inSeconds;
                 
                 // 计算当前行结束时间
                 Duration lineEndTime = currentLine.startTime + const Duration(seconds: 3); // 默认兜底 3s
@@ -406,8 +402,12 @@ class _MobilePlayerFluidCloudLyricsPanelState extends State<MobilePlayerFluidClo
     double targetBlur = blurSigma;
     if (diff == 0) {
       targetBlur = 0.0;
-    } else if (diff.abs() == 1) targetBlur = blurSigma * 0.25;
-    if (item.type == _VirtualEntryType.dots && diff < 0) targetBlur = blurSigma;
+    } else if (diff.abs() == 1) {
+      targetBlur = blurSigma * 0.25;
+    }
+    if (item.type == _VirtualEntryType.dots && diff < 0) {
+      targetBlur = blurSigma;
+    }
 
     final bool isActive = (diff == 0);
 
@@ -501,67 +501,6 @@ class _MobilePlayerFluidCloudLyricsPanelState extends State<MobilePlayerFluidClo
     return result;
   }
 
-  double _getTargetScale(int diff) {
-    return 1.0;
-  }
-
-  Widget _buildLyricItem(int index, double centerYOffset, double relativeOffset, double itemHeight, double layoutWidth, double baseHeight) {
-    final styleService = LyricStyleService();
-    final activeIndex = widget.currentLyricIndex;
-    final diff = index - activeIndex;
-    
-    final double baseTranslation = relativeOffset;
-    final double sineOffset = sin(diff * 0.8) * 20.0 * (styleService.fontSize / 32.0); // 这里的抖动也随字号缩放
-    
-    double targetY = centerYOffset + baseTranslation + sineOffset - (itemHeight * _getTargetScale(diff) / 2);
-
-    if (_isDragging) {
-       targetY += _dragOffset;
-    }
-    
-    final targetScale = _getTargetScale(diff);
-
-    double targetOpacity;
-    if (diff.abs() > 4) {
-      targetOpacity = 0.0;
-    } else {
-      targetOpacity = 1.0 - diff.abs() * 0.2;
-    }
-    targetOpacity = targetOpacity.clamp(0.0, 1.0).toDouble();
-
-    final int delayMs = (diff.abs() * 50).toInt();
-
-    // 🔧 关键修复：修正模糊逻辑，使用 User 调节的 Sigma 强度
-    final globalSigma = styleService.blurSigma;
-    double targetBlur = globalSigma;
-    if (diff == 0) {
-      targetBlur = 0.0; // 活跃行始终清晰
-    } else if (diff.abs() == 1) {
-      targetBlur = globalSigma * 0.25; // 邻行轻微模糊
-    }
-
-    final bool isActive = (diff == 0);
-
-    return _ElasticLyricLine(
-      key: ValueKey(index),
-      text: widget.lyrics[index].text,
-      translation: widget.lyrics[index].translation,
-      lyric: widget.lyrics[index], 
-      lyrics: widget.lyrics,     
-      index: index,             
-      lineHeight: baseHeight,
-      targetY: targetY,
-      targetScale: targetScale,
-      targetOpacity: targetOpacity,
-      targetBlur: targetBlur,
-      isActive: isActive,
-      delay: Duration(milliseconds: delayMs),
-      isDragging: _isDragging,
-      showTranslation: widget.showTranslation,
-      layoutWidth: layoutWidth,
-    );
-  }
-
   Widget _buildNoLyric() {
     return const Center(
       child: Text(
@@ -629,11 +568,7 @@ class _ElasticLyricLineState extends State<_ElasticLyricLine> with TickerProvide
   
   Timer? _delayTimer;
 
-  static const Curve elasticCurve = Cubic(0.34, 1.56, 0.64, 1.0);
   static const Duration animDuration = Duration(milliseconds: 800);
-  
-  // 记录上一帧的状态，用于判断 Active -> Passed
-  bool _wasActive = false;
 
   @override
   void initState() {
@@ -642,7 +577,6 @@ class _ElasticLyricLineState extends State<_ElasticLyricLine> with TickerProvide
     _scale = widget.targetScale;
     _opacity = widget.targetOpacity;
     _blur = widget.targetBlur;
-    _wasActive = widget.isActive;
     _textColor = widget.isActive ? Colors.white : Colors.white.withValues(alpha: 0.3);
   }
 
@@ -684,7 +618,6 @@ class _ElasticLyricLineState extends State<_ElasticLyricLine> with TickerProvide
     if (positionChanged || scaleChanged || opacityChanged || blurChanged) {
       _startAnimation(oldWidget);
     }
-    _wasActive = widget.isActive;
   }
 
   @override

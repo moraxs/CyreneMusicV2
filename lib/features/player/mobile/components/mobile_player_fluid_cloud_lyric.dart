@@ -361,7 +361,9 @@ class _MobilePlayerFluidCloudLyricState extends State<MobilePlayerFluidCloudLyri
     double targetBlur = 3.0;
     if (diff == 0) {
       targetBlur = 0.0;
-    } else if (diff.abs() == 1) targetBlur = 0.8;
+    } else if (diff.abs() == 1) {
+      targetBlur = 0.8;
+    }
 
     final bool isActive = (diff == 0);
 

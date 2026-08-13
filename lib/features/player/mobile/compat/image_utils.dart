@@ -1,3 +1,6 @@
+export '../../../../domain/models/media_url.dart'
+    show isDataUriImage, decodeDataUriImage;
+
 const Map<String, String> neteaseImageHeaders = {
   'User-Agent': 'NeteaseMusic/9.0.50 (iPhone; iOS 16.3.1; Scale/3.00)'
 };
@@ -8,3 +11,4 @@ Map<String, String>? getImageHeaders(String? url) {
   }
   return null;
 }
+

@@ -21,7 +21,10 @@ class BackgroundSection extends StatelessWidget {
       builder: (context, _) {
         final bg = PlayerBackgroundService();
         final theme = MiuixTheme.of(context);
-        final isSponsor = AuthService().currentUser?.isSponsor ?? false;
+        // 图片/视频背景为赞助用户专属权益：Cyrene Premium（买断）与
+        // 上墙赞助（Sponsor）任一成立即可解锁。
+        final isSponsor =
+            AuthService().currentUser?.hasSponsorPrivileges ?? false;
         final current = bg.backgroundType;
 
         Widget checkFor(PlayerBackgroundType type) => current == type

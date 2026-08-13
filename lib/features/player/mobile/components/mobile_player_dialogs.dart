@@ -630,6 +630,7 @@ class _MobileSleepTimerDialogState extends State<MobileSleepTimerDialog> {
 
               if (selectedTime != null) {
                 SleepTimerService().setTimerByTime(selectedTime);
+                if (!context.mounted) return;
                 Navigator.pop(context);
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(

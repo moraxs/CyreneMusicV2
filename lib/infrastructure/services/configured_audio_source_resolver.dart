@@ -43,8 +43,11 @@ class ConfiguredAudioSourceResolver implements AudioSourceResolver {
       for (final sourceRef in track.sourceCandidates) {
         if (!_supports(config, sourceRef.source)) continue;
         final sourceTrack = track.withSource(sourceRef);
+        // 网易云专属音质（higher/dolby/jyeffect/sky/jymaster）仅对网易云
+        // 生效；其它来源回落到极高音质，避免把网易云 level 透传给别的后端。
+        final quality = preferences.quality.effectiveFor(sourceRef.source);
 
-        final cached = await _cache.find(sourceTrack, preferences.quality);
+        final cached = await _cache.find(sourceTrack, quality);
         LyricData? prefetchedLyric;
         int? cachedCandidateIndex;
         if (cached != null) {
@@ -72,7 +75,7 @@ class ConfiguredAudioSourceResolver implements AudioSourceResolver {
           final resolved = await _sourceClient.resolveUrlFromSource(
             sourceTrack,
             config,
-            preferences.quality,
+            quality,
           );
           final lyric =
               resolved.lyrics ??

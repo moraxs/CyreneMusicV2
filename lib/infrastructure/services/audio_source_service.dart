@@ -32,6 +32,9 @@ class AudioSourceService {
   };
 
   /// 将 [AudioQuality] 映射为 LxMusic 音质字符串。
+  ///
+  /// 网易云专属音质（higher/dolby/jyeffect/sky/jymaster）在 LxMusic 侧没有
+  /// 对应档位，统一回落到极高音质 320k。
   String getLxQuality(AudioQuality quality) {
     switch (quality) {
       case AudioQuality.standard:
@@ -42,6 +45,12 @@ class AudioSourceService {
         return 'flac';
       case AudioQuality.hiRes:
         return 'flac24bit';
+      case AudioQuality.higher:
+      case AudioQuality.dolby:
+      case AudioQuality.jyeffect:
+      case AudioQuality.sky:
+      case AudioQuality.jymaster:
+        return '320k';
     }
   }
 

@@ -28,6 +28,12 @@ class User {
   final bool hasListeningCard;
   final String? listeningCardSince;
 
+  /// 是否拥有赞助用户专属权益（图片/视频背景、均衡器等）。
+  ///
+  /// Cyrene Premium（买断）与上墙赞助（Sponsor）是两条独立权益，
+  /// 两者任一成立都应解锁赞助专属功能。
+  bool get hasSponsorPrivileges => hasListeningCard || isSponsor;
+
   factory User.fromJson(Map<String, Object?> json) => User(
     id: (json['id'] as num?)?.toInt() ?? 0,
     email: json['email']?.toString() ?? '',

@@ -340,6 +340,7 @@ class _MyPlaylistsSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = MiuixTheme.of(context).colors;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -353,6 +354,9 @@ class _MyPlaylistsSection extends StatelessWidget {
                   child: MiuixIcon(
                     vector: MiuixIcons.extended.byName('add')!,
                     size: 20,
+                    // 显式给图标上色：MiuixIcon 默认取 MiuixContentColor，未包裹
+                    // 时回退黑色，暗色模式下按钮图标会黑成一团看不清。
+                    tint: colors.onSurfaceContainer,
                   ),
                 )
               : null,

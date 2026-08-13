@@ -95,20 +95,6 @@ class _MobilePlayerPageState extends State<MobilePlayerPage> with TickerProvider
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
 
-  /// 是否应该显示译文按钮（与全屏歌词页一致逻辑）
-  bool _shouldShowTranslationButton() {
-    if (_lyrics.isEmpty) return false;
-    final hasTranslation = _lyrics.any((l) => l.translation != null && l.translation!.isNotEmpty);
-    if (!hasTranslation) return false;
-    final sample = _lyrics.where((l) => l.text.trim().isNotEmpty).take(5).map((l) => l.text).join('');
-    if (sample.isEmpty) return false;
-    final chineseCount = sample.runes.where((r) =>
-      (r >= 0x4E00 && r <= 0x9FFF) || (r >= 0x3400 && r <= 0x4DBF) || (r >= 0x20000 && r <= 0x2A6DF)
-    ).length;
-    final ratio = chineseCount / sample.length;
-    return ratio < 0.3; // 中文占比小于30%判定为外文
-  }
-
   @override
   void dispose() {
     _resetOrientation();
@@ -379,19 +365,6 @@ class _MobilePlayerPageState extends State<MobilePlayerPage> with TickerProvider
   }
 
   /// 强制刷新歌词（用于调试）
-  void _forceRefreshLyrics() {
-    final currentTrack = PlayerService().currentTrack;
-    if (currentTrack != null) {
-      debugPrint('🔄 [MobilePlayerPage] 强制刷新歌词');
-      _lastTrack = currentTrack;
-      setState(() {
-        _lyrics = [];
-        _currentLyricIndex = -1;
-      });
-      _loadLyrics();
-    }
-  }
-
   /// 切换控制中心显示状态
   void _toggleControlCenter() {
     setState(() {

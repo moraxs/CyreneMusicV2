@@ -3,7 +3,6 @@ import 'package:flutter_miuix/miuix.dart';
 
 import '../../application/auth/account_session_controller.dart';
 import '../../application/playback/playback_controller.dart';
-import '../../domain/models/track.dart';
 import '../../infrastructure/services/playlist_service.dart';
 import '../../presentation/cyrene/cyrene_toast.dart';
 import 'fullscreen/add_to_playlist_sheet.dart';

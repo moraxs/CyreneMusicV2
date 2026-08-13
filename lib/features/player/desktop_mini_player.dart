@@ -926,14 +926,12 @@ class _HoverSvgButton extends StatefulWidget {
     required this.color,
     required this.tooltip,
     required this.onPressed,
-    this.size = 22,
   });
 
   final String asset;
   final Color color;
   final String tooltip;
   final VoidCallback onPressed;
-  final double size;
 
   @override
   State<_HoverSvgButton> createState() => _HoverSvgButtonState();
@@ -967,8 +965,8 @@ class _HoverSvgButtonState extends State<_HoverSvgButton> {
             ),
             child: SvgPicture.asset(
               widget.asset,
-              width: widget.size,
-              height: widget.size,
+              width: 22,
+              height: 22,
               colorFilter: ColorFilter.mode(widget.color, BlendMode.srcIn),
             ),
           ),

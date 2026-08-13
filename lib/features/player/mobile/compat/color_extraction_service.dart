@@ -103,11 +103,18 @@ class ColorExtractionService {
 
     try {
       Uint8List imageBytes;
-      
-      // 判断是网络 URL 还是本地文件路径
-      final isNetwork = imageUrl.startsWith('http://') || imageUrl.startsWith('https://');
-      
-      if (isNetwork) {
+
+      // 本地音轨的内嵌封面是 data:image/...;base64 URI，直接解码字节，
+      // 无需走文件/网络分支。
+      if (isDataUriImage(imageUrl)) {
+        final decoded = decodeDataUriImage(imageUrl);
+        if (decoded == null) {
+          debugPrint('⚠️ [ColorExtraction] data URI 封面解码失败');
+          return null;
+        }
+        imageBytes = decoded;
+      } else if (imageUrl.startsWith('http://') ||
+          imageUrl.startsWith('https://')) {
         // 1. 下载网络图片数据（在主线程，但使用 http 异步）
         final response = await http.get(Uri.parse(imageUrl), headers: getImageHeaders(imageUrl)).timeout(timeout);
         if (response.statusCode != 200) {

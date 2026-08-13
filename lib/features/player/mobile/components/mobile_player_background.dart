@@ -9,23 +9,8 @@ import '../compat/color_extraction_service.dart';
 import '../../../../domain/models/track.dart';
 import '../compat/song_detail.dart';
 import '../widgets/video_background_player.dart';
-import '../widgets/dynamic_background_color_extractor.dart';
-import '../widgets/flowing_light_background.dart';
 import '../compat/image_utils.dart';
-
-/// 动态背景颜色缓存管理器（移动端）
-/// 现在使用 ColorExtractionService 的缓存
-class _MobileDynamicColorCache {
-  static final _MobileDynamicColorCache _instance =
-      _MobileDynamicColorCache._internal();
-  factory _MobileDynamicColorCache() => _instance;
-  _MobileDynamicColorCache._internal();
-
-  List<Color>? getColors(String imageUrl) {
-    final result = ColorExtractionService().getCachedColors(imageUrl);
-    return result?.dynamicColors;
-  }
-}
+import '../../super_cyrene/super_cyrene_amll_background.dart';
 
 /// 主题色缓存管理器（移动端）
 /// 现在使用 ColorExtractionService 的缓存
@@ -43,7 +28,7 @@ class _MobileThemeColorCache {
 
 /// 移动端播放器背景组件
 /// 根据设置显示不同类型的背景（自适应、纯色、图片、视频、动态）
-/// 动态模式下使用 Apple Music 风格的 Mesh Gradient 背景
+/// 动态模式复用 SuperCyrene 同款 AMLL 专辑纹理背景。
 class MobilePlayerBackground extends StatefulWidget {
   final double dragOffset;
   final bool isolateRepaints;
@@ -59,13 +44,7 @@ class MobilePlayerBackground extends StatefulWidget {
 }
 
 class _MobilePlayerBackgroundState extends State<MobilePlayerBackground> {
-  // 动态背景颜色
-  List<Color> _dynamicColors =
-      DynamicBackgroundColorExtractor.getDefaultColors();
-  String? _currentImageUrl;
   bool _isFirstBuild = true;
-  int _pendingExtractionId = 0;
-  String? _lastScheduledImageUrl;
 
   // 主题色提取相关
   String? _currentThemeColorImageUrl;
@@ -91,11 +70,6 @@ class _MobilePlayerBackgroundState extends State<MobilePlayerBackground> {
 
     final backgroundType = PlayerBackgroundService().backgroundType;
 
-    // 动态背景 (流体云) 不需要提取颜色，由 FlowingLightBackground 直接处理图片
-    // if (backgroundType == PlayerBackgroundType.dynamic) {
-    //   _scheduleColorExtraction();
-    // }
-
     // 自适应背景需要提取主题色
     if (backgroundType == PlayerBackgroundType.adaptive) {
       _scheduleThemeColorExtraction();
@@ -108,51 +82,17 @@ class _MobilePlayerBackgroundState extends State<MobilePlayerBackground> {
     setState(() {});
 
     final backgroundType = PlayerBackgroundService().backgroundType;
-    if (backgroundType == PlayerBackgroundType.dynamic) {
-      // _scheduleColorExtraction();
-    } else if (backgroundType == PlayerBackgroundType.adaptive) {
+    if (backgroundType == PlayerBackgroundType.adaptive) {
       _scheduleThemeColorExtraction();
     }
-  }
-
-  /// 延迟调度动态背景颜色提取（带防抖）
-  void _scheduleColorExtraction() {
-    final backgroundService = PlayerBackgroundService();
-    if (backgroundService.backgroundType != PlayerBackgroundType.dynamic)
-      return;
-
-    final song = PlayerService().currentSong;
-    final track = PlayerService().currentTrack;
-    final imageUrl = song?.pic ?? track?.picUrl ?? '';
-
-    if (imageUrl.isEmpty || imageUrl == _currentImageUrl) return;
-    if (imageUrl == _lastScheduledImageUrl) return;
-
-    _lastScheduledImageUrl = imageUrl;
-
-    final cachedColors = _MobileDynamicColorCache().getColors(imageUrl);
-    if (cachedColors != null) {
-      _currentImageUrl = imageUrl;
-      if (mounted) {
-        setState(() => _dynamicColors = cachedColors);
-      }
-      return;
-    }
-
-    _pendingExtractionId++;
-    final currentId = _pendingExtractionId;
-
-    Future.delayed(const Duration(milliseconds: 300), () {
-      if (currentId != _pendingExtractionId || !mounted) return;
-      _extractColorsFromImage(imageUrl);
-    });
   }
 
   /// 延迟调度主题色提取（带防抖）
   void _scheduleThemeColorExtraction() {
     final backgroundService = PlayerBackgroundService();
-    if (backgroundService.backgroundType != PlayerBackgroundType.adaptive)
+    if (backgroundService.backgroundType != PlayerBackgroundType.adaptive) {
       return;
+    }
 
     final song = PlayerService().currentSong;
     final track = PlayerService().currentTrack;
@@ -178,44 +118,6 @@ class _MobilePlayerBackgroundState extends State<MobilePlayerBackground> {
       if (currentId != _pendingThemeColorExtractionId || !mounted) return;
       _extractThemeColorFromImage(imageUrl);
     });
-  }
-
-  /// 从图片中提取动态背景颜色（使用 isolate，不阻塞主线程）
-  Future<void> _extractColorsFromImage(String imageUrl) async {
-    // 检查缓存
-    final cachedColors = _MobileDynamicColorCache().getColors(imageUrl);
-    if (cachedColors != null) {
-      _currentImageUrl = imageUrl;
-      if (mounted) setState(() => _dynamicColors = cachedColors);
-      return;
-    }
-
-    _currentImageUrl = imageUrl;
-
-    try {
-      // 使用 ColorExtractionService 在 isolate 中提取颜色
-      final result = await ColorExtractionService().extractColorsFromUrl(
-        imageUrl,
-        sampleSize: 32,
-        timeout: const Duration(seconds: 3),
-      );
-
-      if (result != null && mounted && _currentImageUrl == imageUrl) {
-        final colors = DynamicBackgroundColorExtractor.extractColors(
-          vibrantColor: result.vibrantColor,
-          mutedColor: result.mutedColor,
-          dominantColor: result.dominantColor,
-          lightVibrantColor: result.lightVibrantColor,
-          darkVibrantColor: result.darkVibrantColor,
-          lightMutedColor: result.lightMutedColor,
-          darkMutedColor: result.darkMutedColor,
-        );
-
-        setState(() => _dynamicColors = colors);
-      }
-    } catch (e) {
-      debugPrint('⚠️ [移动端背景] 动态背景颜色提取失败: $e');
-    }
   }
 
   /// 从图片中提取主题色（使用 isolate，不阻塞主线程）
@@ -257,9 +159,7 @@ class _MobilePlayerBackgroundState extends State<MobilePlayerBackground> {
       Future.delayed(const Duration(milliseconds: 400), () {
         if (!mounted) return;
         final backgroundType = PlayerBackgroundService().backgroundType;
-        if (backgroundType == PlayerBackgroundType.dynamic) {
-          _scheduleColorExtraction();
-        } else if (backgroundType == PlayerBackgroundType.adaptive) {
+        if (backgroundType == PlayerBackgroundType.adaptive) {
           _scheduleThemeColorExtraction();
         }
       });
@@ -297,9 +197,9 @@ class _MobilePlayerBackgroundState extends State<MobilePlayerBackground> {
         }
 
       case PlayerBackgroundType.dynamic:
-        // 动态背景 - Apple Music 风格的 Mesh Gradient
-        // 流体云样式下加一层模糊
-        return _buildDynamicMeshBackground(song, track, addBlur: isFluidCloud);
+        // 动态背景 - 使用 SuperCyrene 同款 AMLL 专辑纹理背景（旋转/轨道多层，
+        // 覆盖原来几乎纯色的 Mesh Gradient，视觉更丰富）。
+        return _buildAmllBackground(song, track);
 
       case PlayerBackgroundType.solidColor:
         // 纯色背景
@@ -315,54 +215,44 @@ class _MobilePlayerBackgroundState extends State<MobilePlayerBackground> {
     }
   }
 
-  /// 构建动态 Mesh Gradient 背景（新版流体云效果）
-  /// [addBlur] 是否添加模糊层（流体云样式下使用）
-  Widget _buildDynamicMeshBackground(
-    SongDetail? song,
-    Track? track, {
-    bool addBlur = false,
-  }) {
-    // 使用 ListenableBuilder 监听 PlayerService，确保歌曲切换时颜色也会更新
+  /// 构建 SuperCyrene 同款 AMLL 动态背景。
+  ///
+  /// 复用 [SuperCyreneAmllBackground]：对专辑封面做一次模糊 + 色彩校正，
+  /// 然后以多层旋转/轨道动画合成，替代旧 Mesh Gradient 的近似纯色效果。
+  /// 播放状态由 [PlayerService.isPlaying] 驱动动画启停。
+  Widget _buildAmllBackground(SongDetail? song, Track? track) {
+    final player = PlayerService();
+    final imageUrl = song?.pic ?? track?.picUrl;
+
     return ListenableBuilder(
-      listenable: PlayerService(),
+      listenable: player,
       builder: (context, _) {
-        // 获取当前封面图片的 Provider
-        final player = PlayerService();
-        // 优先使用缓存的 Provider
-        ImageProvider? imageProvider = player.currentCoverImageProvider;
-
-        // 如果没有 Provider，尝试从 URL 构建
-        if (imageProvider == null) {
-          final currentSong = player.currentSong;
-          final currentTrack = player.currentTrack;
-          final imageUrl =
-              currentSong?.pic ??
-              currentTrack?.picUrl ??
-              song?.pic ??
-              track?.picUrl;
-
-          if (imageUrl != null && imageUrl.isNotEmpty) {
-            if (imageUrl.startsWith('http')) {
-              imageProvider = CachedNetworkImageProvider(
-                imageUrl,
-                headers: getImageHeaders(imageUrl),
-              );
-            } else {
-              imageProvider = FileImage(File(imageUrl));
-            }
-          }
-        }
-
-        final bg = FlowingLightBackground(
-          imageProvider: imageProvider,
-          child: addBlur
-              ? Container(color: Colors.black.withValues(alpha: 0.15))
-              : null,
+        final provider =
+            PlayerService().currentCoverImageProvider ??
+            _coverProviderFor(imageUrl);
+        return SuperCyreneAmllBackground(
+          imageProvider: provider,
+          isPlaying: PlayerService().isPlaying,
         );
-
-        return widget.isolateRepaints ? RepaintBoundary(child: bg) : bg;
       },
     );
+  }
+
+  /// 从封面 URL 构建 ImageProvider（本地 data URI / 文件 / 网络三态兼容）。
+  ImageProvider? _coverProviderFor(String? imageUrl) {
+    if (imageUrl == null || imageUrl.isEmpty) return null;
+    if (isDataUriImage(imageUrl)) {
+      final bytes = decodeDataUriImage(imageUrl);
+      if (bytes == null) return null;
+      return MemoryImage(bytes);
+    }
+    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+      return CachedNetworkImageProvider(
+        imageUrl,
+        headers: getImageHeaders(imageUrl),
+      );
+    }
+    return FileImage(File(imageUrl));
   }
 
   /// 构建流体云样式下的自适应背景
@@ -593,8 +483,21 @@ class _MobilePlayerBackgroundState extends State<MobilePlayerBackground> {
     );
   }
 
-  /// 构建封面图片（支持网络 URL 和本地文件路径）
+  /// 构建封面图片（支持网络 URL、本地文件路径和内嵌 data URI）
   Widget _buildCoverImage(String imageUrl) {
+    // 本地音轨的内嵌封面（data:image/...;base64）需解码为字节渲染。
+    if (isDataUriImage(imageUrl)) {
+      final bytes = decodeDataUriImage(imageUrl);
+      if (bytes != null) {
+        return Image.memory(
+          bytes,
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) =>
+              Container(color: Colors.grey[900]),
+        );
+      }
+    }
+
     // 判断是网络 URL 还是本地文件路径
     final isNetwork =
         imageUrl.startsWith('http://') || imageUrl.startsWith('https://');

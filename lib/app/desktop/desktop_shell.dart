@@ -3,7 +3,7 @@ import 'package:flutter/material.dart' as m;
 // 侧栏与标题栏走 fluent,这里只借 Miuix 的配色给外壳其余部分。底部迷你播放器
 // 由独立的 [DesktopMiniPlayer] 自绘(零 fluent_ui,取 Miuix 配色)。仍用 show
 // 限定,避免与 fluent_ui 的同名导出撞车。
-import 'package:flutter_miuix/miuix.dart' show MiuixTheme, MiuixColors;
+import 'package:flutter_miuix/miuix.dart' show MiuixTheme;
 
 import '../debug_probe.dart';
 
@@ -348,7 +348,7 @@ class _DesktopShellState extends State<DesktopShell> {
   /// body)与图标色就会和移动端不一致。[m.Material] 本身会把 DefaultTextStyle
   /// 重置回 `textTheme.bodyMedium`,IconTheme 得显式补一层。
   Widget _buildBody(Color background) => ColoredBox(
-    color: background.withOpacity(0.55),
+    color: background.withValues(alpha: 0.55),
     child: Builder(
       builder: (context) => MiuixTheme(
         data: MiuixTheme.of(context).copyWith(

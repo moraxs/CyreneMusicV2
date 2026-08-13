@@ -165,7 +165,9 @@ class LyricStyleService extends ChangeNotifier {
       if (_autoLineHeight) {
         await prefs.setDouble(_lineHeightKey, _lineHeight);
       }
-    } catch (e) {}
+    } catch (e) {
+      // 持久化失败静默忽略：设置已生效，仅无法落盘。
+    }
   }
 
   /// 设置行高
@@ -176,7 +178,9 @@ class LyricStyleService extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setDouble(_lineHeightKey, height);
-    } catch (e) {}
+    } catch (e) {
+      // 持久化失败静默忽略：设置已生效，仅无法落盘。
+    }
   }
 
   /// 设置模糊强度
@@ -187,7 +191,9 @@ class LyricStyleService extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setDouble(_blurSigmaKey, sigma);
-    } catch (e) {}
+    } catch (e) {
+      // 持久化失败静默忽略：设置已生效，仅无法落盘。
+    }
   }
 
   /// 设置自适应间距
@@ -206,7 +212,9 @@ class LyricStyleService extends ChangeNotifier {
       if (auto) {
         await prefs.setDouble(_lineHeightKey, _lineHeight);
       }
-    } catch (e) {}
+    } catch (e) {
+      // 持久化失败静默忽略：设置已生效，仅无法落盘。
+    }
   }
 
   /// 获取样式的显示名称

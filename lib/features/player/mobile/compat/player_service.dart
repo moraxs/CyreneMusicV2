@@ -136,6 +136,13 @@ class PlayerService extends ChangeNotifier {
   ImageProvider? get currentCoverImageProvider {
     final url = currentTrack?.picUrl;
     if (url == null || url.isEmpty) return null;
+    // 本地音轨的内嵌封面是 data:image/...;base64 URI，CachedNetworkImage 不认
+    // 该 scheme，需解码为字节后经 MemoryImage 提供，否则背景/封面一直回退占位。
+    if (isDataUriImage(url)) {
+      final bytes = decodeDataUriImage(url);
+      if (bytes == null) return null;
+      return MemoryImage(bytes);
+    }
     return CachedNetworkImageProvider(url, headers: getImageHeaders(url));
   }
 
