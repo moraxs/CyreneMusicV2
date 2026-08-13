@@ -3,21 +3,20 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
 
-import 'package:flutter/services.dart' show Clipboard, ClipboardData;
-
 import '../../app/app_version.dart';
 import '../../application/audio_sources/audio_source_preferences_controller.dart';
 import '../../application/auth/account_session_controller.dart';
 import '../../application/stores/appearance_settings_store.dart';
+import '../../application/updates/update_controller.dart';
 import '../../domain/models/media_url.dart';
 import '../../domain/models/user.dart';
 import '../../infrastructure/audio/equalizer_service.dart';
 import '../../infrastructure/services/announcement_service.dart';
 import '../../infrastructure/services/developer_mode_service.dart';
-import '../../infrastructure/services/update_service.dart';
 import '../../presentation/cyrene/cyrene_overlays.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
 import '../../presentation/cyrene/cyrene_toast.dart';
+import '../updates/update_dialogs.dart';
 import 'about_page.dart';
 import 'appearance_settings_page.dart';
 import 'audio_source_settings_page.dart';
@@ -226,64 +225,21 @@ class SettingsPage extends StatelessWidget {
     );
   }
 
-  /// 检查应用更新；有新版时展示更新说明并支持复制下载链接。
+  /// 手动检查更新：有新版则走与启动检查同一套弹窗（下载 + 安装）。
+  ///
+  /// 与启动检查的区别是不走 `shouldPrompt` —— 用户主动点的，即使之前忽略过
+  /// 这个版本也该给出结果。
   Future<void> _checkUpdate(BuildContext context) async {
     CyreneToast.show('正在检查更新…');
-    final info = await UpdateService.instance.checkUpdate();
+    final update = UpdateController.instance;
+    final info = await update.check(silent: false);
     if (!context.mounted) return;
     if (info == null) {
-      CyreneToast.show('当前已是最新版本');
+      CyreneToast.show(update.errorMessage ?? '当前已是最新版本');
+      update.clearError();
       return;
     }
-    final downloadUrl =
-        info.androidAbiDownloads?[info.androidTargetAbi?.wireName] ??
-        info.platformDownloads?['android'] ??
-        info.downloadUrl;
-    await showCyreneDialog<void>(
-      context: context,
-      title: '发现新版本 ${info.version}',
-      builder: (dialogContext, dismiss) {
-        final theme = MiuixTheme.of(dialogContext);
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 300),
-              child: SingleChildScrollView(
-                child: Text(
-                  info.changelog,
-                  style: theme.textStyles.body2.copyWith(
-                    color: theme.colors.onSurfaceContainer,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                MiuixTextButton('稍后再说', onPressed: () => dismiss()),
-                if (downloadUrl != null) ...[
-                  const SizedBox(width: 12),
-                  MiuixButton(
-                    onPressed: () async {
-                      await Clipboard.setData(ClipboardData(text: downloadUrl));
-                      dismiss();
-                      CyreneToast.show('下载链接已复制，请在浏览器中打开');
-                    },
-                    colors: MiuixButtonDefaults.buttonColorsPrimary(
-                      dialogContext,
-                    ),
-                    child: MiuixText('复制下载链接', style: theme.textStyles.button),
-                  ),
-                ],
-              ],
-            ),
-          ],
-        );
-      },
-    );
+    await showUpdateDialog(context, info);
   }
 
   List<Widget> _accountRows(BuildContext context, AccountSessionState state) {
@@ -322,8 +278,14 @@ class SettingsPage extends StatelessWidget {
         leading: _AccountAvatar(user: user),
         title: user.username,
         subtitle: user.email,
-        onTap: () =>
-            _openPage(context, PersonalCenterPage(account: account)),
+        onTap: () => _openPage(
+          context,
+          PersonalCenterPage(
+            account: account,
+            onOpenSecondary: onOpenSecondary,
+            body: body,
+          ),
+        ),
       ),
     ];
   }

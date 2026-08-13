@@ -8,7 +8,9 @@ import '../../application/auth/account_session_controller.dart';
 import '../../application/stores/appearance_settings_store.dart';
 import '../../application/stores/fullscreen_settings_store.dart';
 import '../../application/stores/window_material_settings_store.dart';
+import '../../app/desktop/window_taskbar_player.dart';
 import '../../features/desktop_player/desktop_player_controller.dart';
+import '../../features/taskbar_player/taskbar_player_controller.dart';
 import '../../features/player/mobile/compat/lyric_font_service.dart';
 import '../../features/player/mobile/compat/lyric_style_service.dart';
 import '../../features/player/mobile/compat/player_background_service.dart';
@@ -158,6 +160,80 @@ class AppearanceSettingsPage extends StatelessWidget {
     CyreneToast.show(newValue ? '正在开启桌面播放器...' : '正在关闭桌面播放器...');
   }
 
+  /// 切换任务栏播放器开关。
+  ///
+  /// 与桌面播放器同样的处理：不在当前帧 await，避免创建子引擎时阻塞 UI 线程。
+  void _toggleTaskbarPlayer(BuildContext context) {
+    final store = FullscreenSettingsStore.instance;
+    final newValue = !store.taskbarPlayerEnabled;
+
+    store.setTaskbarPlayerEnabled(newValue);
+
+    final controller = TaskbarPlayerController.instance;
+    final task = newValue
+        ? controller.enable(
+            store.taskbarPlayerAlignment,
+            mode: store.taskbarPlayerMode,
+            x: store.taskbarPlayerFloatingX,
+            y: store.taskbarPlayerFloatingY,
+          )
+        : controller.disable();
+
+    task
+        .then((error) {
+          if (error == null) return;
+          // 原生侧创建失败（如任务栏被第三方工具替换）：回滚开关，
+          // 否则设置显示「已开启」但实际没有窗口。
+          store.setTaskbarPlayerEnabled(!newValue);
+          CyreneToast.show(error);
+        })
+        .catchError((Object e) {
+          debugPrint('[任务栏播放器] 操作异常: $e');
+          store.setTaskbarPlayerEnabled(!newValue);
+          CyreneToast.show('任务栏播放器操作失败: $e');
+        });
+  }
+
+  /// 选择任务栏播放器在空白区里的对齐方式。
+  Future<void> _chooseTaskbarAlignment(BuildContext context) async {
+    final store = FullscreenSettingsStore.instance;
+    await showCyreneSheet<void>(
+      context: context,
+      title: '任务栏位置',
+      builder: (context, dismiss) => ListenableBuilder(
+        listenable: store,
+        builder: (context, _) => Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final alignment in TaskbarPlayerAlignment.values)
+                CyreneMenuRow(
+                  vector: MiuixIcons.extended.byName('sort')!,
+                  title: alignment.label,
+                  subtitle: alignment.subtitle,
+                  trailing: store.taskbarPlayerAlignment == alignment
+                      ? MiuixIcon(
+                          vector: MiuixIcons.basic.check,
+                          size: 20,
+                          tint: MiuixTheme.of(context).colors.primary,
+                        )
+                      : const SizedBox(width: 20),
+                  onTap: () {
+                    store.setTaskbarPlayerAlignment(alignment);
+                    // 播放器开着时立即生效；没开着则下次开启时按新值定位。
+                    TaskbarPlayerController.instance.setAlignment(alignment);
+                    dismiss();
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => CyrenePage(
     title: '外观',
@@ -300,6 +376,37 @@ class AppearanceSettingsPage extends StatelessWidget {
                       onChanged: (_) => _toggleWallpaperPlayer(context),
                     ),
                   ),
+                // 任务栏播放器（仅 Windows 桌面端）
+                if (isWindowsDesktop) ...[
+                  CyreneMenuRow(
+                    vector: MiuixIcons.extended.byName('play')!,
+                    iconBackground: _iconGreen,
+                    title: '任务栏播放器',
+                    subtitle: switch ((
+                      store.taskbarPlayerEnabled,
+                      store.taskbarPlayerMode,
+                    )) {
+                      (false, _) => '在任务栏的空白区域显示迷你播放控制条',
+                      (true, TaskbarPlayerMode.floating) => '已拖出为悬浮窗，拖回任务栏可重新吸附',
+                      (true, _) => '已固定在任务栏空白处，拖动标题可移出',
+                    },
+                    trailing: MiuixSwitch(
+                      value: store.taskbarPlayerEnabled,
+                      onChanged: (_) => _toggleTaskbarPlayer(context),
+                    ),
+                  ),
+                  // 对齐方式只在固定形态下有意义：悬浮时位置归用户。
+                  if (store.taskbarPlayerEnabled &&
+                      store.taskbarPlayerMode == TaskbarPlayerMode.pinned)
+                    CyreneMenuRow(
+                      vector: MiuixIcons.extended.byName('sort')!,
+                      iconBackground: _iconOrange,
+                      title: '任务栏位置',
+                      subtitle: store.taskbarPlayerAlignment.subtitle,
+                      value: store.taskbarPlayerAlignment.label,
+                      onTap: () => _chooseTaskbarAlignment(context),
+                    ),
+                ],
               ],
             );
           },

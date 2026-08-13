@@ -9,6 +9,7 @@ import '../../application/auth/account_session_controller.dart';
 import '../../application/playback/playback_controller.dart';
 import '../../domain/models/track.dart';
 import '../../domain/playback/playback_state.dart';
+import 'mobile/mobile_fullscreen_player_host.dart';
 import 'mobile/mobile_player_page.dart';
 import 'track_artwork.dart';
 
@@ -66,6 +67,16 @@ class _MiniPlayerState extends State<MiniPlayer> {
   }
 
   void _openPlayer() {
+    // 移动端：外观设置选了 SuperCyrene 时进横屏 SuperCyrene 播放器。
+    if (shouldOpenMobileSuperCyrene()) {
+      pushMobileSuperCyrenePlayer(
+        context,
+        playback: widget.playback,
+        audioSources: widget.audioSources,
+        account: widget.account,
+      );
+      return;
+    }
     Navigator.of(context).push(
       CupertinoPageRoute<void>(
         builder: (_) => MobilePlayerPage(

@@ -42,16 +42,47 @@ class AudioSourceSettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) => CyrenePage(
     title: '音源配置',
-    bodyBuilder: (context, topPadding) => AnimatedBuilder(
-      animation: controller,
-      builder: (context, _) => _AudioSourceSettingsBody(
-        controller: controller,
-        account: account,
-        state: controller.state,
-        topPadding: topPadding,
-        token: token,
-        desktopLayout: desktopLayout,
-      ),
+    bodyBuilder: (context, topPadding) => AudioSourceSettingsBody(
+      controller: controller,
+      account: account,
+      topPadding: topPadding,
+      token: token,
+      desktopLayout: desktopLayout,
+    ),
+  );
+}
+
+/// 音源配置正文，不含页面骨架。
+///
+/// 设置里的 [AudioSourceSettingsPage] 与首启引导的音源步骤共用——添加/导入
+/// /排序/删除/音质的全部逻辑都在这里，引导页不复制一份简化版，免得两处行为
+/// 分叉（例如引导里加的源没走同一套校验）。
+class AudioSourceSettingsBody extends StatelessWidget {
+  const AudioSourceSettingsBody({
+    super.key,
+    required this.controller,
+    required this.account,
+    required this.topPadding,
+    required this.token,
+    this.desktopLayout = false,
+  });
+
+  final AudioSourcePreferencesController controller;
+  final AccountSessionController account;
+  final EdgeInsets topPadding;
+  final String? token;
+  final bool desktopLayout;
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller,
+    builder: (context, _) => _AudioSourceSettingsBody(
+      controller: controller,
+      account: account,
+      state: controller.state,
+      topPadding: topPadding,
+      token: token,
+      desktopLayout: desktopLayout,
     ),
   );
 }
@@ -756,11 +787,14 @@ class _OmniParseDialogState extends State<_OmniParseDialog> {
   late final _name = TextEditingController(
     text: widget.source?.name ?? widget.preFilledConfig?.name ?? '',
   );
+  // 手动编辑源时展示可编辑的真实 URL/API Key；文件导入时后端 URL 与密钥属敏感
+  // 信息，不预填进输入框（标签已用 ••• 遮蔽），否则禁用态输入框仍会显示控制器
+  // 里的明文。保存时 _submit 对文件导入路径直接从 preFilledConfig 读取，无需控制器。
   late final _url = TextEditingController(
-    text: widget.source?.url ?? widget.preFilledConfig?.url ?? '',
+    text: widget.source?.url ?? '',
   );
   late final _apiKey = TextEditingController(
-    text: widget.source?.apiKey ?? widget.preFilledConfig?.apiKey ?? '',
+    text: widget.source?.apiKey ?? '',
   );
   String? _validationMessage;
 

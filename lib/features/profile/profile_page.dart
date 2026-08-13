@@ -17,6 +17,7 @@ import '../history/history_page.dart';
 import '../local/local_music_page.dart';
 import '../playlist/playlist_detail_page.dart';
 import '../settings/login_page.dart';
+import 'import_playlist_sheet.dart';
 import 'listening_footprint_page.dart';
 
 class ProfilePage extends StatefulWidget {
@@ -134,7 +135,7 @@ class _ProfilePageState extends State<ProfilePage> {
               syncingIds: _syncingIds,
               onOpen: _openPlaylist,
               onDelete: _deletePlaylist,
-              onCreate: () => _createPlaylist(context),
+              onAdd: () => _openAddMenu(context),
               onSync: _syncPlaylist,
             ),
           ],
@@ -243,6 +244,35 @@ class _ProfilePageState extends State<ProfilePage> {
     CyreneToast.show(playlist != null ? '歌单「$name」创建成功' : '创建歌单失败');
   }
 
+  /// 「+」入口的二级菜单：新建歌单 / 导入歌单。
+  Future<void> _openAddMenu(BuildContext context) async {
+    final token = widget.accountSessionController.token;
+    if (token == null) return;
+    final action = await showCyreneSheet<_PlaylistAddAction>(
+      context: context,
+      title: '添加到我的歌单',
+      builder: (_, dismiss) => _PlaylistAddMenu(dismiss: dismiss),
+    );
+    if (action == null || !mounted || !context.mounted) return;
+    switch (action) {
+      case _PlaylistAddAction.create:
+        await _createPlaylist(context);
+      case _PlaylistAddAction.import:
+        await _importPlaylist(context);
+    }
+  }
+
+  /// 从第三方平台导入歌单（弹底部抽屉：选平台 → 粘贴链接/ID → 预览 → 写入）。
+  Future<void> _importPlaylist(BuildContext context) async {
+    final token = widget.accountSessionController.token;
+    if (token == null) return;
+    await ImportPlaylistSheet.show(
+      context,
+      token: token,
+      playlists: widget.playlists,
+    );
+  }
+
   /// 增量同步已绑定来源的歌单（对应原版「我的」页的同步入口）。
   Future<void> _syncPlaylist(Playlist playlist) async {
     final token = widget.accountSessionController.token;
@@ -294,7 +324,7 @@ class _MyPlaylistsSection extends StatelessWidget {
     required this.syncingIds,
     required this.onOpen,
     required this.onDelete,
-    required this.onCreate,
+    required this.onAdd,
     required this.onSync,
   });
 
@@ -303,7 +333,9 @@ class _MyPlaylistsSection extends StatelessWidget {
   final Set<int> syncingIds;
   final ValueChanged<Playlist> onOpen;
   final ValueChanged<Playlist> onDelete;
-  final VoidCallback onCreate;
+
+  /// 打开「新建歌单 / 导入歌单」二级菜单。
+  final VoidCallback onAdd;
   final ValueChanged<Playlist> onSync;
 
   @override
@@ -317,7 +349,7 @@ class _MyPlaylistsSection extends StatelessWidget {
           trailing: isLoggedIn
               ? MiuixIconButton(
                   key: const Key('create-playlist-button'),
-                  onPressed: onCreate,
+                  onPressed: onAdd,
                   child: MiuixIcon(
                     vector: MiuixIcons.extended.byName('add')!,
                     size: 20,
@@ -521,6 +553,38 @@ class _EmptyCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 「+」二级菜单的两个动作。
+enum _PlaylistAddAction { create, import }
+
+/// 「新建歌单 / 导入歌单」选择抽屉内容。点击行后通过 [dismiss] 带出
+/// [_PlaylistAddAction]，由 [_ProfilePageState._openAddMenu] 据此分发；
+/// 走 Miuix 退场动画后再执行对应流程。
+class _PlaylistAddMenu extends StatelessWidget {
+  const _PlaylistAddMenu({required this.dismiss});
+
+  final void Function([_PlaylistAddAction? action]) dismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    return CyreneMenuGroup(
+      children: [
+        CyreneMenuRow(
+          icon: Icons.add_rounded,
+          title: '新建歌单',
+          subtitle: '创建一个空白歌单',
+          onTap: () => dismiss(_PlaylistAddAction.create),
+        ),
+        CyreneMenuRow(
+          icon: Icons.cloud_download_rounded,
+          title: '导入歌单',
+          subtitle: '从网易云、QQ 等平台按链接或 ID 导入',
+          onTap: () => dismiss(_PlaylistAddAction.import),
+        ),
+      ],
     );
   }
 }

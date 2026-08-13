@@ -1,4 +1,4 @@
-package com.example.cyrene_music_reborn
+package com.cyrene.music
 
 import android.Manifest
 import android.content.pm.PackageManager

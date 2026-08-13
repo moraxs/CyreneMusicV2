@@ -119,7 +119,10 @@ class AccountService {
   Future<Map<String, Object?>?> getKugouQRData() async {
     try {
       final response = await ApiClient.instance.apiFetch(
-        '${UrlService.instance.baseUrl}/kugou/login/qr/create',
+        // 后端只注册了 `/kugou/login/qr/key`（没有 `/create`）；返回
+        // `{ code, data: { qrcode, expire, qrUrl } }`。`qrcode` 用于 check，
+        // `qrUrl` 用于本地生成二维码图片。
+        '${UrlService.instance.baseUrl}/kugou/login/qr/key',
       );
       final result = _decode(response);
       if (result['code'] == 200) {

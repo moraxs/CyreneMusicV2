@@ -125,5 +125,10 @@ class UrlService extends ChangeNotifier {
   String get qishuiSearchUrl => _path('/qishui/search');
 
   // Update
+  /// 应用更新检查端点：返回最新版本号、更新说明与各平台下载地址。
+  ///
+  /// 注意与 [latestNextVersionUrl] 的区别：后者只有 version / changelog /
+  /// force_update 三个字段，**没有下载链接**，不能用于自动更新。
+  String get latestVersionUrl => _path('/version/latest');
   String get latestNextVersionUrl => _path('/version/next/latest');
 }

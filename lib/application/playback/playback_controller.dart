@@ -60,6 +60,28 @@ class PlaybackController extends ChangeNotifier {
   int _playRequest = 0;
   bool _disposed = false;
 
+  /// 当前已装载进音频运行时的曲目 key。为 null 表示 [_audio] 手里没有可播放的
+  /// 媒体——冷启动恢复出的曲目就是这个状态（快照里只有元数据，播放地址已按
+  /// 时效性剥离），此时按下播放要重新解析音源而不是直接 `play()`。
+  String? _loadedTrackKey;
+
+  /// 待补的续播定位，见 [_onPosition]。
+  Duration? _pendingResume;
+  int _resumeSeekRetries = 0;
+
+  /// 判定「已定位到续播点」的容差：libmpv 只能 seek 到最近的关键帧，落点
+  /// 通常比请求值早零点几秒，严格比较会导致无谓的补发。
+  static const _resumeTolerance = Duration(seconds: 2);
+
+  /// 续播 seek 的最大补发次数。
+  static const _maxResumeSeekRetries = 3;
+
+  /// 播放进度的落盘节流。快照包含整条队列，每次写都要 JSON 编码并落
+  /// SharedPreferences；跟着 200ms 的进度 tick 走会持续抖动主线程。5 秒一次
+  /// 足以把冷启动续播的误差控制在可接受范围内，退到后台/暂停时另有精确落盘。
+  static const _positionPersistInterval = Duration(seconds: 5);
+  Duration _lastPersistedPosition = Duration.zero;
+
   Future<void> restore() async {
     final snapshot = await _store.read();
     if (_disposed || snapshot == null) return;
@@ -67,21 +89,46 @@ class PlaybackController extends ChangeNotifier {
     final currentTrack = snapshot.queue.where(
       (track) => track.key == snapshot.currentTrackKey,
     );
+    // 恢复的曲目尚未装载到音频运行时：进度与时长只是「显示值」，让进度条
+    // 一进来就停在上次离开的位置，真正的加载推迟到用户按下播放。
+    _loadedTrackKey = null;
+    _pendingResume = null;
+    _lastPersistedPosition = snapshot.position;
     _publish(
       PlaybackState(
         currentTrack: currentTrack.isEmpty ? null : currentTrack.first,
         queue: snapshot.queue,
         volume: snapshot.volume,
         repeatMode: snapshot.repeatMode,
+        position: snapshot.position,
+        duration: snapshot.duration,
       ),
       persist: false,
     );
     await _audio.setVolume(snapshot.volume);
   }
 
-  Future<void> playTrack(Track track, {List<Track>? queue}) async {
+  /// 播放 [track]；[startAt] 非空时从该位置续播（音源仍会重新解析）。
+  Future<void> playTrack(
+    Track track, {
+    List<Track>? queue,
+    Duration? startAt,
+  }) async {
     final request = ++_playRequest;
-    _publish(_state.resetForTrack(track));
+    final resumeFrom = startAt != null && startAt > Duration.zero
+        ? startAt
+        : null;
+    // 换曲目即视为旧媒体作废；解析途中按播放不应该走「直接 play」分支。
+    _loadedTrackKey = null;
+    _pendingResume = null;
+    // 续播时保留已知的进度与时长，避免进度条在重新解析音源的这几百毫秒里
+    // 先跳回 0:00 再跳回来。
+    final restoredDuration = resumeFrom == null ? Duration.zero : _state.duration;
+    _publish(
+      _state
+          .resetForTrack(track)
+          .copyWith(position: resumeFrom, duration: restoredDuration),
+    );
 
     try {
       final resolved = await _resolveTrack(track);
@@ -106,16 +153,25 @@ class PlaybackController extends ChangeNotifier {
           final activeQueue = resolvedQueue.any((item) => item == playableTrack)
               ? resolvedQueue
               : _normalizedQueue([...resolvedQueue, playableTrack]);
+          _loadedTrackKey = playableTrack.key;
           _publish(
             _state
                 .resetForTrack(playableTrack)
                 .copyWith(
                   queue: activeQueue,
-                  duration: duration ?? playableTrack.duration ?? Duration.zero,
+                  duration:
+                      duration ??
+                      playableTrack.duration ??
+                      restoredDuration,
+                  position: resumeFrom,
                   isLoading: false,
                   clearError: true,
                 ),
           );
+          if (resumeFrom != null) {
+            _pendingResume = resumeFrom;
+            await _audio.seek(resumeFrom);
+          }
           await _audio.play();
           return;
         } catch (error) {
@@ -126,6 +182,8 @@ class PlaybackController extends ChangeNotifier {
       throw AudioSourceResolutionFailure('所有音源均无法加载。', causes: failures);
     } catch (_) {
       if (_isStale(request)) return;
+      _loadedTrackKey = null;
+      _pendingResume = null;
       _publish(
         _state.copyWith(
           isLoading: false,
@@ -137,7 +195,15 @@ class PlaybackController extends ChangeNotifier {
   }
 
   Future<void> togglePlay() async {
-    if (_state.currentTrack == null) return;
+    final track = _state.currentTrack;
+    if (track == null) return;
+    // 冷启动恢复出来的曲目还没有音频源，且旧的 CDN 地址已随快照剥离
+    // （限时签名，隔一次启动必失效）。此时按播放要重新解析音源，
+    // 再从上次离开的位置续播。
+    if (_loadedTrackKey != track.key) {
+      await playTrack(track, queue: _state.queue, startAt: _state.position);
+      return;
+    }
     if (_state.isPlaying) {
       await _audio.pause();
     } else {
@@ -154,8 +220,19 @@ class PlaybackController extends ChangeNotifier {
         : position > duration
         ? duration
         : position;
+    // 用户主动定位优先于待补的续播定位，否则会被补发的 seek 拽回去。
+    _pendingResume = null;
     await _audio.seek(safePosition);
     _publish(_state.copyWith(position: safePosition), persist: false);
+  }
+
+  /// 立即把当前播放状态（含精确进度）落盘。
+  ///
+  /// 进度平时按 [_positionPersistInterval] 节流写入，退到后台或退出前调用此
+  /// 方法补一次精确值，免得续播位置比实际少几秒。
+  Future<void> flush() async {
+    if (_disposed) return;
+    await _persistSnapshot();
   }
 
   Future<void> setVolume(double volume) async {
@@ -182,6 +259,9 @@ class PlaybackController extends ChangeNotifier {
 
   Future<void> clearQueue() async {
     ++_playRequest;
+    _loadedTrackKey = null;
+    _pendingResume = null;
+    _lastPersistedPosition = Duration.zero;
     await _audio.stop();
     _publish(
       PlaybackState(volume: _state.volume, repeatMode: _state.repeatMode),
@@ -238,6 +318,51 @@ class PlaybackController extends ChangeNotifier {
     // 全树重建。state.position 仍同步更新，供机会性读取者（媒体通知栏等）取用。
     _state = _state.copyWith(position: position);
     _positionNotifier.value = position;
+    _maybeReapplyResume(position);
+    _maybePersistPosition(position);
+  }
+
+  /// 续播定位的补发。
+  ///
+  /// libmpv 在 `open(play: false)` 之后尚未真正载入媒体，此时的 seek 可能被
+  /// 直接丢弃，播放会从 0:00 开始。因此续播时记下目标位置，直到运行时报告的
+  /// 进度确实落在目标附近才作数；否则补发一次 seek（最多 [_maxResumeSeekRetries]
+  /// 次，避免目标位置不可达时无限重试）。
+  void _maybeReapplyResume(Duration position) {
+    final target = _pendingResume;
+    if (target == null) return;
+
+    // 已经到位（或已播过目标点）：续播完成。
+    if (position >= target - _resumeTolerance) {
+      _pendingResume = null;
+      _resumeSeekRetries = 0;
+      return;
+    }
+    // 时长已知且目标越界：这条音源比上次短（换音源/换音质），放弃续播。
+    final duration = _state.duration;
+    if (duration > Duration.zero && target >= duration) {
+      _pendingResume = null;
+      _resumeSeekRetries = 0;
+      return;
+    }
+    if (_resumeSeekRetries >= _maxResumeSeekRetries) {
+      _pendingResume = null;
+      return;
+    }
+    _resumeSeekRetries += 1;
+    unawaited(_audio.seek(target));
+  }
+
+  /// 播放进度的节流落盘，见 [_positionPersistInterval]。
+  void _maybePersistPosition(Duration position) {
+    final delta = position - _lastPersistedPosition;
+    if (delta.abs() < _positionPersistInterval) return;
+    unawaited(_persistSnapshot());
+  }
+
+  Future<void> _persistSnapshot() {
+    _lastPersistedPosition = _state.position;
+    return _store.write(PlaybackSnapshot.fromState(_state));
   }
 
   void _onDuration(Duration? duration) {
@@ -261,6 +386,8 @@ class PlaybackController extends ChangeNotifier {
           _state.copyWith(isPlaying: false, isLoading: false),
           persist: false,
         );
+        // 暂停是「用户可能就此离开」的信号：补一次精确进度，绕过节流。
+        unawaited(_persistSnapshot());
       case PlaybackStatus.completed:
         unawaited(_playAdjacent(isNext: true));
       case PlaybackStatus.idle:
@@ -291,7 +418,7 @@ class PlaybackController extends ChangeNotifier {
     // 让进度条即时跟随，不必等下一个高频 tick。
     _positionNotifier.value = nextState.position;
     if (persist) {
-      unawaited(_store.write(PlaybackSnapshot.fromState(nextState)));
+      unawaited(_persistSnapshot());
     }
     notifyListeners();
   }

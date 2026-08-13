@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
 
@@ -6,63 +7,110 @@ import '../../domain/models/user.dart';
 import '../../presentation/cyrene/cyrene_overlays.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
 import '../../presentation/cyrene/cyrene_user_hero_card.dart';
+import 'third_party_accounts_page.dart';
 
 /// 个人中心（账号聚焦）：顶部复用「我的」页同款沉浸式用户卡片，
 /// 下方接账号详情行（用户 ID / 邮箱 / 赞助状态 / 最后登录 / IP 归属）
 /// 与退出登录。从设置页账号卡片下沉而来，登录态变化时实时刷新。
+///
+/// 桌面端经 [onOpenSecondary] 推入设置二级栈（[body] 非空时直接渲染二级页
+/// 覆盖），移动端用 Navigator——与 [SettingsPage] 同款双端范式。
 class PersonalCenterPage extends StatelessWidget {
-  const PersonalCenterPage({super.key, required this.account});
+  const PersonalCenterPage({
+    super.key,
+    required this.account,
+    this.onOpenSecondary,
+    this.body,
+  });
 
   final AccountSessionController account;
+  final ValueChanged<Widget>? onOpenSecondary;
+  final Widget? body;
+
+  // HyperOS 系统设置的彩色图标底色（与 settings_page 对齐）。
+  static const _iconPurple = Color(0xFF8A64FF);
 
   @override
-  Widget build(BuildContext context) => CyrenePage(
-    title: '个人中心',
-    bodyBuilder: (context, topPadding) => AnimatedBuilder(
-      animation: account,
-      builder: (context, _) {
-        final state = account.state;
-        return ListView(
-          physics: const BouncingScrollPhysics(),
-          padding: topPadding + const EdgeInsets.fromLTRB(12, 4, 12, 40),
-          children: [
-            if (state.status == AccountSessionStatus.restoring)
-              const Padding(
-                padding: EdgeInsets.all(40),
-                child: Center(child: MiuixCircularProgressIndicator()),
-              )
-            else if (state.user != null) ...[
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: CyreneUserHeroCard(user: state.user!),
-              ),
-              CyreneMenuGroup(children: _accountDetailRows(state.user!)),
-              const SizedBox(height: 12),
-              CyreneMenuGroup(
-                children: [
-                  CyreneMenuRow(
-                    key: const Key('logout-button'),
-                    icon: Icons.logout_rounded,
-                    title: '退出登录',
-                    destructive: true,
-                    trailing: const SizedBox.shrink(),
-                    onTap: () => _confirmLogout(context),
-                  ),
-                ],
-              ),
+  Widget build(BuildContext context) {
+    final secondaryBody = body;
+    if (secondaryBody != null) return secondaryBody;
+
+    return CyrenePage(
+      title: '个人中心',
+      bodyBuilder: (context, topPadding) => AnimatedBuilder(
+        animation: account,
+        builder: (context, _) {
+          final state = account.state;
+          return ListView(
+            physics: const BouncingScrollPhysics(),
+            padding: topPadding + const EdgeInsets.fromLTRB(12, 4, 12, 40),
+            children: [
+              if (state.status == AccountSessionStatus.restoring)
+                const Padding(
+                  padding: EdgeInsets.all(40),
+                  child: Center(child: MiuixCircularProgressIndicator()),
+                )
+              else if (state.user != null) ...[
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: CyreneUserHeroCard(user: state.user!),
+                ),
+                CyreneMenuGroup(children: _accountDetailRows(state.user!)),
+                const SizedBox(height: 12),
+                CyreneMenuGroup(
+                  children: [
+                    CyreneMenuRow(
+                      vector: MiuixIcons.extended.byName('link')!,
+                      iconBackground: _iconPurple,
+                      title: '第三方账号',
+                      subtitle: '网易云 / QQ / 酷狗 绑定管理',
+                      onTap: () => _openPage(
+                        context,
+                        ThirdPartyAccountsPage(
+                          account: account,
+                          onOpenSecondary: onOpenSecondary,
+                          body: body,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                CyreneMenuGroup(
+                  children: [
+                    CyreneMenuRow(
+                      key: const Key('logout-button'),
+                      icon: Icons.logout_rounded,
+                      title: '退出登录',
+                      destructive: true,
+                      trailing: const SizedBox.shrink(),
+                      onTap: () => _confirmLogout(context),
+                    ),
+                  ],
+                ),
+              ],
+              if (state.errorMessage != null && !state.isBusy) ...[
+                const SizedBox(height: 12),
+                _SessionMessage(
+                  message: state.errorMessage!,
+                  onDismiss: account.clearError,
+                ),
+              ],
             ],
-            if (state.errorMessage != null && !state.isBusy) ...[
-              const SizedBox(height: 12),
-              _SessionMessage(
-                message: state.errorMessage!,
-                onDismiss: account.clearError,
-              ),
-            ],
-          ],
-        );
-      },
-    ),
-  );
+          );
+        },
+      ),
+    );
+  }
+
+  void _openPage(BuildContext context, Widget page) {
+    final openSecondary = onOpenSecondary;
+    if (openSecondary != null) {
+      openSecondary(page);
+      return;
+    }
+    Navigator.of(context).push(CupertinoPageRoute<void>(builder: (_) => page));
+  }
 
   /// 账号详情行（无图标块的中性行，用 trailing 展示值）。
   List<Widget> _accountDetailRows(User user) => [

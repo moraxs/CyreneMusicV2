@@ -1,8 +1,12 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 
 import '../../domain/models/local_track.dart';
 import '../../domain/models/music_source.dart';
 import '../../domain/models/track.dart';
+import 'audio_metadata_reader.dart';
 
 /// 本地音乐服务（对应 Next.js demo/lib/services/localMusicService.ts）。
 ///
@@ -10,16 +14,8 @@ import '../../domain/models/track.dart';
 /// （`scan_music_folder` / `get_audio_metadata` / `read_lrc_file`）调用 Rust
 /// 后端扫描文件夹与解析元数据。
 ///
-/// Flutter 侧移植策略：
-/// - **持久化**：原 IndexedDB 改为内存 Map 缓存（`_tracks` / `_folders`），
-///   待 store 层（如 sqflite / shared_preferences）接管后替换。
-/// - **文件扫描 / 元数据解析**：原 Tauri invoke 在 Flutter 侧没有对应实现，
-///   保留方法签名 + TODO 注释。完整实现需要：
-///   - 移动端：`path_provider` + platform channel 调用原生 MediaStore（Android）/
-///     MPMediaPredicate（iOS）；元数据可用 `on_audio_query` 或原生 AVFoundation。
-///   - 桌面端：可直接基于 `dart:io` 递归遍历音频扩展名 + `audiotags` / 原生库
-///     解析元数据。
-/// - 不引入新的 pub 依赖。
+/// Flutter 侧实现：纯 Dart（`dart:io` + [AudioMetadataReader]），无需 platform
+/// channel，跨平台支持 FLAC / MP3 / M4A / WAV / OGG / APE。
 class LocalMusicService {
   LocalMusicService._();
   static final LocalMusicService instance = LocalMusicService._();
@@ -31,35 +27,99 @@ class LocalMusicService {
   final Map<String, ScannedFolder> _folders = {};
 
   /// 扫描文件夹下所有音乐文件并入库，返回入库数量。
-  ///
-  /// TODO(platform): Next.js 通过 Tauri `invoke('scan_music_folder', {path})`
-  /// 调用 Rust 后端完成递归扫描与元数据解析。Flutter 侧需要：
-  /// - 移动端：`path_provider` + platform channel 调用原生 MediaStore / MPMediaPredicate。
-  /// - 桌面端：可基于 `dart:io` 递归遍历音频扩展名（mp3/flac/wav/m4a/ape/ogg），
-  ///   配合 `audiotags` 或原生库解析元数据。
-  /// 当前实现仅记录扫描文件夹，返回 0（未扫描任何文件）。
   Future<int> scanFolder(String folderPath) async {
+    final dir = Directory(folderPath);
+    if (!await dir.exists()) {
+      debugPrint('[LocalMusicService] scanFolder: 目录不存在 $folderPath');
+      return 0;
+    }
+
+    final audioFiles = <File>[];
+    await for (final entity
+        in dir.list(recursive: true, followLinks: false)) {
+      if (entity is File && AudioMetadataReader.isSupported(entity.path)) {
+        audioFiles.add(entity);
+      }
+    }
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _folders[folderPath] = ScannedFolder(path: folderPath, scannedAt: now);
+
+    var count = 0;
+    for (final file in audioFiles) {
+      final metadata = await AudioMetadataReader.read(file.path);
+      _tracks[file.path] = LocalTrackEntry(
+        filePath: metadata.filePath,
+        name: metadata.name,
+        artists: metadata.artists,
+        album: metadata.album,
+        duration: metadata.duration,
+        coverDataUrl: metadata.coverDataUrl,
+        lyric: metadata.lyric,
+        hasLrcFile: await _hasLrcFile(file.path),
+        addedAt: now,
+        folderPath: folderPath,
+      );
+      count++;
+    }
+
     debugPrint(
-      '[LocalMusicService] scanFolder TODO: requires platform channel + '
-      'path_provider to scan $folderPath on Flutter.',
+      '[LocalMusicService] scanFolder: 扫描 $folderPath，导入 $count 首歌曲',
     );
-    _folders[folderPath] = ScannedFolder(
-      path: folderPath,
-      scannedAt: DateTime.now().millisecondsSinceEpoch,
-    );
-    return 0;
+    return count;
   }
 
   /// 导入指定文件路径列表，返回成功导入数量。
-  ///
-  /// TODO(platform): Next.js 通过 Tauri `invoke('get_audio_metadata', {path})`
-  /// 解析单文件元数据。Flutter 侧需要 platform channel 实现，当前返回 0。
   Future<int> importFiles(List<String> filePaths) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    var count = 0;
+
+    for (final filePath in filePaths) {
+      if (!AudioMetadataReader.isSupported(filePath)) {
+        debugPrint('[LocalMusicService] importFiles: 跳过不支持的格式 $filePath');
+        continue;
+      }
+
+      final file = File(filePath);
+      if (!await file.exists()) {
+        debugPrint('[LocalMusicService] importFiles: 文件不存在 $filePath');
+        continue;
+      }
+
+      try {
+        final metadata = await AudioMetadataReader.read(filePath);
+        _tracks[filePath] = LocalTrackEntry(
+          filePath: metadata.filePath,
+          name: metadata.name,
+          artists: metadata.artists,
+          album: metadata.album,
+          duration: metadata.duration,
+          coverDataUrl: metadata.coverDataUrl,
+          lyric: metadata.lyric,
+          hasLrcFile: await _hasLrcFile(filePath),
+          addedAt: now,
+        );
+        count++;
+      } catch (e) {
+        debugPrint('[LocalMusicService] importFiles: 解析失败 $filePath: $e');
+        // 解析失败时仍以文件名导入
+        _tracks[filePath] = LocalTrackEntry(
+          filePath: filePath,
+          name: _baseName(filePath),
+          artists: '',
+          album: '',
+          duration: 0,
+          hasLrcFile: await _hasLrcFile(filePath),
+          addedAt: now,
+        );
+        count++;
+      }
+    }
+
     debugPrint(
-      '[LocalMusicService] importFiles TODO: requires platform channel to parse '
-      'audio metadata for ${filePaths.length} files.',
+      '[LocalMusicService] importFiles: 导入 $count/${filePaths.length} 首歌曲',
     );
-    return 0;
+    return count;
   }
 
   /// 获取所有本地音轨，按 [LocalTrackEntry.addedAt] 倒序。
@@ -125,15 +185,58 @@ class LocalMusicService {
 
   /// 读取音频文件对应的 .lrc 歌词文件内容。
   ///
-  /// TODO(platform): Next.js 通过 Tauri `invoke('read_lrc_file', {audioPath})`
-  /// 读取同名 .lrc 文件。Flutter 侧需要 `dart:io`（桌面端）或 platform channel
-  /// （移动端沙盒访问）实现。当前返回 null。
+  /// 查找与音频文件同目录、同名的 .lrc 文件（大小写不敏感）。
+  /// 若音频文件本身内嵌了歌词（[LocalTrackEntry.lyric]），优先返回内嵌歌词。
   Future<String?> loadLrcForTrack(Track track) async {
-    if (track.filePath == null || track.filePath!.isEmpty) return null;
-    debugPrint(
-      '[LocalMusicService] loadLrcForTrack TODO: requires dart:io or platform '
-      'channel to read .lrc file for ${track.filePath}.',
-    );
+    if (track.filePath == null || track.filePath!.isEmpty) {
+      // 内嵌歌词回退
+      return track.lyric;
+    }
+
+    // 先查缓存中是否有内嵌歌词
+    final entry = _tracks[track.filePath];
+    if (entry?.lyric != null && entry!.lyric!.isNotEmpty) {
+      return entry.lyric;
+    }
+
+    // 尝试读取同名 .lrc 文件
+    final audioPath = track.filePath!;
+    final dir = p.dirname(audioPath);
+    final nameWithoutExt = p.basenameWithoutExtension(audioPath);
+
+    // 尝试 .lrc 和 .LRC
+    for (final ext in ['.lrc', '.LRC']) {
+      final lrcPath = p.join(dir, nameWithoutExt + ext);
+      final lrcFile = File(lrcPath);
+      if (await lrcFile.exists()) {
+        try {
+          return await lrcFile.readAsString();
+        } catch (e) {
+          debugPrint('[LocalMusicService] loadLrcForTrack: 读取 .lrc 失败: $e');
+        }
+      }
+    }
+
     return null;
+  }
+
+  // -------------------------------------------------------------------------
+  // 私有辅助
+  // -------------------------------------------------------------------------
+
+  /// 检查同名 .lrc 文件是否存在。
+  Future<bool> _hasLrcFile(String audioPath) async {
+    final dir = p.dirname(audioPath);
+    final nameWithoutExt = p.basenameWithoutExtension(audioPath);
+    for (final ext in ['.lrc', '.LRC']) {
+      final lrcPath = p.join(dir, nameWithoutExt + ext);
+      if (await File(lrcPath).exists()) return true;
+    }
+    return false;
+  }
+
+  static String _baseName(String path) {
+    var name = p.basenameWithoutExtension(path);
+    return name;
   }
 }

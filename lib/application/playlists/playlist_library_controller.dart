@@ -1,8 +1,43 @@
 import 'package:flutter/foundation.dart';
 
 import '../../domain/models/playlist.dart';
+import '../../domain/models/playlist_import.dart';
 import '../../domain/models/track.dart';
+import '../../infrastructure/services/playlist_import_service.dart';
 import '../../infrastructure/services/playlist_service.dart';
+
+/// 从第三方平台导入歌单的结果分类。
+enum ImportExternalResultKind {
+  /// 成功：歌单已创建并写入曲目。
+  success,
+  /// 输入的 URL/ID 无法解析出歌单 ID。
+  parseFailed,
+  /// 拉取远端歌单详情失败（ID 不存在或后端不可达）。
+  fetchFailed,
+  /// 创建新歌单失败。
+  createFailed,
+  /// 创建了歌单但批量写入曲目失败。
+  addTracksFailed,
+}
+
+/// [importFromExternal] 的返回值，供 UI 据此弹不同 toast。
+class ImportExternalResult {
+  const ImportExternalResult({
+    required this.kind,
+    this.playlist,
+    this.importedCount = 0,
+  });
+
+  final ImportExternalResultKind kind;
+
+  /// 成功时为新创建的歌单；[addTracksFailed] 时为已创建但写曲失败的歌单。
+  final Playlist? playlist;
+
+  /// 成功时为写入的曲目数。
+  final int importedCount;
+
+  bool get isSuccess => kind == ImportExternalResultKind.success;
+}
 
 class PlaylistLibraryState {
   const PlaylistLibraryState({
@@ -78,6 +113,91 @@ class PlaylistLibraryController extends ChangeNotifier {
       );
     }
     return deleted;
+  }
+
+  /// 从第三方平台导入歌单：
+  /// 解析 ID → 拉取远端歌单详情 → 创建空壳歌单（绑定 source） →
+  /// 批量写入曲目 → 刷新歌单库。
+  ///
+  /// [nameOverride] 为预览步用户修改的歌单名；为空则用远端原名。
+  ///
+  /// 注意：本方法会**再次拉取**远端歌单。若调用方已在预览步拉取过
+  /// （如导入弹窗），应改用 [importFetchedExternal] 直接复用已有数据，
+  /// 避免重复网络往返与「预览成功、导入时二次拉取失败」的竞态。
+  Future<ImportExternalResult> importFromExternal(
+    String token,
+    MusicPlatform platform,
+    String input,
+    String nameOverride,
+  ) async {
+    final id = PlaylistImportService.instance.parsePlaylistId(platform, input);
+    if (id == null) {
+      return const ImportExternalResult(kind: ImportExternalResultKind.parseFailed);
+    }
+
+    final external = await PlaylistImportService.instance.fetchExternalPlaylist(
+      platform,
+      id,
+      token: token,
+    );
+    if (external == null) {
+      return const ImportExternalResult(kind: ImportExternalResultKind.fetchFailed);
+    }
+    return importFetchedExternal(token, platform, id, external, nameOverride);
+  }
+
+  /// 用已在预览步拉取到的 [external] 完成导入：创建空壳歌单（绑定 source）→
+  /// 批量写入曲目 → 刷新歌单库。不再发起远端请求。
+  ///
+  /// [id] 为解析出的歌单 ID（用于绑定 `sourcePlaylistId`）。
+  Future<ImportExternalResult> importFetchedExternal(
+    String token,
+    MusicPlatform platform,
+    String id,
+    ExternalPlaylist external,
+    String nameOverride,
+  ) async {
+    final finalName = nameOverride.trim().isEmpty
+        ? external.name
+        : nameOverride.trim();
+    final created = await _service.createPlaylist(
+      token,
+      finalName,
+      source: platform.wireName,
+      sourcePlaylistId: id,
+    );
+    if (created == null) {
+      return const ImportExternalResult(kind: ImportExternalResultKind.createFailed);
+    }
+
+    final inputs = <PlaylistTrackInput>[
+      for (final t in external.tracks)
+        (
+          trackId: t.id,
+          name: t.name,
+          artists: t.artists,
+          album: t.album,
+          picUrl: t.picUrl,
+          source: t.source.wireName,
+        ),
+    ];
+    final ok = await _service.addTracksToPlaylist(token, created.id, inputs);
+    if (!ok) {
+      return ImportExternalResult(
+        kind: ImportExternalResultKind.addTracksFailed,
+        playlist: created,
+      );
+    }
+
+    // 写入成功后刷新歌单库，让列表立刻出现新歌单。
+    if (token.isNotEmpty) {
+      await load(token);
+    }
+    return ImportExternalResult(
+      kind: ImportExternalResultKind.success,
+      playlist: created,
+      importedCount: inputs.length,
+    );
   }
 
   Future<List<PlaylistTrack>> tracks(String token, int playlistId) =>

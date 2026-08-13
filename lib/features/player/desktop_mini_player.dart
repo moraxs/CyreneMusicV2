@@ -14,6 +14,7 @@ import '../../presentation/cyrene/cyrene_toast.dart';
 import 'desktop_fullscreen_player_host.dart';
 import 'desktop_fullscreen_player_route.dart';
 import 'fullscreen/add_to_playlist_sheet.dart';
+import 'queue_sheet.dart';
 import 'track_artwork.dart';
 
 /// 桌面端专用底部迷你播放器底栏（WinUI 扁平语言，铺满窗口宽度）。
@@ -460,7 +461,7 @@ class _RightControls extends StatelessWidget {
             icon: Icons.queue_music_rounded,
             color: iconColor,
             tooltip: '播放列表',
-            onPressed: () => CyreneToast.show('播放队列即将上线'),
+            onPressed: () => QueueSheet.show(context, playback),
           ),
         ],
       ),

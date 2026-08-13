@@ -70,6 +70,7 @@ class AuthService implements AuthRepository {
     }
   }
 
+  @override
   Future<AuthResponse> register(
     String email,
     String username,
@@ -99,6 +100,7 @@ class AuthService implements AuthRepository {
     }
   }
 
+  @override
   Future<AuthResponse> sendRegisterCode(String email, String username) async {
     try {
       final response = await _apiClient.apiFetch(
@@ -117,6 +119,7 @@ class AuthService implements AuthRepository {
     }
   }
 
+  @override
   Future<({bool success, bool enabled})> checkRegistrationStatus() async {
     try {
       final response = await _apiClient.apiFetch(

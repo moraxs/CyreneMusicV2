@@ -12,6 +12,8 @@ add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "main.cpp"
   "smtc_handler.cpp"
+  "taskbar_player_handler.cpp"
+  "taskbar_player_window.cpp"
   "utils.cpp"
   "win32_window.cpp"
   "workerw_handler.cpp"

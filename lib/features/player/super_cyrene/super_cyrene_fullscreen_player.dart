@@ -4,7 +4,8 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show LogicalKeyboardKey;
+import 'package:flutter/services.dart'
+    show DeviceOrientation, LogicalKeyboardKey, SystemChrome, SystemUiMode;
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -49,6 +50,10 @@ class _SuperCyreneFullscreenPlayerState
   String? _translation;
   String _lyricsTheme = 'default';
 
+  /// 桌面端才有窗口概念（windowManager / 标题栏 / 最大化）。移动端走横屏
+  /// 全屏，这些桌面专属逻辑全部跳过。
+  bool get _isDesktop => defaultTargetPlatform == TargetPlatform.windows;
+
   @override
   void initState() {
     super.initState();
@@ -59,15 +64,42 @@ class _SuperCyreneFullscreenPlayerState
       accountController: widget.account,
       audioSourcesController: widget.audioSources,
     );
-    windowManager.addListener(this);
-    _syncMaximizedState();
+    if (_isDesktop) {
+      windowManager.addListener(this);
+      _syncMaximizedState();
+    } else {
+      // 移动端：进入 SuperCyrene 强制横屏，退出由 dispose 恢复竖屏。
+      _applyMobileOrientation();
+    }
   }
 
   @override
   void dispose() {
     _titleBarTimer?.cancel();
-    windowManager.removeListener(this);
+    if (_isDesktop) {
+      windowManager.removeListener(this);
+    } else {
+      _restoreMobileOrientation();
+    }
     super.dispose();
+  }
+
+  /// 移动端强制横屏并切沉浸模式（隐藏系统栏）。
+  void _applyMobileOrientation() {
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  }
+
+  /// 移动端退出 SuperCyrene 时恢复竖屏与系统栏。
+  void _restoreMobileOrientation() {
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
 
   @override
@@ -161,50 +193,73 @@ class _SuperCyreneFullscreenPlayerState
                       ),
                     ),
                   ),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  height: 32,
-                  child: MouseRegion(
-                    onEnter: (_) => _showTitleBar(),
-                    child: const SizedBox.expand(),
+                if (_isDesktop) ...[
+                  // 桌面端：顶部悬停触发标题栏（含最小化/最大化/关闭）。
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    height: 32,
+                    child: MouseRegion(
+                      onEnter: (_) => _showTitleBar(),
+                      child: const SizedBox.expand(),
+                    ),
                   ),
-                ),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: IgnorePointer(
-                    ignoring: !_titleBarVisible,
-                    child: AnimatedSlide(
-                      offset: _titleBarVisible
-                          ? Offset.zero
-                          : const Offset(0, -1),
-                      duration: const Duration(milliseconds: 500),
-                      curve: Curves.easeOutCubic,
-                      child: AnimatedOpacity(
-                        opacity: _titleBarVisible ? 1 : 0,
-                        duration: const Duration(milliseconds: 350),
-                        child: MouseRegion(
-                          onEnter: (_) => _showTitleBar(),
-                          onExit: (_) => _scheduleTitleBarHide(),
-                          child: _SuperCyreneTitleBar(
-                            title: track?.name ?? 'SuperCyrene',
-                            isMaximized: _isMaximized,
-                            onSwitchToClassic: widget.onSwitchToClassic,
-                            onExit: () => Navigator.of(context).pop(),
-                            onMinimize: windowManager.minimize,
-                            onToggleMaximize: () => _isMaximized
-                                ? windowManager.unmaximize()
-                                : windowManager.maximize(),
-                            onClose: windowManager.close,
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: IgnorePointer(
+                      ignoring: !_titleBarVisible,
+                      child: AnimatedSlide(
+                        offset: _titleBarVisible
+                            ? Offset.zero
+                            : const Offset(0, -1),
+                        duration: const Duration(milliseconds: 500),
+                        curve: Curves.easeOutCubic,
+                        child: AnimatedOpacity(
+                          opacity: _titleBarVisible ? 1 : 0,
+                          duration: const Duration(milliseconds: 350),
+                          child: MouseRegion(
+                            onEnter: (_) => _showTitleBar(),
+                            onExit: (_) => _scheduleTitleBarHide(),
+                            child: _SuperCyreneTitleBar(
+                              title: track?.name ?? 'SuperCyrene',
+                              isMaximized: _isMaximized,
+                              onSwitchToClassic: widget.onSwitchToClassic,
+                              onExit: () => Navigator.of(context).pop(),
+                              onMinimize: windowManager.minimize,
+                              onToggleMaximize: () => _isMaximized
+                                  ? windowManager.unmaximize()
+                                  : windowManager.maximize(),
+                              onClose: windowManager.close,
+                            ),
                           ),
                         ),
                       ),
                     ),
                   ),
-                ),
+                ] else ...[
+                  // 移动端：无窗口概念，左上角一个返回按钮 + 切回经典按钮。
+                  Positioned(
+                    top: MediaQuery.paddingOf(context).top + 8,
+                    right: 16,
+                    child: _MobileTopAction(
+                      icon: CupertinoIcons.back,
+                      tooltip: '退出',
+                      onTap: () => Navigator.of(context).pop(),
+                    ),
+                  ),
+                  Positioned(
+                    top: MediaQuery.paddingOf(context).top + 8,
+                    left: 16,
+                    child: _MobileTopAction(
+                      icon: CupertinoIcons.chevron_left_square,
+                      tooltip: '切回经典',
+                      onTap: widget.onSwitchToClassic,
+                    ),
+                  ),
+                ],
                 Positioned(
                   left: 80,
                   right: 80,
@@ -794,6 +849,41 @@ class _Divider extends StatelessWidget {
     height: 12,
     margin: const EdgeInsets.symmetric(horizontal: 3),
     color: Colors.white.withValues(alpha: .1),
+  );
+}
+
+/// 移动端 SuperCyrene 顶部的半透明圆形操作按钮（返回 / 切回经典）。
+class _MobileTopAction extends StatelessWidget {
+  const _MobileTopAction({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: tooltip,
+    child: GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.black.withValues(alpha: .35),
+          border: Border.all(color: Colors.white.withValues(alpha: .15)),
+        ),
+        child: Icon(
+          icon,
+          size: 20,
+          color: Colors.white.withValues(alpha: .9),
+        ),
+      ),
+    ),
   );
 }
 

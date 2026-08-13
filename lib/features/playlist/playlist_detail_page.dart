@@ -71,6 +71,16 @@ class PlaylistDetailPage extends StatefulWidget {
   State<PlaylistDetailPage> createState() => _PlaylistDetailPageState();
 }
 
+/// 歌单曲目排序方式。`default` 反转歌单原始顺序（最后一首在前）。
+enum PlaylistSortMode {
+  defaultOrder('默认排序'),
+  titleAsc('歌名 A-Z'),
+  titleDesc('歌名 Z-A');
+
+  const PlaylistSortMode(this.label);
+  final String label;
+}
+
 class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   PlaylistDetail? _playlist;
   String? _errorMessage;
@@ -79,6 +89,15 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   int _loadGeneration = 0;
   List<Track> _tracks = const [];
 
+  /// 是否展开歌单内搜索框；关闭时清空关键词与输入控制器。
+  bool _searching = false;
+  String _searchQuery = '';
+  final _searchController = TextEditingController();
+  final _searchFocusNode = FocusNode();
+
+  /// 当前排序方式；默认保持歌单原始顺序。
+  PlaylistSortMode _sortMode = PlaylistSortMode.defaultOrder;
+
   @override
   void initState() {
     super.initState();
@@ -86,6 +105,92 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
     _tracks = _mapTracks(widget.initialPlaylist);
     _isLoading = widget.initialPlaylist == null;
     if (widget.initialPlaylist == null) _load();
+  }
+
+  @override
+  void dispose() {
+    _loadGeneration++;
+    _searchController.dispose();
+    _searchFocusNode.dispose();
+    super.dispose();
+  }
+
+  /// 按当前搜索关键词过滤后的歌曲列表（歌名/歌手/专辑不区分大小写包含匹配）。
+  /// 关键词为空时直接返回全部歌曲，避免无谓的拷贝。
+  List<Track> get _filteredTracks {
+    final query = _searchQuery.trim();
+    if (query.isEmpty) return _tracks;
+    final lower = query.toLowerCase();
+    return _tracks
+        .where(
+          (t) =>
+              t.name.toLowerCase().contains(lower) ||
+              t.artists.toLowerCase().contains(lower) ||
+              t.album.toLowerCase().contains(lower),
+        )
+        .toList(growable: false);
+  }
+
+  /// 过滤后再按当前排序方式排序后的最终列表，供列表渲染与「播放全部」使用。
+  /// 默认排序时反转歌单原始顺序（最后一首在前），其余按歌名升/降序。
+  List<Track> get _sortedTracks {
+    final filtered = _filteredTracks;
+    if (filtered.isEmpty) return filtered;
+    if (_sortMode == PlaylistSortMode.defaultOrder) {
+      return filtered.reversed.toList(growable: false);
+    }
+    if (filtered.length == 1) return filtered;
+    final sorted = [...filtered];
+    sorted.sort((a, b) {
+      // 按歌名排序，不区分大小写；歌名相同则退回原始相对顺序（sort 稳定）。
+      final cmp = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      return _sortMode == PlaylistSortMode.titleAsc ? cmp : -cmp;
+    });
+    return sorted;
+  }
+
+  void _toggleSearch() {
+    if (_searching) {
+      _closeSearch();
+    } else {
+      setState(() => _searching = true);
+      // 展开后自动聚焦输入框，省一次点击。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _searchFocusNode.requestFocus();
+      });
+    }
+  }
+
+  void _closeSearch() {
+    _searchFocusNode.unfocus();
+    _searchController.clear();
+    setState(() {
+      _searching = false;
+      _searchQuery = '';
+    });
+  }
+
+  /// 弹出排序方式选择抽屉。选中后立即应用并刷新列表。
+  Future<void> _openSortSheet(BuildContext context) async {
+    final selected = await showCyreneSheet<PlaylistSortMode>(
+      context: context,
+      title: '排序方式',
+      builder: (sheetContext, dismiss) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final mode in PlaylistSortMode.values)
+            MiuixRadioButtonPreference(
+              title: mode.label,
+              selected: mode == _sortMode,
+              onClick: () => dismiss(mode),
+            ),
+        ],
+      ),
+    );
+    if (selected != null && selected != _sortMode && mounted) {
+      setState(() => _sortMode = selected);
+    }
   }
 
   Future<void> _load() async {
@@ -159,12 +264,6 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   );
 
   @override
-  void dispose() {
-    _loadGeneration++;
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) => CyrenePage(
     // 桌面外壳已有标题栏，详情信息卡也会展示歌单名；内部顶栏仅保留操作区，
     // 不再重复渲染一份居中的歌单标题。移动端标题保持原样。
@@ -187,6 +286,15 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
         ),
         const SizedBox(width: 8),
       ],
+      // 歌单内搜索：展开/收起歌曲列表上方的过滤输入框。
+      MiuixIconButton(
+        key: const Key('playlist-search-button'),
+        onPressed: _toggleSearch,
+        child: MiuixIcon(
+          vector: MiuixIcons.extended.byName(_searching ? 'close' : 'search')!,
+          size: 20,
+        ),
+      ),
     ],
     bodyBuilder: (context, topPadding) => _buildBody(topPadding),
   );
@@ -280,7 +388,9 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
     }
 
     final playlist = _playlist!;
-    final tracks = _tracks;
+    final allTracks = _tracks;
+    final tracks = _sortedTracks;
+    final isFiltering = _searchQuery.trim().isNotEmpty;
     final scrollView = CustomScrollView(
       physics: const AlwaysScrollableScrollPhysics(
         parent: ClampingScrollPhysics(),
@@ -293,6 +403,7 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
                 ? _DesktopPlaylistHeader(
                     playlist: playlist,
                     fallbackCoverUrl: widget.coverUrl,
+                    // 搜索过滤时「播放全部」作用于过滤后的列表，符合预期。
                     onPlayAll: tracks.isEmpty
                         ? null
                         : () => _play(tracks.first, tracks),
@@ -314,13 +425,49 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
                   ),
           ),
         ),
-        if (tracks.isEmpty)
+        // 常驻排序工具条：右对齐排序按钮，点击弹排序方式选择。
+        SliverToBoxAdapter(
+          child: _PlaylistSortBar(
+            mode: _sortMode,
+            onTap: () => _openSortSheet(context),
+            desktopLayout: widget.desktopLayout,
+          ),
+        ),
+        if (_searching)
+          SliverToBoxAdapter(
+            child: _PlaylistSearchField(
+              controller: _searchController,
+              focusNode: _searchFocusNode,
+              onChanged: (value) => setState(() => _searchQuery = value),
+              onClear: _closeSearch,
+              resultCount: isFiltering ? tracks.length : null,
+              desktopLayout: widget.desktopLayout,
+            ),
+          ),
+        if (allTracks.isEmpty)
           const SliverFillRemaining(
             hasScrollBody: false,
             child: CyreneEmptyState(
               icon: Icons.music_note,
               title: '歌单里还没有歌曲',
               description: '稍后再来看看吧。',
+            ),
+          )
+        else if (tracks.isEmpty)
+          // 有歌曲但被搜索过滤掉：给出「无匹配」提示，并可一键清空关键词。
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: CyreneEmptyState(
+              icon: Icons.search_off,
+              title: '没有匹配的歌曲',
+              description: '换个关键词试试，或清空搜索查看全部。',
+              action: MiuixButton(
+                onPressed: _closeSearch,
+                child: MiuixText(
+                  '清空搜索',
+                  style: MiuixTheme.of(context).textStyles.button,
+                ),
+              ),
             ),
           )
         else if (widget.desktopLayout)
@@ -1096,6 +1243,138 @@ class _ExpandableDescriptionState extends State<_ExpandableDescription> {
           ],
         );
       },
+    );
+  }
+}
+
+/// 歌单详情页内的搜索过滤框：随列表一起滚动，输入即过滤；右侧清除按钮
+/// 一键清空并关闭搜索。带搜索结果计数提示（仅过滤中显示）。
+class _PlaylistSearchField extends StatelessWidget {
+  const _PlaylistSearchField({
+    required this.controller,
+    required this.focusNode,
+    required this.onChanged,
+    required this.onClear,
+    required this.resultCount,
+    required this.desktopLayout,
+  });
+
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+
+  /// 过滤中的结果数；null 表示尚未过滤（关键词为空），不渲染计数。
+  final int? resultCount;
+  final bool desktopLayout;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = MiuixTheme.of(context);
+    final colors = theme.colors;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        desktopLayout ? 20 : 16,
+        0,
+        desktopLayout ? 20 : 16,
+        8,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          MiuixTextField(
+            controller: controller,
+            focusNode: focusNode,
+            label: '搜索歌单内歌曲',
+            useLabelAsPlaceholder: true,
+            singleLine: true,
+            leadingIcon: MiuixIcon(
+              vector: MiuixIcons.extended.byName('search')!,
+              size: 18,
+              tint: colors.onSurfaceVariantSummary,
+            ),
+            trailingIcon: MiuixIconButton(
+              onPressed: onClear,
+              child: MiuixIcon(
+                vector: MiuixIcons.extended.byName('close')!,
+                size: 16,
+                tint: colors.onSurfaceVariantSummary,
+              ),
+            ),
+            onChanged: onChanged,
+            textInputAction: TextInputAction.search,
+          ),
+          if (resultCount != null) ...[
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Text(
+                '匹配到 $resultCount 首歌曲',
+                style: theme.textStyles.body2.copyWith(
+                  color: colors.onSurfaceVariantSummary,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// 常驻排序工具条：右对齐的排序按钮，显示当前排序方式，点击弹出选择抽屉。
+class _PlaylistSortBar extends StatelessWidget {
+  const _PlaylistSortBar({
+    required this.mode,
+    required this.onTap,
+    required this.desktopLayout,
+  });
+
+  final PlaylistSortMode mode;
+  final VoidCallback onTap;
+  final bool desktopLayout;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = MiuixTheme.of(context);
+    final colors = theme.colors;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        desktopLayout ? 20 : 16,
+        4,
+        desktopLayout ? 20 : 16,
+        4,
+      ),
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: MiuixPressable(
+          onPressed: onTap,
+          borderRadius: BorderRadius.circular(20),
+          feedbackType: MiuixPressFeedbackType.sink,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                MiuixIcon(
+                  vector: MiuixIcons.extended.byName('sort')!,
+                  size: 16,
+                  tint: colors.onSurfaceVariantSummary,
+                ),
+                const SizedBox(width: 6),
+                MiuixText(
+                  mode.label,
+                  style: theme.textStyles.body2.copyWith(
+                    color: colors.onSurfaceVariantSummary,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

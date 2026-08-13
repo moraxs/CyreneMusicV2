@@ -8,6 +8,7 @@
 
 #include "accent_acrylic_handler.h"
 #include "smtc_handler.h"
+#include "taskbar_player_handler.h"
 #include "win32_window.h"
 #include "workerw_handler.h"
 
@@ -40,6 +41,9 @@ class FlutterWindow : public Win32Window {
 
   // WorkerW 壁纸层桥。
   std::unique_ptr<WorkerWHandler> workerw_handler_;
+
+  // 任务栏播放器桥。
+  std::unique_ptr<TaskbarPlayerHandler> taskbar_player_handler_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

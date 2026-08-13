@@ -10,17 +10,20 @@ import '../application/home/home_controller.dart';
 import '../application/playback/playback_controller.dart';
 import '../application/playlists/playlist_library_controller.dart';
 import '../application/search/search_controller.dart';
+import '../application/updates/update_controller.dart';
 import '../domain/models/discovery.dart';
 import '../features/discover/discover_page.dart';
 import '../features/home/now_listening_page.dart';
 import '../features/more/more_menu_drawer.dart';
 import '../features/player/mini_player.dart';
 import '../features/player/mobile/mobile_player_page.dart';
+import '../features/player/mobile/mobile_fullscreen_player_host.dart';
 import '../features/player/desktop_fullscreen_player_host.dart';
 import '../features/player/desktop_fullscreen_player_route.dart';
 import '../features/playlist/playlist_detail_page.dart';
 import '../features/profile/profile_page.dart';
 import '../features/search/search_page.dart';
+import '../features/updates/update_dialogs.dart';
 import '../presentation/cyrene/breakpoints.dart';
 import 'desktop/desktop_shell.dart';
 
@@ -50,6 +53,29 @@ class MusicAppShell extends StatefulWidget {
 
 class _MusicAppShellState extends State<MusicAppShell> {
   var _selectedIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // 启动后静默检查一次更新。放在外壳而不是 main：弹窗需要导航树里的
+    // context，main 的 initState 拿不到。首帧后再延迟几秒，避开启动期的
+    // 网络与布局高峰。
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkUpdateOnce());
+  }
+
+  /// 整个应用生命周期内只自动检查一次——外壳不会被重建，无需额外的重入保护。
+  Future<void> _checkUpdateOnce() async {
+    await Future<void>.delayed(const Duration(seconds: 4));
+    if (!mounted) return;
+
+    final update = UpdateController.instance;
+    final info = await update.check();
+    if (!mounted || info == null) return;
+    if (!await update.shouldPrompt(info)) return;
+    if (!mounted) return;
+
+    await showUpdateDialog(context, info);
+  }
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -230,6 +256,16 @@ class _MusicAppShellState extends State<MusicAppShell> {
             account: widget.account,
           ),
         ),
+      );
+      return;
+    }
+    // 移动端：外观设置选了 SuperCyrene 时进横屏 SuperCyrene 播放器。
+    if (shouldOpenMobileSuperCyrene()) {
+      pushMobileSuperCyrenePlayer(
+        context,
+        playback: widget.playback,
+        audioSources: widget.audioSources,
+        account: widget.account,
       );
       return;
     }

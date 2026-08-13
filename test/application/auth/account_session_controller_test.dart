@@ -104,6 +104,22 @@ class _FakeAuthRepository implements AuthRepository {
 
   @override
   Future<bool> validateToken(String token) async => tokenIsValid;
+
+  @override
+  Future<AuthResponse> register(
+    String email,
+    String username,
+    String password,
+    String code,
+  ) async => const AuthResponse(success: true);
+
+  @override
+  Future<AuthResponse> sendRegisterCode(String email, String username) async =>
+      const AuthResponse(success: true);
+
+  @override
+  Future<({bool success, bool enabled})> checkRegistrationStatus() async =>
+      (success: true, enabled: true);
 }
 
 class _MemoryAuthSessionStore implements AuthSessionStore {

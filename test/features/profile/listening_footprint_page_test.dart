@@ -167,6 +167,22 @@ class _AuthRepositoryStub implements AuthRepository {
 
   @override
   Future<bool> validateToken(String token) async => true;
+
+  @override
+  Future<AuthResponse> register(
+    String email,
+    String username,
+    String password,
+    String code,
+  ) async => const AuthResponse(success: false);
+
+  @override
+  Future<AuthResponse> sendRegisterCode(String email, String username) async =>
+      const AuthResponse(success: false);
+
+  @override
+  Future<({bool success, bool enabled})> checkRegistrationStatus() async =>
+      (success: true, enabled: true);
 }
 
 class _MemoryAuthSessionStore implements AuthSessionStore {

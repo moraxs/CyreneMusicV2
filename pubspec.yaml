@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+version: 2.0.0+1
 
 environment:
   sdk: ^3.12.2
@@ -57,6 +57,19 @@ dependencies:
   # 拖拽移动与最小化/最大化/关闭。仅桌面平台初始化(移动端不触碰)。
   window_manager: ^0.5.2
   flutter_acrylic: ^1.1.4
+  # 第三方账号扫码绑定：后端返回二维码内容 URL（网易云/酷狗）时本地生成图片。
+  qr_flutter: ^4.1.0
+
+  # 应用内自动更新：
+  # - archive: Windows 更新包（{version}-full.zip）解压。
+  # - open_filex: 安卓拉起系统安装器装 APK；其 manifest 顺带合并进 FileProvider，
+  #   因此本项目无需自行声明 <provider> 与 file_paths.xml。
+  # - path_provider: 安卓下载目录（应用私有目录，故不需要外部存储权限）。
+  # - path: 路径拼接与 normalize（解压时防目录穿越）。
+  archive: ^4.0.7
+  open_filex: ^4.4.0
+  path_provider: ^2.1.6
+  path: ^1.9.0
 
   # 暂时停用：该版本在 Windows 上触发 Kotlin 增量编译跨盘符路径异常。
   # adaptive_platform_ui: ^0.1.110
@@ -71,6 +84,7 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.1
 
 # 临时本地覆盖：验证 flutter_miuix 大标题折叠修复（1.0.9，按位置直接映射
 # 折叠量，根治"折叠后稍微下滑弹回大标题"）。1.0.9 发布到 pub.dev 后，
@@ -102,6 +116,10 @@ flutter:
     - assets/icons/BxShuffle.svg
     - assets/icons/LucideRepeat.svg
     - assets/icons/MaterialSymbolsRepeatOneRounded.svg
+    # Windows 更新器脚本：运行时经 rootBundle 读出、释放到磁盘后由提权的
+    # PowerShell 执行（覆盖安装目录并重启）。漏掉这行 Windows 更新会在
+    # rootBundle.loadString 处直接抛异常。
+    - windows/runner/updater.ps1
 
   # 全局字体：MiSans（小米 HyperOS 系统字体），统一移动端与桌面端字形。
   # 此前该 ttf 只躺在 assets/ 里没有声明，歌词字体选项里的 'MiSans' 一直在
@@ -156,3 +174,20 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# 全局应用图标：用 flutter_launcher_icons 从单张 2048x2048 PNG 一键生成
+# Android 各密度 mipmap、iOS 尺寸、Web 图标，并把 Windows 的 app_icon.ico
+# 从 PNG 转成多分辨率 ICO（Windows Runner 只认 .ico）。运行：
+#   flutter pub get && dart run flutter_launcher_icons
+flutter_launcher_icons:
+  android: true
+  ios: true
+  web:
+    generate: true
+    image_path: "assets/icons/new_ico_white.png"
+  windows:
+    generate: true
+    image_path: "assets/icons/new_ico_white.png"
+    icon_size: 256
+  image_path: "assets/icons/new_ico_white.png"
+  remove_alpha_ios: true

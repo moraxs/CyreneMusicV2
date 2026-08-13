@@ -46,6 +46,11 @@ bool FlutterWindow::OnCreate() {
       flutter_controller_->engine()->messenger(), GetHandle());
   workerw_handler_->RegisterChannels();
 
+  // 任务栏播放器桥：注册 MethodChannel。
+  taskbar_player_handler_ = std::make_unique<TaskbarPlayerHandler>(
+      flutter_controller_->engine()->messenger(), GetHandle());
+  taskbar_player_handler_->RegisterChannels();
+
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
   });
@@ -60,6 +65,7 @@ bool FlutterWindow::OnCreate() {
 
 void FlutterWindow::OnDestroy() {
   // 先释放原生桥（撤销 WinRT 事件订阅 / 平台通道），再销毁引擎。
+  taskbar_player_handler_.reset();
   workerw_handler_.reset();
   accent_acrylic_handler_.reset();
   smtc_handler_.reset();

@@ -1,4 +1,4 @@
-package com.example.cyrene_music_reborn
+package com.cyrene.music
 
 import android.app.Notification
 import android.app.NotificationChannel

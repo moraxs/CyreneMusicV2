@@ -128,6 +128,21 @@ class AccountSessionController extends ChangeNotifier {
     }
   }
 
+  /// 注册相关为叶子操作，不触碰会话状态，仅透传到仓库层。
+  /// 注册成功后由调用方复用 [login] 完成自动登录与会话落盘。
+  Future<AuthResponse> register(
+    String email,
+    String username,
+    String password,
+    String code,
+  ) => _repository.register(email, username, password, code);
+
+  Future<AuthResponse> sendRegisterCode(String email, String username) =>
+      _repository.sendRegisterCode(email, username);
+
+  Future<({bool success, bool enabled})> checkRegistrationStatus() =>
+      _repository.checkRegistrationStatus();
+
   Future<void> logout() async {
     ++_requestId;
     _setSignedOut();

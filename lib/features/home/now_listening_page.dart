@@ -11,9 +11,13 @@ import '../../application/home/home_controller.dart';
 import '../../application/playback/playback_controller.dart';
 import '../../domain/models/discovery.dart';
 import '../../domain/models/media_url.dart';
+import '../../domain/models/music_source.dart';
 import '../../domain/models/track.dart';
+import '../../infrastructure/services/discovery_service.dart';
+import '../../infrastructure/storage/spotify_charts_cache.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
 import '../../presentation/cyrene/cyrene_toast.dart';
+import '../playlist/playlist_detail_page.dart';
 import '../settings/login_page.dart';
 import 'daily_recommend_page.dart';
 import 'home_song_row.dart';
@@ -45,6 +49,11 @@ class NowListeningPage extends StatefulWidget {
 class _NowListeningPageState extends State<NowListeningPage>
     with AutomaticKeepAliveClientMixin {
   var _tab = _HomeTab.leaderboard;
+  var _leaderboardSource = _LeaderboardSource.spotify; // 默认 Spotify，网易云可选
+  List<Toplist> _spotifyToplists = const [];
+  bool _spotifyToplistsLoading = false;
+  String? _spotifyToplistsError;
+  int _spotifyLoadGeneration = 0;
   String? _loadedToken;
 
   // 派生数据缓存：仅当控制器发布新数据对象时才重新转换原始 JSON，
@@ -67,10 +76,13 @@ class _NowListeningPageState extends State<NowListeningPage>
     super.initState();
     widget.account.addListener(_onAccountChanged);
     _load();
+    // 榜单默认源是 Spotify（网易云可选），首屏即需加载，不等用户切换。
+    _loadSpotifyToplists();
   }
 
   @override
   void dispose() {
+    _spotifyLoadGeneration++;
     widget.account.removeListener(_onAccountChanged);
     super.dispose();
   }
@@ -91,6 +103,89 @@ class _NowListeningPageState extends State<NowListeningPage>
             : _HomeTab.leaderboard;
       });
     });
+  }
+
+  Future<void> _selectLeaderboardSource(_LeaderboardSource source) async {
+    if (_leaderboardSource == source) return;
+    setState(() => _leaderboardSource = source);
+    if (source == _LeaderboardSource.spotify && _spotifyToplists.isEmpty) {
+      await _loadSpotifyToplists();
+    }
+  }
+
+  /// Spotify 榜单两阶段加载：先读本地快照秒开（loading=false 静默刷新），
+  /// 后台请求后端刷新并回写；失败有缓存则保留不闪错误，无缓存则设错误+重试。
+  /// 与桌面首页 _loadSpotifyToplists 同款，复用 SpotifyChartsCache + getSpotifyToplists。
+  Future<void> _loadSpotifyToplists() async {
+    if (_spotifyToplistsLoading) return;
+    final generation = ++_spotifyLoadGeneration;
+
+    final cached = await SpotifyChartsCache.instance.read();
+    if (!mounted || generation != _spotifyLoadGeneration) return;
+
+    final hasCache = cached != null && cached.isNotEmpty;
+    setState(() {
+      if (hasCache) {
+        _spotifyToplists = cached;
+        _spotifyToplistsError = null;
+        _spotifyToplistsLoading = false;
+      } else {
+        _spotifyToplistsLoading = true;
+        _spotifyToplistsError = null;
+      }
+    });
+
+    final toplists = await DiscoveryService.instance.getSpotifyToplists();
+    if (!mounted || generation != _spotifyLoadGeneration) return;
+
+    setState(() {
+      if (toplists.isNotEmpty) {
+        _spotifyToplists = toplists;
+        _spotifyToplistsError = null;
+        SpotifyChartsCache.instance.write(toplists);
+      } else if (!hasCache) {
+        _spotifyToplistsError = 'Spotify 榜单暂时不可用，请确认后端与 spotify-streamer 已启动';
+      }
+      _spotifyToplistsLoading = false;
+    });
+  }
+
+  /// 打开榜单详情：Spotify 榜单直接 push 详情页（source=spotify、曲目预填、
+  /// 无重载闪烁）；网易云走 widget.onOpenPlaylist（默认 netease 源）。
+  void _openToplist(Toplist toplist) {
+    if (toplist.source == MusicSource.spotify) {
+      final tracks = toplist.tracks;
+      Navigator.of(context).push(
+        CupertinoPageRoute<void>(
+          builder: (_) => PlaylistDetailPage(
+            playlistId: toplist.externalId ?? toplist.id,
+            title: toplist.name,
+            coverUrl: toplist.coverImgUrl,
+            playback: widget.playback,
+            token: widget.account.token,
+            desktopLayout: false,
+            source: MusicSource.spotify,
+            reloadable: toplist.externalId != null,
+            initialPlaylist: PlaylistDetail(
+              id: toplist.id,
+              name: toplist.name,
+              coverImgUrl: toplist.coverImgUrl,
+              description: toplist.description,
+              source: MusicSource.spotify,
+              tracks: tracks,
+              playCount: 0,
+              creator: 'Spotify',
+              trackCount: tracks.length,
+              createTime: 0,
+              updateTime: 0,
+              tags: const ['Spotify'],
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+    widget.onOpenPlaylist(toplist.id, toplist.name, toplist.coverImgUrl);
   }
 
   @override
@@ -283,9 +378,45 @@ class _NowListeningPageState extends State<NowListeningPage>
   // ===== 榜单 =====
 
   List<Widget> _leaderboardSlivers(HomeState state) {
-    final toplists = state.toplists;
+    final isSpotify = _leaderboardSource == _LeaderboardSource.spotify;
+    final toplists = isSpotify ? _spotifyToplists : state.toplists;
+    final loading = isSpotify && _spotifyToplistsLoading;
+    final error = isSpotify ? _spotifyToplistsError : null;
     final loggedIn = widget.account.state.isLoggedIn;
     return [
+      // 榜单源切换（始终显示：榜单 tab 对登录/未绑定用户都展示，两源均不依赖登录态）。
+      // 与桌面首页一致，改用下拉选择框而非 Tab 栏，省横向空间且语义更清晰。
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(12, 14, 12, 0),
+        sliver: SliverToBoxAdapter(
+          child: Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: MiuixOverlayDropdownMenu(
+              title: isSpotify ? 'Spotify' : '网易云音乐',
+              insideMargin: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 8,
+              ),
+              entry: MiuixDropdownEntry(
+                items: [
+                  MiuixDropdownItem(
+                    text: 'Spotify',
+                    selected: isSpotify,
+                    onClick: () =>
+                        _selectLeaderboardSource(_LeaderboardSource.spotify),
+                  ),
+                  MiuixDropdownItem(
+                    text: '网易云音乐',
+                    selected: !isSpotify,
+                    onClick: () =>
+                        _selectLeaderboardSource(_LeaderboardSource.netease),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
       if (!loggedIn)
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(12, 18, 12, 0),
@@ -293,7 +424,28 @@ class _NowListeningPageState extends State<NowListeningPage>
             child: _LoginPromptCard(onLogin: _openLogin),
           ),
         ),
-      if (toplists.isEmpty)
+      if (loading && toplists.isEmpty)
+        const SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(child: MiuixCircularProgressIndicator()),
+        )
+      else if (toplists.isEmpty && error != null)
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: CyreneEmptyState(
+            icon: Icons.cloud_off,
+            title: 'Spotify 榜单加载失败',
+            description: error,
+            action: MiuixButton(
+              onPressed: _loadSpotifyToplists,
+              child: MiuixText(
+                '重试',
+                style: MiuixTheme.of(context).textStyles.button,
+              ),
+            ),
+          ),
+        )
+      else if (toplists.isEmpty)
         const SliverFillRemaining(
           hasScrollBody: false,
           child: CyreneEmptyState(
@@ -324,11 +476,7 @@ class _NowListeningPageState extends State<NowListeningPage>
       SliverToBoxAdapter(
         child: _ToplistHeader(
           name: toplist.name,
-          onOpen: () => widget.onOpenPlaylist(
-            toplist.id,
-            toplist.name,
-            toplist.coverImgUrl,
-          ),
+          onOpen: () => _openToplist(toplist),
         ),
       ),
       SliverPadding(
@@ -353,7 +501,9 @@ class _NowListeningPageState extends State<NowListeningPage>
   }
 
   void _playShuffledToplists() {
-    final all = widget.home.state.toplists.expand(_tracksFor).toList();
+    final isSpotify = _leaderboardSource == _LeaderboardSource.spotify;
+    final toplists = isSpotify ? _spotifyToplists : widget.home.state.toplists;
+    final all = toplists.expand(_tracksFor).toList();
     if (all.isEmpty) return;
     all.shuffle(Random());
     widget.playback.playTrack(all.first, queue: all);
@@ -382,9 +532,10 @@ class _NowListeningPageState extends State<NowListeningPage>
   }
 
   List<Track> _tracksFor(Toplist toplist) {
-    final toplists = widget.home.state.toplists;
-    if (!identical(_toplistCacheSource, toplists)) {
-      _toplistCacheSource = toplists;
+    final isSpotify = _leaderboardSource == _LeaderboardSource.spotify;
+    final source = isSpotify ? _spotifyToplists : widget.home.state.toplists;
+    if (!identical(_toplistCacheSource, source)) {
+      _toplistCacheSource = source;
       _toplistTracks.clear();
     }
     return _toplistTracks.putIfAbsent(
@@ -528,6 +679,8 @@ class _NowListeningPageState extends State<NowListeningPage>
 }
 
 enum _HomeTab { recommend, leaderboard }
+
+enum _LeaderboardSource { netease, spotify }
 
 /// 问候头：大字问候语 + 副标题 + 右侧刷新按钮（对应原版 GreetingHeader + 顶栏动作）。
 class _HomeHeader extends StatelessWidget {

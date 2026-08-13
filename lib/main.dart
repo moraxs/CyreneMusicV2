@@ -12,17 +12,20 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 import 'app/app_dependencies.dart';
+import 'app/app_gate.dart';
 import 'app/app_version.dart';
 import 'app/debug_probe.dart';
 import 'app/desktop/desktop_fluent_theme.dart';
 import 'app/desktop/window_accent_acrylic.dart';
-import 'app/music_app_shell.dart';
 import 'application/playback/playback_history_recorder.dart';
 import 'application/stores/appearance_settings_store.dart';
 import 'application/stores/fullscreen_settings_store.dart';
+import 'application/stores/onboarding_store.dart';
 import 'application/stores/window_material_settings_store.dart';
 import 'features/desktop_player/desktop_player_app.dart';
 import 'features/desktop_player/desktop_player_controller.dart';
+import 'features/taskbar_player/taskbar_player_app.dart';
+import 'features/taskbar_player/taskbar_player_controller.dart';
 import 'features/player/mobile/compat/lyric_font_service.dart';
 import 'features/player/mobile/compat/lyric_style_service.dart';
 import 'features/player/mobile/compat/player_background_service.dart';
@@ -37,11 +40,12 @@ import 'presentation/cyrene/cyrene_toast.dart';
 
 /// 应用入口。
 ///
-/// runner 自托管的桌面歌词子引擎使用同一个入口，通过 args 区分：
+/// runner 自托管的子引擎使用同一个入口，通过 args 区分：
 /// - 主窗口：args 为空或包含 flutter 命令行参数
 /// - 壁纸层子引擎：args 含 'wallpaper-player'（由 desktop_lyrics_window.cpp 的
 ///   DartProject 入口参数传入，runner 自建 WS_POPUP 覆盖层并跑第二个引擎）
-/// - 控制条子引擎：args 含 'control-bar'（占位，尚未启用）
+/// - 任务栏播放器子引擎：args 含 'taskbar-player'（由 taskbar_player_window.cpp
+///   传入，runner 自建置顶 WS_POPUP 窄条并跑第三个引擎）
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -50,6 +54,15 @@ Future<void> main(List<String> args) async {
   // entrypoint args = ["wallpaper-player"]，走此分支挂桌面歌词 App。
   if (args.contains('wallpaper-player')) {
     runApp(const DesktopPlayerApp());
+    return;
+  }
+
+  // ===== 任务栏播放器子引擎入口分支 =====
+  // runner 的 taskbar_player_window.cpp 传入 entrypoint args =
+  // ["taskbar-player"]。这条窄栏只显示封面/标题/播放态/进度，不需要
+  // media_kit、窗口效果、偏好存储等任何主窗口的初始化。
+  if (args.contains('taskbar-player')) {
+    runApp(const TaskbarPlayerApp());
     return;
   }
 
@@ -81,6 +94,9 @@ Future<void> main(List<String> args) async {
     if (!probeNoGlass) LiquidGlassWidgets.initialize(),
     UrlService.instance.init(),
     FullscreenSettingsStore.instance.init(),
+    // 首启引导的进度标记（协议是否已同意 / 引导是否走完）。必须在首帧前就绪，
+    // 否则老用户冷启动会先闪一帧引导页再切回主界面（见 AppGate）。
+    OnboardingStore.instance.init(),
     // 开发者模式状态（决定设置页「开发者选项」入口与性能叠加层）。
     DeveloperModeService.instance.ensureLoaded(),
     // 移植版播放器（原版全屏播放器）的样式/背景/字体偏好，与原版 main 一致。
@@ -104,6 +120,26 @@ Future<void> main(List<String> args) async {
       debugPrint('[桌面播放器] 启动恢复失败: $e');
       return null;
     });
+  }
+  // 任务栏播放器同理：状态由主窗口推送，开关状态跨启动恢复。
+  TaskbarPlayerController.instance.playback = dependencies.playback;
+  // 拖拽后的形态与悬浮位置由原生回报，落到偏好存储，下次启动原样恢复。
+  TaskbarPlayerController.instance.onPlacementChanged =
+      FullscreenSettingsStore.instance.setTaskbarPlayerPlacement;
+  if (Platform.isWindows &&
+      FullscreenSettingsStore.instance.taskbarPlayerEnabled) {
+    final store = FullscreenSettingsStore.instance;
+    TaskbarPlayerController.instance
+        .enable(
+          store.taskbarPlayerAlignment,
+          mode: store.taskbarPlayerMode,
+          x: store.taskbarPlayerFloatingX,
+          y: store.taskbarPlayerFloatingY,
+        )
+        .catchError((e) {
+          debugPrint('[任务栏播放器] 启动恢复失败: $e');
+          return null;
+        });
   }
   Widget app = MyApp(dependencies: dependencies);
   if (!probeNoGlass) {
@@ -309,6 +345,22 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 播放进度平时是节流落盘的（见 PlaybackController._positionPersistInterval），
+    // 离开前台时补一次精确值：安卓上进程随时可能被系统直接回收，届时不会再有
+    // 任何回调，只有这里写下的位置能被下次冷启动读回。
+    switch (state) {
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.detached:
+        _dependencies.playback.flush();
+      case AppLifecycleState.resumed:
+        break;
+    }
+  }
+
+  @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _historyRecorder.dispose();
@@ -405,15 +457,22 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       // edgeToEdge + 透明系统栏：图标随明暗自适应，浅色模式不再白底白字。
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
       SystemChrome.setSystemUIOverlayStyle(_systemOverlayStyle(brightness));
-      return MiuixThemeController(
-        colorSchemeMode: _colorSchemeMode(appearance),
-        // keyColor 为空时 Monet 模式读取壁纸取色（Android 12+）。
-        keyColor: appearance.followSystemColor ? null : appearance.seedColor,
-        // 全应用统一 MiSans：库默认的 textStyles 不带字体族，Miuix 组件会吃
-        // 平台默认字体（Windows Segoe UI / 安卓 Roboto），导致桌面端各页面
-        // 字形粗细不一。字号字重不动，只补字体族。
-        textStyles: CyreneMiuixTheme.textStyles(),
-        child: _buildApp(),
+      // 根部 AnnotatedRegion：按主题自适应状态栏图标明暗。普通页面无自己的
+      // AnnotatedRegion 时走这里（浅色黑字 / 深色白字）；播放器/歌词页等深色
+      // 页面自带 AnnotatedRegion 会作为栈顶覆盖，pop 后自动回退到这里的自适应
+      // 样式——避免「进过深色播放器后返回浅色页面，状态栏仍钉成白字」。
+      return AnnotatedRegion<SystemUiOverlayStyle>(
+        value: _systemOverlayStyle(brightness),
+        child: MiuixThemeController(
+          colorSchemeMode: _colorSchemeMode(appearance),
+          // keyColor 为空时 Monet 模式读取壁纸取色（Android 12+）。
+          keyColor: appearance.followSystemColor ? null : appearance.seedColor,
+          // 全应用统一 MiSans：库默认的 textStyles 不带字体族，Miuix 组件会吃
+          // 平台默认字体（Windows Segoe UI / 安卓 Roboto），导致桌面端各页面
+          // 字形粗细不一。字号字重不动，只补字体族。
+          textStyles: CyreneMiuixTheme.textStyles(),
+          child: _buildApp(),
+        ),
       );
     },
   );
@@ -467,7 +526,9 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
             ),
           );
         },
-        home: MusicAppShell(
+        // 入口分流：首次启动走三步引导（协议 / 登录 / 音源），已完成则进主
+        // 外壳。用户事后退出登录也会由它跳回登录步（见 AppGate）。
+        home: AppGate(
           account: _dependencies.account,
           audioSources: _dependencies.audioSources,
           discover: _dependencies.discover,

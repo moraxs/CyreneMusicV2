@@ -15,6 +15,7 @@ import '../../domain/models/playlist.dart';
 import '../../domain/models/track.dart';
 import '../../infrastructure/services/history_service.dart';
 import '../../infrastructure/services/discovery_service.dart';
+import '../../infrastructure/storage/spotify_charts_cache.dart';
 import '../../presentation/cyrene/cyrene_toast.dart';
 import '../history/history_page.dart';
 import '../playlist/playlist_detail_page.dart';
@@ -97,7 +98,7 @@ class DesktopHomePage extends StatefulWidget {
 
 class _DesktopHomePageState extends State<DesktopHomePage> {
   var _tab = _HomeTab.recommend;
-  var _leaderboardSource = _LeaderboardSource.netease;
+  var _leaderboardSource = _LeaderboardSource.spotify;
   List<Toplist> _spotifyToplists = const [];
   bool _spotifyToplistsLoading = false;
   String? _spotifyToplistsError;
@@ -133,6 +134,8 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     _loadedToken = widget.account.token;
     _loadAll();
     _loadHistory();
+    // 榜单默认源是 Spotify（网易云作为可选项），首屏即需加载，不等用户切换。
+    _loadSpotifyToplists();
   }
 
   @override
@@ -154,18 +157,41 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
   Future<void> _loadSpotifyToplists() async {
     if (_spotifyToplistsLoading) return;
     final generation = ++_spotifyLoadGeneration;
+
+    // 1) 先读本地快照：非空则立即绘制（loading 保持 false，后台静默刷新，
+    //    不闪 spinner；_LeaderboardDashboard 在 entries 非空时本就不显示 spinner）。
+    final cached = await SpotifyChartsCache.instance.read();
+    if (!mounted || generation != _spotifyLoadGeneration) return;
+
+    final hasCache = cached != null && cached.isNotEmpty;
     setState(() {
-      _spotifyToplistsLoading = true;
-      _spotifyToplistsError = null;
+      if (hasCache) {
+        _spotifyToplists = cached;
+        _spotifyToplistsError = null;
+        _spotifyToplistsLoading = false;
+      } else {
+        // 冷启动无缓存：显示 spinner 等待首屏。
+        _spotifyToplistsLoading = true;
+        _spotifyToplistsError = null;
+      }
     });
+
+    // 2) 后台刷新：有缓存时为静默刷新（loading=false），无缓存时表现为可见 loading。
     final toplists = await DiscoveryService.instance.getSpotifyToplists();
     if (!mounted || generation != _spotifyLoadGeneration) return;
+
     setState(() {
-      _spotifyToplists = toplists;
-      _spotifyToplistsLoading = false;
-      if (toplists.isEmpty) {
+      if (toplists.isNotEmpty) {
+        _spotifyToplists = toplists;
+        _spotifyToplistsError = null;
+        // 3) 成功且非空 → 回写快照（best-effort，store 内部 try/catch，不 await）。
+        SpotifyChartsCache.instance.write(toplists);
+      } else if (!hasCache) {
+        // 既无缓存又无新数据 → 维持原错误提示 + 重新加载。
         _spotifyToplistsError = 'Spotify 榜单暂时不可用，请确认后端与 spotify-streamer 已启动';
       }
+      // hasCache && toplists.isEmpty（后端整体失败）→ 保留缓存，不设错误，不闪。
+      _spotifyToplistsLoading = false;
     });
   }
 

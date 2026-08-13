@@ -1,5 +1,6 @@
 import 'dart:ui' show ImageFilter;
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart' hide RepeatMode;
 import 'package:flutter_svg/flutter_svg.dart';
 
@@ -111,110 +112,129 @@ class _SuperCyreneControlPanelState extends State<SuperCyreneControlPanel> {
   @override
   Widget build(BuildContext context) {
     final activeLauncher = _open || _hoveringLauncher;
+    // 移动端横屏下屏幕高度很矮（约 360~420 逻辑像素），而面板固定 560 高，
+    // 会整体溢出屏幕。这里按可用高度缩放整个面板，桌面端恒为 1（不受影响）。
+    final scale = _panelScale(context);
     return SizedBox(
       width: 256,
-      height: 560,
-      child: Stack(
+      height: 560 * scale,
+      child: Transform.scale(
+        scale: scale,
         alignment: Alignment.bottomLeft,
-        clipBehavior: Clip.none,
-        children: [
-          Positioned(
-            left: 0,
-            bottom: 64,
-            child: IgnorePointer(
-              ignoring: !_open,
-              child: AnimatedSlide(
-                offset: _open ? Offset.zero : const Offset(0, .035),
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeOutCubic,
-                child: AnimatedScale(
-                  scale: _open ? 1 : .98,
-                  alignment: Alignment.bottomLeft,
+        child: Stack(
+          alignment: Alignment.bottomLeft,
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              left: 0,
+              bottom: 64,
+              child: IgnorePointer(
+                ignoring: !_open,
+                child: AnimatedSlide(
+                  offset: _open ? Offset.zero : const Offset(0, .035),
                   duration: const Duration(milliseconds: 300),
                   curve: Curves.easeOutCubic,
-                  child: AnimatedOpacity(
-                    opacity: _open ? 1 : 0,
+                  child: AnimatedScale(
+                    scale: _open ? 1 : .98,
+                    alignment: Alignment.bottomLeft,
                     duration: const Duration(milliseconds: 300),
-                    child: _Panel(
-                      playback: widget.playback,
-                      track: widget.track,
-                      cover: widget.cover,
-                      favorite: _playlistIds.isNotEmpty,
-                      lyricsTheme: widget.lyricsTheme,
-                      onLyricsThemeChanged: widget.onLyricsThemeChanged,
-                      onClose: () => setState(() => _open = false),
-                      onFavorite: _toggleFavorite,
-                      onQueue: () => Navigator.of(context, rootNavigator: true)
-                          .push(
-                        DesktopFullscreenPlayerRoute(
-                          builder: (_) => SuperCyreneSongGallery(
-                            playback: widget.playback,
-                            account: widget.account,
-                          ),
+                    curve: Curves.easeOutCubic,
+                    child: AnimatedOpacity(
+                      opacity: _open ? 1 : 0,
+                      duration: const Duration(milliseconds: 300),
+                      child: _Panel(
+                        playback: widget.playback,
+                        track: widget.track,
+                        cover: widget.cover,
+                        favorite: _playlistIds.isNotEmpty,
+                        lyricsTheme: widget.lyricsTheme,
+                        onLyricsThemeChanged: widget.onLyricsThemeChanged,
+                        onClose: () => setState(() => _open = false),
+                        onFavorite: _toggleFavorite,
+                        onQueue: () =>
+                            Navigator.of(context, rootNavigator: true).push(
+                              DesktopFullscreenPlayerRoute(
+                                builder: (_) => SuperCyreneSongGallery(
+                                  playback: widget.playback,
+                                  account: widget.account,
+                                ),
+                              ),
+                            ),
+                        onRepeat: () {
+                          final mode = widget.playback.state.repeatMode;
+                          widget.playback.setRepeatMode(_nextRepeat(mode));
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            MouseRegion(
+              onEnter: (_) => setState(() => _hoveringLauncher = true),
+              onExit: (_) => setState(() => _hoveringLauncher = false),
+              child: AnimatedSlide(
+                offset: !_open && _hoveringLauncher
+                    ? const Offset(0, -.04)
+                    : Offset.zero,
+                duration: const Duration(milliseconds: 200),
+                child: GestureDetector(
+                  onTap: () => setState(() => _open = !_open),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 300),
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: _open
+                          ? Colors.white.withValues(alpha: .12)
+                          : activeLauncher
+                          ? Colors.white.withValues(alpha: .08)
+                          : Colors.black.withValues(alpha: .18),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: Colors.white.withValues(
+                          alpha: activeLauncher ? .30 : .15,
                         ),
                       ),
-                      onRepeat: () {
-                        final mode = widget.playback.state.repeatMode;
-                        widget.playback.setRepeatMode(_nextRepeat(mode));
-                      },
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x59000000),
+                          blurRadius: 40,
+                          offset: Offset(0, 12),
+                        ),
+                      ],
                     ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          MouseRegion(
-            onEnter: (_) => setState(() => _hoveringLauncher = true),
-            onExit: (_) => setState(() => _hoveringLauncher = false),
-            child: AnimatedSlide(
-              offset: !_open && _hoveringLauncher
-                  ? const Offset(0, -.04)
-                  : Offset.zero,
-              duration: const Duration(milliseconds: 200),
-              child: GestureDetector(
-                onTap: () => setState(() => _open = !_open),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: _open
-                        ? Colors.white.withValues(alpha: .12)
-                        : activeLauncher
-                        ? Colors.white.withValues(alpha: .08)
-                        : Colors.black.withValues(alpha: .18),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: Colors.white.withValues(
-                        alpha: activeLauncher ? .30 : .15,
-                      ),
-                    ),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x59000000),
-                        blurRadius: 40,
-                        offset: Offset(0, 12),
-                      ),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(16),
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-                      child: const Icon(
-                        Icons.music_note_rounded,
-                        size: 20,
-                        color: Colors.white,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+                        child: const Icon(
+                          Icons.music_note_rounded,
+                          size: 20,
+                          color: Colors.white,
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
+  }
+
+  /// 移动端把整个面板缩放到能放进屏幕高度；桌面端恒为 1。
+  double _panelScale(BuildContext context) {
+    if (defaultTargetPlatform == TargetPlatform.windows) return 1;
+    final screenH = MediaQuery.sizeOf(context).height;
+    const fullHeight = 560.0;
+    const launcherSpace = 64.0;
+    const safetyMargin = 16.0;
+    final available = screenH - launcherSpace - safetyMargin;
+    if (available <= 0) return 0.5;
+    return (available / fullHeight).clamp(0.5, 1.0);
   }
 }
 

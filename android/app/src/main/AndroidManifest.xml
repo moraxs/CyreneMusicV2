@@ -5,8 +5,12 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- 前台服务：保持媒体通知在锁屏/后台存活（预留，当前用通知即可） -->
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- 应用内更新：Android 8.0+ 拉起系统安装器安装 APK 需要此权限。
+         APK 下载到应用私有目录（getApplicationSupportDirectory），故不需要
+         外部存储权限；FileProvider 由 open_filex 插件的 manifest 合并提供。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <application
-        android:label="cyrene_music_reborn"
+        android:label="CyreneMusic"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:networkSecurityConfig="@xml/network_security_config">

@@ -136,9 +136,11 @@ class _CyreneOverlayPageState<T> extends State<_CyreneOverlayPage<T>> {
     );
     return PopScope(
       // 系统返回键先走 Miuix 退场动画，动画结束后再由 onDismissFinished pop。
+      // barrierDismissible=false（如强制更新弹窗）时彻底吞掉返回键——
+      // 此类弹窗本就不允许以任何方式关闭，遮罩与系统返回应同等对待。
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) dismiss();
+        if (!didPop && widget.barrierDismissible) dismiss();
       },
       child: MiuixPopupScope(
         establishRoot: true,

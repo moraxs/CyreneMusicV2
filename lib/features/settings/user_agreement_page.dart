@@ -7,6 +7,32 @@ import '../../presentation/cyrene/cyrene_page.dart';
 class UserAgreementPage extends StatelessWidget {
   const UserAgreementPage({super.key});
 
+  @override
+  Widget build(BuildContext context) => CyrenePage(
+    title: '用户协议',
+    bodyBuilder: (context, topPadding) => UserAgreementBody(
+      padding: topPadding + const EdgeInsets.fromLTRB(24, 4, 24, 40),
+    ),
+  );
+}
+
+/// 协议正文本体，不含页面骨架。
+///
+/// 「关于」里的 [UserAgreementPage] 与首启引导的协议步骤共用：协议文本必须
+/// 只有一份，否则两处会随时间漂移，用户在引导里同意的和事后能查阅的就不是
+/// 同一份东西了。引导页额外需要 [controller] 来判断「是否已读到底部」。
+class UserAgreementBody extends StatelessWidget {
+  const UserAgreementBody({
+    super.key,
+    this.padding = const EdgeInsets.fromLTRB(24, 4, 24, 40),
+    this.controller,
+  });
+
+  final EdgeInsets padding;
+
+  /// 滚动控制器；引导页借它监听是否已滚到底部（未读完不允许同意）。
+  final ScrollController? controller;
+
   static const List<(String, List<String>)> _sections = [
     (
       'CyreneMusic 使用协议',
@@ -71,47 +97,45 @@ class UserAgreementPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = MiuixTheme.of(context);
-    return CyrenePage(
-      title: '用户协议',
-      bodyBuilder: (context, topPadding) => ListView(
-        physics: const BouncingScrollPhysics(),
-        padding: topPadding + const EdgeInsets.fromLTRB(24, 4, 24, 40),
-        children: [
-          for (final (title, paragraphs) in _sections) ...[
-            Padding(
-              padding: const EdgeInsets.only(top: 24, bottom: 12),
-              child: Text(
-                title,
-                style: theme.textStyles.title4.copyWith(
-                  color: theme.colors.onBackground,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-            for (final paragraph in paragraphs)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Text(
-                  paragraph,
-                  style: theme.textStyles.body2.copyWith(
-                    color: theme.colors.onSurfaceVariantSummary,
-                    height: 1.6,
-                  ),
-                ),
-              ),
-          ],
-          const SizedBox(height: 16),
-          Align(
-            alignment: Alignment.centerRight,
+    return ListView(
+      controller: controller,
+      physics: const BouncingScrollPhysics(),
+      padding: padding,
+      children: [
+        for (final (title, paragraphs) in _sections) ...[
+          Padding(
+            padding: const EdgeInsets.only(top: 24, bottom: 12),
             child: Text(
-              '最新更新时间：2026年2月4日',
-              style: theme.textStyles.footnote1.copyWith(
-                color: theme.colors.onSurfaceVariantSummary,
+              title,
+              style: theme.textStyles.title4.copyWith(
+                color: theme.colors.onBackground,
+                fontWeight: FontWeight.bold,
               ),
             ),
           ),
+          for (final paragraph in paragraphs)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                paragraph,
+                style: theme.textStyles.body2.copyWith(
+                  color: theme.colors.onSurfaceVariantSummary,
+                  height: 1.6,
+                ),
+              ),
+            ),
         ],
-      ),
+        const SizedBox(height: 16),
+        Align(
+          alignment: Alignment.centerRight,
+          child: Text(
+            '最新更新时间：2026年2月4日',
+            style: theme.textStyles.footnote1.copyWith(
+              color: theme.colors.onSurfaceVariantSummary,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

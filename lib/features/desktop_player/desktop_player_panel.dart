@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -33,6 +34,7 @@ class DesktopPlayerPanel extends StatefulWidget {
     required this.playback,
     required this.source,
     this.galleryOpen,
+    this.editMode,
   });
 
   /// 显示层控制器（进度 / 播放态 / 当前曲目）。所有写操作都要回传主窗口。
@@ -49,6 +51,9 @@ class DesktopPlayerPanel extends StatefulWidget {
   /// 视图在展览馆开启时把歌词层 Offstage 掉。
   final ValueNotifier<bool>? galleryOpen;
 
+  /// 歌词编辑模式的对外镜像，同样由视图持有：视图据此挂上拖拽层与取景框。
+  final ValueNotifier<bool>? editMode;
+
   @override
   State<DesktopPlayerPanel> createState() => _DesktopPlayerPanelState();
 }
@@ -63,6 +68,9 @@ class _DesktopPlayerPanelState extends State<DesktopPlayerPanel> {
   bool _open = false;
   bool _galleryOpen = false;
 
+  /// 歌词编辑模式。为真时整屏可交互（要能拖歌词），面板内容换成变换控件。
+  bool _editMode = false;
+
   /// 原生亚克力不可用（Win10 1809 以下）时置位：展览馆改画一层暗蒙版，
   /// 至少保证卡片文字在亮色壁纸上读得出来。
   bool _acrylicFallback = false;
@@ -75,7 +83,10 @@ class _DesktopPlayerPanelState extends State<DesktopPlayerPanel> {
       // 新面板必然是展览馆关闭的状态，把镜像同步下去。放在这里而不是
       // dispose：面板销毁时视图往往也在销毁，那时 notifier 已被 dispose，
       // 再写会抛「used after dispose」。
-      if (mounted) widget.galleryOpen?.value = false;
+      if (mounted) {
+        widget.galleryOpen?.value = false;
+        widget.editMode?.value = false;
+      }
     });
   }
 
@@ -100,12 +111,13 @@ class _DesktopPlayerPanelState extends State<DesktopPlayerPanel> {
   /// 展开、曲目信息换行变化，写死的常量必然对不上，表现为面板下半截点不动
   /// （矩形太小）或歌词区域莫名挡住鼠标（矩形太大）。
   ///
-  /// 展览馆打开时改报整个客户区：它是全屏的拖拽界面，只报面板那一小块的话
-  /// 卡片区完全没法拖。
+  /// 展览馆打开，或歌词编辑模式时，改报整个客户区：两者都需要全屏可交互
+  /// （展览馆是拖拽卡片场，编辑模式是要拖歌词），只报面板那一小块的话
+  /// 拖不动。
   void _syncHitRects() {
     if (!mounted) return;
     final dpr = View.of(context).devicePixelRatio;
-    if (_galleryOpen) {
+    if (_galleryOpen || _editMode) {
       final size = MediaQuery.sizeOf(context);
       DesktopPlayerCommands.setHitRects([
         0,
@@ -161,6 +173,21 @@ class _DesktopPlayerPanelState extends State<DesktopPlayerPanel> {
     DesktopPlayerCommands.setWallpaperAcrylic(enabled: false);
   }
 
+  void _enterEditMode() {
+    if (_editMode) return;
+    setState(() => _editMode = true);
+    widget.editMode?.value = true;
+    _scheduleHitRectSync();
+  }
+
+  /// 退出编辑模式。公开给面板上的「完成」按钮。
+  void _exitEditMode() {
+    if (!_editMode) return;
+    setState(() => _editMode = false);
+    widget.editMode?.value = false;
+    _scheduleHitRectSync();
+  }
+
   @override
   Widget build(BuildContext context) {
     // 展览馆是全屏层，盖在歌词与面板之上。所有写操作回传主窗口执行——本地
@@ -205,6 +232,9 @@ class _DesktopPlayerPanelState extends State<DesktopPlayerPanel> {
                 _Panel(
                   playback: widget.playback,
                   source: widget.source,
+                  editMode: _editMode,
+                  onEnterEditMode: _enterEditMode,
+                  onExitEditMode: _exitEditMode,
                   onOpenGallery: _openGallery,
                   onClose: _toggle,
                   onLayoutChanged: _scheduleHitRectSync,
@@ -283,6 +313,9 @@ class _Panel extends StatelessWidget {
   const _Panel({
     required this.playback,
     required this.source,
+    required this.editMode,
+    required this.onEnterEditMode,
+    required this.onExitEditMode,
     required this.onOpenGallery,
     required this.onClose,
     required this.onLayoutChanged,
@@ -290,6 +323,9 @@ class _Panel extends StatelessWidget {
 
   final PlaybackController playback;
   final DesktopPlayerPlayback source;
+  final bool editMode;
+  final VoidCallback onEnterEditMode;
+  final VoidCallback onExitEditMode;
   final VoidCallback onOpenGallery;
   final VoidCallback onClose;
   final VoidCallback onLayoutChanged;
@@ -318,6 +354,10 @@ class _Panel extends StatelessWidget {
         child: AnimatedBuilder(
           animation: playback,
           builder: (context, _) {
+            // 编辑模式下整块换成变换控件，不重复画封面/进度/传输键。
+            if (editMode) {
+              return _TransformEditor(onExit: onExitEditMode);
+            }
             final track = playback.state.currentTrack;
             return Column(
               mainAxisSize: MainAxisSize.min,
@@ -354,7 +394,19 @@ class _Panel extends StatelessWidget {
                           _RepeatButton(playback: playback),
                         ],
                       ),
-                      _VolumeControl(playback: playback),
+                      Row(
+                        children: [
+                          // 「默认」样式不参与变换，没有编辑按钮。
+                          if (_lyricStyle != 'default') ...[
+                            _SmallButton(
+                              icon: Icons.open_with_rounded,
+                              onTap: onEnterEditMode,
+                            ),
+                            const SizedBox(width: 6),
+                          ],
+                          _VolumeControl(playback: playback),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -365,6 +417,211 @@ class _Panel extends StatelessWidget {
       ),
     ),
   );
+
+  /// 当前歌词样式（与 desktop_player_view 的 switch 判定一致）。
+  String get _lyricStyle {
+    final settings = FullscreenSettingsStore.instance;
+    return settings.superCyrenePlayerEnabled
+        ? settings.superCyreneLyricsTheme
+        : 'classic';
+  }
+}
+
+/// 歌词变换编辑面板：缩放 + X/Y/Z 三轴旋转滑块 + 重置/完成。
+///
+/// 位置靠直接拖拽歌词（见 desktop_player_view 的拖拽层），这里不提供位置滑块。
+class _TransformEditor extends StatefulWidget {
+  const _TransformEditor({required this.onExit});
+
+  final VoidCallback onExit;
+
+  @override
+  State<_TransformEditor> createState() => _TransformEditorState();
+}
+
+class _TransformEditorState extends State<_TransformEditor> {
+  @override
+  Widget build(BuildContext context) {
+    final settings = FullscreenSettingsStore.instance;
+    return AnimatedBuilder(
+      animation: settings,
+      builder: (context, _) {
+        return Container(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+          decoration: BoxDecoration(
+            border: Border(
+              top: BorderSide(color: Colors.white.withValues(alpha: .05)),
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '歌词编辑',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '拖动歌词调整位置，下方滑块调整大小与旋转',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: .45),
+                  fontSize: 10,
+                ),
+              ),
+              const SizedBox(height: 12),
+              _TransformSlider(
+                label: '缩放',
+                value: settings.desktopLyricScale,
+                min: FullscreenSettingsStore.minDesktopLyricScale,
+                max: FullscreenSettingsStore.maxDesktopLyricScale,
+                display: (v) => '${v.toStringAsFixed(2)}x',
+                onChanged: (v) => settings.setDesktopLyricScale(v),
+              ),
+              const SizedBox(height: 8),
+              _TransformSlider(
+                label: 'X 轴',
+                value: settings.desktopLyricRotX,
+                min: -FullscreenSettingsStore.maxDesktopLyricRotation,
+                max: FullscreenSettingsStore.maxDesktopLyricRotation,
+                display: (v) => '${(v * 180 / math.pi).round()}°',
+                onChanged: (v) => settings.setDesktopLyricRotX(v),
+              ),
+              const SizedBox(height: 8),
+              _TransformSlider(
+                label: 'Y 轴',
+                value: settings.desktopLyricRotY,
+                min: -FullscreenSettingsStore.maxDesktopLyricRotation,
+                max: FullscreenSettingsStore.maxDesktopLyricRotation,
+                display: (v) => '${(v * 180 / math.pi).round()}°',
+                onChanged: (v) => settings.setDesktopLyricRotY(v),
+              ),
+              const SizedBox(height: 8),
+              _TransformSlider(
+                label: 'Z 轴',
+                value: settings.desktopLyricRotZ,
+                min: -FullscreenSettingsStore.maxDesktopLyricRotation,
+                max: FullscreenSettingsStore.maxDesktopLyricRotation,
+                display: (v) => '${(v * 180 / math.pi).round()}°',
+                onChanged: (v) => settings.setDesktopLyricRotZ(v),
+              ),
+              const SizedBox(height: 14),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  _SmallButton(
+                    icon: Icons.restart_alt_rounded,
+                    onTap: settings.resetDesktopLyricTransform,
+                  ),
+                  _RoundChipButton(
+                    label: '完成',
+                    onTap: widget.onExit,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// 编辑面板里的一行滑块：标签在左，滑块在中间，实时数值在右。
+class _TransformSlider extends StatelessWidget {
+  const _TransformSlider({
+    required this.label,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.display,
+    required this.onChanged,
+  });
+
+  final String label;
+  final double value;
+  final double min;
+  final double max;
+  final String Function(double) display;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) => Row(
+        children: [
+          SizedBox(
+            width: 40,
+            child: Text(
+              label,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: .70),
+                fontSize: 11,
+              ),
+            ),
+          ),
+          Expanded(
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 2,
+                activeTrackColor: Colors.white.withValues(alpha: .60),
+                inactiveTrackColor: Colors.white.withValues(alpha: .15),
+                thumbColor: Colors.white,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 4),
+                overlayShape: SliderComponentShape.noOverlay,
+              ),
+              child: Slider(
+                value: value.clamp(min, max),
+                min: min,
+                max: max,
+                onChanged: onChanged,
+              ),
+            ),
+          ),
+          SizedBox(
+            width: 44,
+            child: Text(
+              display(value),
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: .70),
+                fontSize: 11,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ),
+        ],
+      );
+}
+
+/// 编辑面板的「完成」胶囊按钮。
+class _RoundChipButton extends StatelessWidget {
+  const _RoundChipButton({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: .92),
+            borderRadius: BorderRadius.circular(99),
+          ),
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: Colors.black,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      );
 }
 
 /// 封面区（256×256，与 SuperCyrene 一致）。
