@@ -46,7 +46,8 @@ dependencies:
   url_launcher: ^6.3.0
   liquid_glass_widgets: ^0.22.1
   shared_preferences: ^2.5.5
-  # HyperOS 风格组件库；>=1.0.7 才含下拉刷新头 RenderFlex 溢出断言修复。
+  # HyperOS 风格组件库（依赖 pub.dev，已移除本地 ../flutter_miuix 覆盖）。
+  # >=1.0.7 含下拉刷新头 RenderFlex 溢出断言修复；^1.0.9 当前解析到 1.1.1。
   flutter_miuix: ^1.0.9
   # 原版移动播放器移植所需：背景取色（image）与背景设置的取色器。
   image: ^4.3.0
@@ -87,13 +88,6 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.1
-
-# 临时本地覆盖：验证 flutter_miuix 大标题折叠修复（1.0.9，按位置直接映射
-# 折叠量，根治"折叠后稍微下滑弹回大标题"）。1.0.9 发布到 pub.dev 后，
-# 把上面依赖改为 ^1.0.9 并删除本段即可。
-dependency_overrides:
-  flutter_miuix:
-    path: ../flutter_miuix
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

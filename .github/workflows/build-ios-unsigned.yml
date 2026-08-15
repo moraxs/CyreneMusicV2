@@ -1,0 +1,54 @@
+name: Build iOS Unsigned IPA
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios:
+    name: Build unsigned iOS .ipa
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Generate app icons
+        run: dart run flutter_launcher_icons
+
+      - name: Build iOS release (no codesign)
+        run: flutter build ios --release --no-codesign
+
+      - name: Package unsigned .ipa
+        run: |
+          set -euo pipefail
+          mkdir -p Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -r -y cyrene_music_reborn-unsigned.ipa Payload/
+          ls -lh cyrene_music_reborn-unsigned.ipa
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cyrene-music-reborn-ios-unsigned
+          path: |
+            cyrene_music_reborn-unsigned.ipa
+            Payload/Runner.app
+          if-no-files-found: error
