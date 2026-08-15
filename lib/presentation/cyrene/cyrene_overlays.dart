@@ -125,7 +125,16 @@ class _CyreneOverlayPageState<T> extends State<_CyreneOverlayPage<T>> {
   void onDismissFinished() {
     if (_popped || !mounted) return;
     _popped = true;
-    Navigator.of(context).pop(_result);
+    final navigator = Navigator.of(context);
+    final route = ModalRoute.of(context);
+    if (route == null || route.isCurrent) {
+      // 正常情况：自己仍是栈顶，直接 pop 并带回结果。
+      navigator.pop(_result);
+    } else {
+      // 退场动画期间上层又压了新路由（如更新弹窗关闭后立即 push 进度弹窗），
+      // 此时 `pop` 会误关掉栈顶的新路由，改用 removeRoute 只移除自己这一条。
+      navigator.removeRoute(route, _result);
+    }
   }
 
   @override

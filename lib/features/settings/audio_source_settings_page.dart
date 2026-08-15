@@ -228,15 +228,6 @@ class _AudioSourceSettingsBody extends StatelessWidget {
           '默认音质',
           insideMargin: EdgeInsets.fromLTRB(16, 8, 16, 4),
         ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: Text(
-            'higher / 杜比全景声 / 高清环绕声 / 沉浸环绕声 / 超清母带仅对网易云生效，其余平台使用默认音质。',
-            style: theme.textStyles.footnote1.copyWith(
-              color: theme.colors.onSurfaceVariantSummary,
-            ),
-          ),
-        ),
         _QualityCard(
           value: state.quality,
           enabled: !state.isBusy,

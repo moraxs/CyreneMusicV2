@@ -12,10 +12,7 @@ import '../../domain/playback/audio_player_gateway.dart';
 /// 且内部自行管理音频会话，无需额外的 audio_session 配置。
 ///
 /// 关键差异（相对 just_audio）：
-/// - 音量范围为 0-100，[AudioPlayerGateway] 约定 0-1，[setVolume] 内部换算。
-///   仅安卓端 libmpv 输出偏保守，设置 `volume-max=200` 并把换算上限提高到 150
-///   （应用 1.0 → media_kit 150% 增益，默认 0.8 → 120%）以补偿「系统音量需调
-///   很大」；其余平台（含 Windows）1.0 → 100% 原生音量，不做软件增益。
+/// - 音量范围为 0-100，[AudioPlayerGateway] 约定 0-1，[setVolume] 内部换算为 0-100（0 dBFS 无削波）。
 /// - [Player.open] 默认自动播放，这里以 `play: false` 打开以匹配「先 load 后 play」语义。
 /// - 播放状态由 `playing` / `buffering` / `completed` 等独立流合成为
 ///   单一的 [PlaybackStatus]。
@@ -23,16 +20,6 @@ class MediaKitPlayerGateway implements AudioPlayerGateway {
   MediaKitPlayerGateway({Player? player})
     : _player = player ?? Player(),
       _statusController = StreamController<PlaybackStatus>.broadcast() {
-    // 允许音量增益到 200%：libmpv 默认 volume-max=100，无法超过原始音量。
-    // 仅安卓端 libmpv 输出偏保守，放宽上限以补偿「系统音量需调很大」的问题；
-    // 桌面端（Windows 等）保持原生 0-100，避免 volume>100 的软件增益把信号
-    // 顶过 0 dBFS 造成削波破音。
-    // setProperty 内部会等待 libmpv 初始化完成，异步执行不阻塞构造。
-    final native = _player.platform;
-    if (native is NativePlayer &&
-        defaultTargetPlatform == TargetPlatform.android) {
-      native.setProperty('volume-max', '200');
-    }
     _subscriptions = [
       _player.stream.playing.listen((playing) {
         _playing = playing;
@@ -96,12 +83,8 @@ class MediaKitPlayerGateway implements AudioPlayerGateway {
   @override
   Future<void> setVolume(double volume) {
     final safe = volume.clamp(0.0, 1.0);
-    // 安卓端用 150 上限（应用 1.0 → media_kit 150% 增益，补偿输出偏保守）；
-    // 其余平台（含 Windows）1.0 → 100% 原生音量，零软件增益、不削波。
-    final maxVolume = defaultTargetPlatform == TargetPlatform.android
-        ? 150.0
-        : 100.0;
-    return _player.setVolume(safe * maxVolume);
+    // 所有平台统一映射 0.0-1.0 到 0.0-100.0（0 dBFS 原生输出，零削波失真）。
+    return _player.setVolume(safe * 100.0);
   }
 
   @override

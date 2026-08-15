@@ -44,6 +44,11 @@ class PlaybackController extends ChangeNotifier {
   /// 队列导航；「上一首」永不参与。
   Future<Track?> Function()? _smartNextProvider;
 
+  /// 「下一首播放」强插的目标曲目（见 [playNext]）。非空时，下一次「下一首」
+  /// 无论什么播放模式（含随机）都先播它，播完即清空；若目标曲目已不在队列
+  /// （队列被整体替换）则回退普通导航。
+  Track? _forcedNextTrack;
+
   PlaybackState _state = PlaybackState();
   PlaybackState get state => _state;
 
@@ -109,6 +114,11 @@ class PlaybackController extends ChangeNotifier {
   }
 
   /// 播放 [track]；[startAt] 非空时从该位置续播（音源仍会重新解析）。
+  ///
+  /// 入队语义（临时播放列表规则）：
+  /// - 传入 [queue]（歌单/专辑等合集入口）→ 临时列表整体替换为该 [queue]；
+  /// - 不传 [queue]（单曲入口）→ 临时列表追加该曲（见 [playNextToQueue]），
+  ///   只有当前无曲可播时才回退为单曲列表。
   Future<void> playTrack(
     Track track, {
     List<Track>? queue,
@@ -194,6 +204,40 @@ class PlaybackController extends ChangeNotifier {
     }
   }
 
+  /// 把 [track] 追加到临时播放列表末尾并立即播放（搜索结果页点歌语义）。
+  ///
+  /// 与 [playTrack] 不传 [queue] 时的回退行为一致；显式命名让调用方（搜索
+  /// 结果页等单曲入口）意图清晰：不覆盖已有临时列表，只把新曲续在队尾。
+  Future<void> playNextToQueue(Track track) => playTrack(track);
+
+  /// 「下一首播放」：把 [track] 插入当前播放曲目之后，作为**强制下一首**。
+  ///
+  /// 与无参 [playNext]（切到下一首）不同：本方法不打断当前播放，只把这首
+  /// 曲目「插队」到下一次切歌的位置——即用户显式指定了下一首要播什么。
+  /// 即使处于随机播放模式，下一次「下一首」（含自然结束自动接续）也仍播放
+  /// 这首歌；播完即回到该模式原有的接续逻辑。
+  ///
+  /// 实现分两层：
+  /// - 队列有当前曲目时，把曲目插到其后（曲目已存在则先移除再插，保证
+  ///   「下一首」语义）；
+  /// - 另记下 [_forcedNextTrack] 强插目标，供随机模式的 [_playAdjacent] 优先
+  ///   命中（随机导航只看队列当前位置，不会主动定位到刚插入的这首）。
+  void playNextTrack(Track track) {
+    final current = _state.currentTrack;
+    final currentIndex = current == null
+        ? -1
+        : _state.queue.indexOf(current);
+    final withoutExisting = _state.queue
+        .where((item) => item != track)
+        .toList(growable: false);
+    final insertAt = currentIndex < 0
+        ? withoutExisting.length
+        : currentIndex + 1;
+    final queue = [...withoutExisting.sublist(0, insertAt), track, ...withoutExisting.sublist(insertAt)];
+    _forcedNextTrack = track;
+    _publish(_state.copyWith(queue: queue));
+  }
+
   Future<void> togglePlay() async {
     final track = _state.currentTrack;
     if (track == null) return;
@@ -277,6 +321,18 @@ class PlaybackController extends ChangeNotifier {
       _smartNextProvider = provider;
 
   Future<void> _playAdjacent({required bool isNext}) async {
+    // 「下一首播放」强插（playNext）：仅在「下一首」方向生效，且优先级高于
+    // 智能续播——用户明确指定了下一首要播什么。目标曲目须仍在队列中
+    // （队列可能已被歌单整体替换），否则回退普通导航。
+    if (isNext) {
+      final forced = _forcedNextTrack;
+      if (forced != null && _state.queue.contains(forced)) {
+        _forcedNextTrack = null;
+        await playTrack(forced, queue: _state.queue);
+        return;
+      }
+      _forcedNextTrack = null;
+    }
     // 心动模式（智能续播）：仅「下一首」先问供给方；供给方抛错或返回 null
     // 都回退普通队列导航，避免异常中断播放流。
     if (isNext) {

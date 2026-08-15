@@ -15,7 +15,11 @@ import '../../application/playback/playback_controller.dart';
 import '../../application/playlists/playlist_library_controller.dart';
 import '../../application/search/search_controller.dart';
 import '../../domain/models/discovery.dart';
+import '../../domain/models/music_source.dart';
 import '../../domain/models/playlist.dart';
+import '../../domain/models/search.dart';
+import '../../domain/models/search_playlist.dart';
+import '../../features/artist/artist_detail_page.dart';
 import '../../features/discover/discover_page.dart';
 import '../../features/history/history_page.dart';
 import '../../features/home/desktop_home_page.dart';
@@ -121,9 +125,13 @@ class _DesktopShellState extends State<DesktopShell> {
   /// 设置页各分类页面使用的内容区二级页栈。
   final _settingsStack = DesktopHomeStack();
 
+  /// 搜索页内容区二级页栈（歌单详情/歌手详情）。
+  final _searchStack = DesktopHomeStack();
+
   DesktopHomeStack get _activeSecondaryStack => switch (_index) {
     1 => _discoverStack,
     2 => _profileStack,
+    3 => _searchStack,
     6 => _settingsStack,
     _ => _homeStack,
   };
@@ -153,9 +161,43 @@ class _DesktopShellState extends State<DesktopShell> {
           playlistId: playlist.id,
           title: playlist.name,
           coverUrl: playlist.coverImgUrl,
+          creator: playlist.creatorNickname,
+          trackCount: playlist.trackCount,
           playback: widget.playback,
           token: widget.account.token,
+          onOpenPlaylist: _openHomePlaylist,
           desktopLayout: true,
+        ),
+      );
+    });
+  }
+
+  void _openSearchPlaylist(SearchPlaylist playlist) {
+    setState(() {
+      _searchStack.push(
+        PlaylistDetailPage(
+          playlistId: playlist.id,
+          title: playlist.name,
+          coverUrl: playlist.coverUrl,
+          creator: playlist.creator,
+          trackCount: playlist.trackCount,
+          source: playlist.source,
+          playback: widget.playback,
+          token: widget.account.token,
+          onOpenPlaylist: _openHomePlaylist,
+          desktopLayout: true,
+        ),
+      );
+    });
+  }
+
+  void _openSearchArtist(NeteaseArtistBrief artist) {
+    setState(() {
+      _searchStack.push(
+        ArtistDetailPage(
+          playback: widget.playback,
+          artistId: artist.id,
+          artistName: artist.name,
         ),
       );
     });
@@ -201,6 +243,7 @@ class _DesktopShellState extends State<DesktopShell> {
       _homeStack.clear(); // 离开首页,清二级页栈。
       _discoverStack.clear();
       _profileStack.clear();
+      _searchStack.clear();
       _settingsStack.clear();
       _searchKeyword = k;
       _searchSeq++;
@@ -271,6 +314,8 @@ class _DesktopShellState extends State<DesktopShell> {
                       if (_index != 1) _discoverStack.clear();
                       // “我的”页切走后同样回到其主页面。
                       if (_index != 2) _profileStack.clear();
+                      // 搜索页切走后回到搜索结果主页。
+                      if (_index != 3) _searchStack.clear();
                       // 设置页切走后回到设置主页。
                       if (_index != 6) _settingsStack.clear();
                     }), // 固定 expanded,收展改由 size.openWidth 承担(理由见类文档)。
@@ -401,7 +446,12 @@ class _DesktopShellState extends State<DesktopShell> {
       key: ValueKey('search-$_searchSeq'),
       search: widget.search,
       playback: widget.playback,
+      token: widget.account.token,
       initialQuery: _searchKeyword,
+      onOpenPlaylist: _openSearchPlaylist,
+      onOpenArtist: _openSearchArtist,
+      onOpenSecondary: (page) => setState(() => _searchStack.push(page)),
+      body: _compactSecondary(_searchStack.current),
     ),
     HistoryPage(playback: widget.playback),
     LocalMusicPage(playback: widget.playback),

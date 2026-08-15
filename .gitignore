@@ -60,3 +60,10 @@ test/failures/
 
 # Build logs
 build_smtc_log.txt
+
+# 本地开发/发布辅助，不入库
+/backend/
+/installer/
+/demo/
+tb_*.png
+*取流全链路思路.md

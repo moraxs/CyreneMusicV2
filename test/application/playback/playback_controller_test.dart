@@ -128,6 +128,96 @@ void main() {
     expect(audio.loaded.last, smart.playbackUrl);
   });
 
+  test('playNextTrack 把曲目插到当前播放曲目之后', () async {
+    final first = _track('one');
+    final second = _track('two');
+    final third = _track('three');
+    await controller.playTrack(first, queue: [first, second]);
+
+    controller.playNextTrack(third);
+
+    expect(
+      controller.state.queue.map((t) => t.id).toList(),
+      ['one', 'three', 'two'],
+    );
+    // 不打断当前播放。
+    expect(controller.state.currentTrack, first);
+  });
+
+  test('playNextTrack 曲目已在队列中时先移除再插入当前之后', () async {
+    final first = _track('one');
+    final second = _track('two');
+    final third = _track('three');
+    await controller.playTrack(first, queue: [first, second, third]);
+
+    controller.playNextTrack(third);
+
+    expect(
+      controller.state.queue.map((t) => t.id).toList(),
+      ['one', 'three', 'two'],
+    );
+  });
+
+  test('playNextTrack 没有当前曲目时插到队尾', () async {
+    final first = _track('one');
+    final second = _track('two');
+    final third = _track('three');
+    await controller.playTrack(first, queue: [first, second]);
+    await controller.clearQueue();
+
+    controller.playNextTrack(third);
+
+    expect(
+      controller.state.queue.map((t) => t.id).toList(),
+      ['three'],
+    );
+  });
+
+  test('playNextTrack 后在随机模式下「下一首」也播它', () async {
+    final first = _track('one');
+    final second = _track('two');
+    final third = _track('three');
+    await controller.playTrack(first, queue: [first, second]);
+    controller.setRepeatMode(RepeatMode.shuffle);
+
+    controller.playNextTrack(third);
+    await controller.playNext();
+
+    expect(controller.state.currentTrack, third);
+    expect(audio.loaded.last, third.playbackUrl);
+  });
+
+  test('playNextTrack 播完强制下一首后回到随机接续', () async {
+    final first = _track('one');
+    final second = _track('two');
+    final third = _track('three');
+    await controller.playTrack(first, queue: [first, second]);
+    controller.setRepeatMode(RepeatMode.shuffle);
+
+    controller.playNextTrack(third);
+    await controller.playNext();
+    expect(controller.state.currentTrack, third);
+
+    // 强制下一首只消费一次：第二次「下一首」回到随机选曲，不再锁定 third。
+    await controller.playNext();
+    expect(controller.state.currentTrack, isNot(third));
+  });
+
+  test('playNextTrack 的强制下一首优先于智能续播', () async {
+    final first = _track('one');
+    final second = _track('two');
+    final third = _track('three');
+    final smart = _track('smart');
+    await controller.playTrack(first, queue: [first, second]);
+    controller.setSmartNextProvider(() async => smart);
+
+    controller.playNextTrack(third);
+    await controller.playNext();
+
+    expect(controller.state.currentTrack, third);
+    expect(audio.loaded.last, third.playbackUrl);
+  });
+
   test('播放自然结束同样走智能续播供给方', () async {
     final first = _track('one');
     final smart = _track('smart');

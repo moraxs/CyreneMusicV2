@@ -63,7 +63,6 @@ class PlaybackUrlResolverService implements PlaybackSourceClient {
 
   static const List<MusicSource> _omniParseGetSources = [
     MusicSource.qq,
-    MusicSource.kugou,
     MusicSource.kuwo,
     MusicSource.qishui,
   ];
@@ -179,7 +178,13 @@ class PlaybackUrlResolverService implements PlaybackSourceClient {
       );
     }
 
-    // ─── OmniParse GET (QQ / 酷狗 / 酷我 / 汽水) ───
+    // ─── OmniParse 酷狗（权限解析 + 音质降级链）───
+    if (configSource.type == AudioSourceType.omniParse &&
+        track.source == MusicSource.kugou) {
+      return _resolveKugouUrl(track, configSource, quality);
+    }
+
+    // ─── OmniParse GET (QQ / 酷我 / 汽水) ───
     if (configSource.type == AudioSourceType.omniParse &&
         _omniParseGetSources.contains(track.source)) {
       final response = await _apiClient.apiFetch(
@@ -287,6 +292,127 @@ class PlaybackUrlResolverService implements PlaybackSourceClient {
 
     // 其余 OmniParse 类型直接使用 buildPlaybackUrl 构建的 URL。
     return ResolvedPlayback(url: url);
+  }
+
+  /// 酷狗播放地址解析：先解析各音质独立 hash，再按降级链取链
+  /// （对齐开源项目 OnlineMusicQueue.js 的 privilege + fallback 流程）。
+  Future<ResolvedPlayback> _resolveKugouUrl(
+    Track track,
+    AudioSourceConfig configSource,
+    AudioQuality quality,
+  ) async {
+    final base = _stripTrailingSlash(configSource.url);
+    final idStr = track.id.toString();
+    final hash = idStr.contains(':') ? idStr.split(':').first : idStr;
+    if (hash.isEmpty) {
+      throw AudioSourceError('酷狗歌曲缺少 hash');
+    }
+
+    // 与设置-音源设置中的音质结合，只请求用户指定的对应音质档位
+    final targetQuality = switch (quality.effectiveFor(MusicSource.kugou)) {
+      AudioQuality.standard => '128',
+      AudioQuality.exHigh => '320',
+      AudioQuality.lossless => 'flac',
+      AudioQuality.hiRes => 'high',
+      _ => '128',
+    };
+
+    return await _fetchKugouSong(base, configSource, hash, targetQuality);
+  }
+
+  Future<Map<String, String>> _fetchKugouPrivilege(
+    String base,
+    AudioSourceConfig configSource,
+    String hash,
+  ) async {
+    try {
+      final resp = await _apiClient.apiFetch(
+        '$base/kugou/privilege?hash=${Uri.encodeQueryComponent(hash)}',
+        headers: {'X-API-Key': configSource.apiKey},
+      );
+      if (!_ok(resp)) return {};
+      final result = _decode(resp);
+      if (result['status'] != 200) return {};
+      final items = result['data'];
+      if (items is! List) return {};
+      final map = <String, String>{};
+      for (final item in items) {
+        if (item is! Map) continue;
+        final m = Map<Object?, Object?>.from(item);
+        final related = m['relate_goods'];
+        final variants = <Map<Object?, Object?>>[m];
+        if (related is List) {
+          for (final r in related) {
+            if (r is Map) variants.add(Map<Object?, Object?>.from(r));
+          }
+        }
+        for (final variant in variants) {
+          final q = variant['quality']?.toString();
+          final h = variant['hash']?.toString();
+          final level = variant['level'];
+          if (q == null || h == null || h.isEmpty) continue;
+          if (level == 0 || level == '0') continue;
+          map.putIfAbsent(q, () => h);
+        }
+      }
+      return map;
+    } catch (e) {
+      debugPrint('[PlaybackUrlResolverService] kugou privilege failed: $e');
+      return {};
+    }
+  }
+
+  Future<ResolvedPlayback> _fetchKugouSong(
+    String base,
+    AudioSourceConfig configSource,
+    String hash,
+    String quality,
+  ) async {
+    final resp = await _apiClient.apiFetch(
+      '$base/kugou/song?hash=${Uri.encodeQueryComponent(hash)}&quality=$quality',
+      headers: {'X-API-Key': configSource.apiKey},
+    );
+    final result = _decode(resp);
+    if (!_ok(resp) || result['status'] != 200) {
+      throw AudioSourceError(
+        '酷狗解析失败: ${result['msg'] ?? 'HTTP ${resp.statusCode}'}',
+        status: resp.statusCode,
+        rawText: resp.body,
+        rawJson: result,
+      );
+    }
+    final songData = result['song'] is Map
+        ? Map<String, Object?>.from(result['song'] as Map)
+        : result;
+    final extractedUrl = songData['url']?.toString() ?? '';
+    if (extractedUrl.isEmpty) {
+      throw AudioSourceError('酷狗解析成功但未返回播放链接', rawJson: result);
+    }
+    return ResolvedPlayback(url: extractedUrl);
+  }
+
+  /// 酷狗音质降级链（对齐开源项目 QUALITY_LEVELS 的 getFallbackChain）。
+  List<String> _kugouQualityChain(AudioQuality quality) {
+    const levels = [
+      '128',
+      '320',
+      'flac',
+      'high',
+      'viper_atmos',
+      'viper_clear',
+      'viper_tape',
+    ];
+    final q = quality.effectiveFor(MusicSource.kugou);
+    final target = switch (q) {
+      AudioQuality.standard => '128',
+      AudioQuality.exHigh => '320',
+      AudioQuality.lossless => 'flac',
+      AudioQuality.hiRes => 'flac',
+      _ => '128',
+    };
+    final idx = levels.indexOf(target);
+    final available = idx < 0 ? const ['128'] : levels.sublist(0, idx + 1);
+    return available.reversed.toList();
   }
 
   String? _qqUrl(Map<String, Object?> musicUrls, String key) {

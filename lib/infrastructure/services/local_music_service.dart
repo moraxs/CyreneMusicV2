@@ -10,6 +10,7 @@ import '../../domain/models/local_track.dart';
 import '../../domain/models/music_source.dart';
 import '../../domain/models/track.dart';
 import 'audio_metadata_reader.dart';
+import 'local_music_native.dart';
 
 /// 本地音乐服务（对应 Next.js demo/lib/services/localMusicService.ts）。
 ///
@@ -164,7 +165,38 @@ class LocalMusicService {
     return count;
   }
 
+  /// 导入 Android 原生通道返回的结果（复制后的真实文件）。
+  ///
+  /// 原生侧已完成选文件/选文件夹与复制，这里按「真实路径 + 原始文件名」入库；
+  /// [LocalMusicNative.ImportedNativeFile.sidecarLrcPath] 非空时，歌词直接来自
+  /// 同批复制的 .lrc 内容。返回成功导入数量。
+  Future<int> importNativeFiles(
+    List<ImportedNativeFile> files,
+  ) async {
+    await _ensureLoaded();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    var count = 0;
+
+    for (final file in files) {
+      if (file.filePath.isEmpty) continue;
+      if (!await _importAudioFile(
+        file.filePath,
+        addedAt: now,
+        displayName: file.displayName,
+      )) {
+        continue;
+      }
+      count++;
+    }
+
+    await _persist();
+    return count;
+  }
+
   /// 解析单个音频文件并入库（folderPath 非空表示来自文件夹扫描）。
+  ///
+  /// [displayName]：原生导入时保留的原始文件名，元数据解析失败时用作兜底显示名；
+  /// 其余导入路径可传 null，由文件名兜底。
   ///
   /// 解析失败时仍以文件名兜底导入，返回 true；格式不支持或文件不存在返回
   /// false。歌词优先内嵌，其次读取同名 .lrc 文件，均无则 hasLrcFile=false。
@@ -172,32 +204,36 @@ class LocalMusicService {
     String filePath, {
     required int addedAt,
     String? folderPath,
+    String? displayName,
   }) async {
-    if (!AudioMetadataReader.isSupported(filePath)) {
+    final resolvedPath = await _resolveImportPath(filePath);
+    if (resolvedPath == null || !AudioMetadataReader.isSupported(resolvedPath)) {
       debugPrint('[LocalMusicService] 跳过不支持的格式 $filePath');
       return false;
     }
 
-    final file = File(filePath);
+    final file = File(resolvedPath);
     if (!await file.exists()) {
-      debugPrint('[LocalMusicService] 文件不存在 $filePath');
+      debugPrint('[LocalMusicService] 文件不存在 $resolvedPath');
       return false;
     }
 
-    final hasLrcFile = await _hasLrcFile(filePath);
+    final hasLrcFile = await _hasLrcFile(resolvedPath);
     // 内嵌歌词优先；没有内嵌时读取同名 .lrc 文件内容随曲目一并缓存，
     // 使播放器（读 track.lyric）无需再单独访问磁盘即可显示歌词。
-    final sidecarLyric = hasLrcFile ? await _readSidecarLrc(filePath) : null;
+    final sidecarLyric = hasLrcFile ? await _readSidecarLrc(resolvedPath) : null;
 
-    var name = _baseName(filePath);
+    var name = displayName?.isNotEmpty == true
+        ? _baseName(displayName!)
+        : _baseName(resolvedPath);
     var artists = '';
     var album = '';
     var duration = 0.0;
     String? coverDataUrl;
     String? lyric = sidecarLyric;
     try {
-      final metadata = await AudioMetadataReader.read(filePath);
-      name = metadata.name;
+      final metadata = await AudioMetadataReader.read(resolvedPath);
+      name = metadata.name.isNotEmpty ? metadata.name : name;
       artists = metadata.artists;
       album = metadata.album;
       duration = metadata.duration;
@@ -206,11 +242,11 @@ class LocalMusicService {
         lyric = metadata.lyric;
       }
     } catch (e) {
-      debugPrint('[LocalMusicService] 解析失败 $filePath: $e');
+      debugPrint('[LocalMusicService] 解析失败 $resolvedPath: $e');
     }
 
-    _tracks[filePath] = LocalTrackEntry(
-      filePath: filePath,
+    _tracks[resolvedPath] = LocalTrackEntry(
+      filePath: resolvedPath,
       name: name,
       artists: artists,
       album: album,
@@ -222,6 +258,21 @@ class LocalMusicService {
       folderPath: folderPath,
     );
     return true;
+  }
+
+  /// 解析 `content://` 等非文件路径为可被 `dart:io` 读取的真实文件。
+  ///
+  /// 原生通道返回的已是复制后的 `file://` 路径，这里只是兜底：若仍拿到
+  /// `content://`（例如 file_picker 的缓存路径意外透传），通过 [LocalMusicNative]
+  /// 无对应能力时返回 null。普通文件路径原样返回。
+  Future<String?> _resolveImportPath(String filePath) async {
+    if (filePath.startsWith('content://')) {
+      // 原生插件不提供 content:// → file:// 的单文件拷贝能力；此类路径
+      // 属于异常输入，直接拒绝，避免 `File(content://...)` 抛错。
+      debugPrint('[LocalMusicService] 不支持的 content:// 路径 $filePath');
+      return null;
+    }
+    return filePath;
   }
 
   /// 获取所有本地音轨，按 [LocalTrackEntry.addedAt] 倒序。

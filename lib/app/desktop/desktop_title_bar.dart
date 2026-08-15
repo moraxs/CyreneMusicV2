@@ -4,6 +4,7 @@ import 'package:window_manager/window_manager.dart';
 
 import '../debug_probe.dart';
 import '../../features/search/desktop_search_bar.dart';
+import '../../infrastructure/services/system_tray_service.dart';
 
 /// 桌面融合标题栏:替代被隐藏的 Win32 原生标题栏(见 main.dart
 /// `_initDesktopWindow`,`TitleBarStyle.hidden`)。
@@ -192,7 +193,7 @@ class _DesktopTitleBarState extends State<DesktopTitleBar> with WindowListener {
             ),
           WindowCaptionButton.close(
             brightness: theme.brightness,
-            onPressed: () => windowManager.close(),
+            onPressed: () => SystemTrayService.instance.hideToTray(),
           ),
         ],
       ),

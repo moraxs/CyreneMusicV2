@@ -4,8 +4,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// 开发者模式（对应原版 developer_mode_service.dart 的移动端子集）。
 ///
 /// 与原版一致：2 秒内连点版本号 5 次开启，从第 2 次起提示剩余次数；
-/// 键名照抄（`developer_mode` / `show_performance_overlay`）；内存日志
-/// 缓冲上限 1000 条。原版的搜索结果合并开关等桌面/旧搜索链路消费端未移植。
+/// 键名照抄（`developer_mode` / `show_performance_overlay` /
+/// `search_result_merge_enabled`）；内存日志缓冲上限 1000 条。
 ///
 /// 与原版差异：不直接弹 toast，而是把提示文案返回给调用方展示，
 /// 避免基础设施层反向依赖表现层。
@@ -16,11 +16,13 @@ class DeveloperModeService extends ChangeNotifier {
 
   static const _kDeveloperMode = 'developer_mode';
   static const _kShowPerformanceOverlay = 'show_performance_overlay';
+  static const _kSearchResultMerge = 'search_result_merge_enabled';
   static const _requiredClicks = 5;
   static const _maxLogs = 1000;
 
   bool _isDeveloperMode = false;
   bool _showPerformanceOverlay = false;
+  bool _searchResultMergeEnabled = true;
   bool _loaded = false;
   int _clickCount = 0;
   DateTime? _lastClickTime;
@@ -33,6 +35,7 @@ class DeveloperModeService extends ChangeNotifier {
 
   bool get isDeveloperMode => _isDeveloperMode;
   bool get showPerformanceOverlay => _showPerformanceOverlay;
+  bool get isSearchResultMergeEnabled => _searchResultMergeEnabled;
   List<String> get logs => List.unmodifiable(_logs);
 
   Future<void> ensureLoaded() async {
@@ -43,6 +46,8 @@ class DeveloperModeService extends ChangeNotifier {
       _isDeveloperMode = prefs.getBool(_kDeveloperMode) ?? false;
       _showPerformanceOverlay =
           prefs.getBool(_kShowPerformanceOverlay) ?? false;
+      _searchResultMergeEnabled =
+          prefs.getBool(_kSearchResultMerge) ?? true;
       notifyListeners();
     } catch (e) {
       debugPrint('[DeveloperModeService] 加载失败: $e');
@@ -98,6 +103,19 @@ class DeveloperModeService extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool(_kShowPerformanceOverlay, value);
+    } catch (e) {
+      debugPrint('[DeveloperModeService] 保存失败: $e');
+    }
+  }
+
+  /// 切换搜索结果合并开关（true=聚合多平台同名歌曲，false=按平台分别展示标签）。
+  Future<void> setSearchResultMergeEnabled(bool value) async {
+    if (_searchResultMergeEnabled == value) return;
+    _searchResultMergeEnabled = value;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_kSearchResultMerge, value);
     } catch (e) {
       debugPrint('[DeveloperModeService] 保存失败: $e');
     }

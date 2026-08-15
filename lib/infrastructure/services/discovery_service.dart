@@ -393,6 +393,62 @@ class DiscoveryService implements DiscoverRepository {
       }
     }
 
+    if (source == 'kugou') {
+      try {
+        final response = await ApiClient.instance.apiFetch(
+          '${UrlService.instance.baseUrl}/kugou/public/playlist?id=$idStr',
+        );
+        final result = _decode(response);
+        final data = result['data'];
+        if (result['code'] == 200 && data is Map) {
+          final payload = Map<String, Object?>.from(data);
+          final tracks = (payload['tracks'] as List? ?? const [])
+              .whereType<Map>()
+              .map((raw) {
+                final track = Map<String, Object?>.from(raw);
+                return ToplistTrack(
+                  id: track['hash']?.toString() ?? '',
+                  name: track['title']?.toString() ?? '',
+                  artists: track['author']?.toString() ?? '',
+                  album: '',
+                  picUrl: track['cover']?.toString() ?? '',
+                  duration: (track['duration'] as num?)?.toInt(),
+                  source: MusicSource.kugou,
+                );
+              })
+              .where((track) => track.id.isNotEmpty)
+              .toList(growable: false);
+          return PlaylistDetail(
+            id: (payload['id'] as num?)?.toInt() ?? (int.tryParse(idStr) ?? 0),
+            name: payload['name']?.toString() ??
+                payload['title']?.toString() ??
+                '',
+            coverImgUrl: payload['pic']?.toString() ??
+                payload['cover']?.toString() ??
+                payload['coverImgUrl']?.toString() ??
+                '',
+            description: payload['intro']?.toString() ??
+                payload['description']?.toString() ??
+                '',
+            source: MusicSource.kugou,
+            tracks: tracks,
+            playCount: (payload['play_count'] as num?)?.toInt() ?? 0,
+            creator: payload['creator']?.toString() ??
+                payload['author']?.toString() ??
+                '',
+            trackCount: (payload['total'] as num?)?.toInt() ?? tracks.length,
+            createTime: 0,
+            updateTime: 0,
+            tags: const ['酷狗'],
+          );
+        }
+        return null;
+      } catch (e) {
+        debugPrint('[DiscoveryService] getKugouPlaylistDetail failed: $e');
+        return null;
+      }
+    }
+
     try {
       final response = await ApiClient.instance.apiFetch(
         '${UrlService.instance.baseUrl}/playlist?id=$idStr&limit=$limit',

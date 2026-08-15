@@ -78,37 +78,109 @@ class _ChatTheme {
   }
 }
 
-const _chatMaxTextWidth = 513.0;
-const _chatActiveFontSize = 18 * 1.24;
-const _chatActiveLineHeight = 1.45;
-const _chatActiveScale = 1.08;
-const _chatActivePaddingY = 16.0;
-const _chatBubbleSizeLookahead = .32;
+class _ChatLayoutMetrics {
+  const _ChatLayoutMetrics({
+    required this.isMobile,
+    required this.outerPadding,
+    required this.avatarSize,
+    required this.avatarGap,
+    required this.maxBubbleWidth,
+    required this.maxTextWidth,
+    required this.activeFontSize,
+    required this.inactiveFontSize,
+    required this.activeLineHeight,
+    required this.activeScale,
+    required this.activePadding,
+    required this.inactivePadding,
+  });
+
+  final bool isMobile;
+  final EdgeInsets outerPadding;
+  final double avatarSize;
+  final double avatarGap;
+  final double maxBubbleWidth;
+  final double maxTextWidth;
+  final double activeFontSize;
+  final double inactiveFontSize;
+  final double activeLineHeight;
+  final double activeScale;
+  final EdgeInsets activePadding;
+  final EdgeInsets inactivePadding;
+
+  factory _ChatLayoutMetrics.fromConstraints(BoxConstraints constraints) {
+    final width = constraints.maxWidth;
+    final isMobile = width < 600;
+
+    final outerPadding = isMobile
+        ? const EdgeInsets.fromLTRB(14, 48, 14, 110)
+        : const EdgeInsets.fromLTRB(48, 60, 48, 140);
+
+    final avatarSize = isMobile ? 32.0 : 38.0;
+    final avatarGap = isMobile ? 8.0 : 12.0;
+
+    final availableWidth =
+        math.max(100.0, width - outerPadding.horizontal - avatarSize - avatarGap);
+    final maxBubbleWidth = isMobile
+        ? availableWidth.clamp(140.0, 480.0)
+        : math.min(520.0, availableWidth * 0.72);
+
+    final activePadding = isMobile
+        ? const EdgeInsets.symmetric(horizontal: 14, vertical: 10)
+        : const EdgeInsets.symmetric(horizontal: 18, vertical: 14);
+
+    final inactivePadding = isMobile
+        ? const EdgeInsets.symmetric(horizontal: 12, vertical: 8)
+        : const EdgeInsets.symmetric(horizontal: 14, vertical: 10);
+
+    final maxTextWidth =
+        math.max(60.0, maxBubbleWidth - activePadding.horizontal - 4);
+
+    final activeFontSize = isMobile ? 16.0 : (18 * 1.16);
+    final inactiveFontSize = isMobile ? 14.0 : 16.5;
+    final activeLineHeight = 1.42;
+    final activeScale = isMobile ? 1.03 : 1.06;
+
+    return _ChatLayoutMetrics(
+      isMobile: isMobile,
+      outerPadding: outerPadding,
+      avatarSize: avatarSize,
+      avatarGap: avatarGap,
+      maxBubbleWidth: maxBubbleWidth,
+      maxTextWidth: maxTextWidth,
+      activeFontSize: activeFontSize,
+      inactiveFontSize: inactiveFontSize,
+      activeLineHeight: activeLineHeight,
+      activeScale: activeScale,
+      activePadding: activePadding,
+      inactivePadding: inactivePadding,
+    );
+  }
+}
 
 double _chatLyricSlotHeight(
   String text, {
+  required _ChatLayoutMetrics metrics,
   TextScaler textScaler = TextScaler.noScaling,
 }) {
   final painter = TextPainter(
     text: TextSpan(
       text: text.isEmpty ? ' ' : text,
-      style: const TextStyle(
-        fontSize: _chatActiveFontSize,
+      style: TextStyle(
+        fontSize: metrics.activeFontSize,
         fontWeight: FontWeight.w400,
-        height: _chatActiveLineHeight,
+        height: metrics.activeLineHeight,
       ),
     ),
     textDirection: TextDirection.ltr,
     textScaler: textScaler,
-  )..layout(maxWidth: _chatMaxTextWidth);
-  // Flutter's decorated Container also includes the one-pixel border in its
-  // padding. Reserve the fully enlarged bubble, not its inactive dimensions.
+  )..layout(maxWidth: metrics.maxTextWidth);
+
   final bubbleHeight = math.max(
-    64.0,
-    painter.height + _chatActivePaddingY * 2 + 2,
+    metrics.isMobile ? 38.0 : 48.0,
+    painter.height + metrics.activePadding.vertical + 2,
   );
   painter.dispose();
-  return math.max(40.0, bubbleHeight * _chatActiveScale);
+  return math.max(30.0, bubbleHeight * metrics.activeScale);
 }
 
 class SuperCyreneChatLyrics extends StatefulWidget {
@@ -359,6 +431,7 @@ class _SuperCyreneChatLyricsState extends State<SuperCyreneChatLyrics> {
   List<_ChatMessage> _visibleMessages(
     double viewportHeight,
     TextScaler textScaler,
+    _ChatLayoutMetrics metrics,
   ) {
     final available = _messages.where((message) {
       if (message is _ChatTitleMessage) return true;
@@ -367,21 +440,23 @@ class _SuperCyreneChatLyricsState extends State<SuperCyreneChatLyrics> {
       }
       return (message as _ChatLineMessage).lineIndex <= _visibleLineIndex;
     }).toList();
-    final usableHeight = math.max(200.0, viewportHeight - 240);
+    final usableHeight =
+        math.max(160.0, viewportHeight - (metrics.isMobile ? 150 : 220));
     var height = 0.0;
     final result = <_ChatMessage>[];
     for (var index = available.length - 1; index >= 0; index--) {
       final message = available[index];
       final estimate = message is _ChatTitleMessage
-          ? 40.0
+          ? 36.0
           : message is _ChatDividerMessage
-          ? 44.0
+          ? 38.0
           : _chatLyricSlotHeight(
               (message as _ChatLineMessage).line.fullText,
+              metrics: metrics,
               textScaler: textScaler,
             );
       if (height + estimate > usableHeight && result.length >= 2) break;
-      height += estimate + 12;
+      height += estimate + (metrics.isMobile ? 8 : 12);
       result.insert(0, message);
       if (result.length >= 20) break;
     }
@@ -404,25 +479,30 @@ class _SuperCyreneChatLyricsState extends State<SuperCyreneChatLyrics> {
     }
     return LayoutBuilder(
       builder: (context, constraints) {
+        final metrics = _ChatLayoutMetrics.fromConstraints(constraints);
         final messages = _visibleMessages(
           constraints.maxHeight,
           MediaQuery.textScalerOf(context),
+          metrics,
         );
         return Padding(
-          padding: const EdgeInsets.fromLTRB(56, 80, 56, 160),
+          padding: metrics.outerPadding,
           child: Align(
             // Anchor the conversation to the bottom. When the incoming row
             // expands from zero height, existing messages are pushed upward
             // like a real Telegram conversation instead of staying fixed.
             alignment: Alignment.bottomCenter,
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 896),
+              constraints: BoxConstraints(
+                maxWidth: metrics.isMobile ? double.infinity : 896,
+              ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   for (var index = 0; index < messages.length; index++)
                     _buildVisibleMessageEntry(
                       messages[index],
+                      metrics: metrics,
                       hasTopGap: index > 0,
                     ),
                 ],
@@ -436,11 +516,12 @@ class _SuperCyreneChatLyricsState extends State<SuperCyreneChatLyrics> {
 
   Widget _buildVisibleMessageEntry(
     _ChatMessage message, {
+    required _ChatLayoutMetrics metrics,
     required bool hasTopGap,
   }) {
     final content = Padding(
-      padding: EdgeInsets.only(top: hasTopGap ? 12 : 0),
-      child: _buildMessage(message),
+      padding: EdgeInsets.only(top: hasTopGap ? (metrics.isMobile ? 8 : 12) : 0),
+      child: _buildMessage(message, metrics: metrics),
     );
     return KeyedSubtree(
       key: ValueKey(message.id),
@@ -453,7 +534,10 @@ class _SuperCyreneChatLyricsState extends State<SuperCyreneChatLyrics> {
     );
   }
 
-  Widget _buildMessage(_ChatMessage message) => switch (message) {
+  Widget _buildMessage(
+    _ChatMessage message, {
+    required _ChatLayoutMetrics metrics,
+  }) => switch (message) {
     final _ChatDividerMessage divider => _ChatDivider(
       label: divider.label,
       theme: _theme,
@@ -468,6 +552,7 @@ class _SuperCyreneChatLyricsState extends State<SuperCyreneChatLyrics> {
       rightAvatarUrl: widget.rightAvatarUrl,
       active: false,
       passed: false,
+      metrics: metrics,
     ),
     final _ChatLineMessage line => _ChatBubbleRow(
       id: line.id,
@@ -481,6 +566,7 @@ class _SuperCyreneChatLyricsState extends State<SuperCyreneChatLyrics> {
       rightAvatarUrl: widget.rightAvatarUrl,
       active: line.lineIndex == _currentLineIndex,
       passed: line.lineIndex < _currentLineIndex,
+      metrics: metrics,
     ),
   };
 }
@@ -496,6 +582,7 @@ class _ChatBubbleRow extends StatelessWidget {
     required this.rightAvatarUrl,
     required this.active,
     required this.passed,
+    required this.metrics,
     this.line,
     this.playback,
   });
@@ -511,6 +598,7 @@ class _ChatBubbleRow extends StatelessWidget {
   final String? rightAvatarUrl;
   final bool active;
   final bool passed;
+  final _ChatLayoutMetrics metrics;
 
   Color _mix(Color a, Color b, double amount, [double opacity = 1]) =>
       Color.fromRGBO(
@@ -538,21 +626,20 @@ class _ChatBubbleRow extends StatelessWidget {
           );
     final textColor = right ? theme.background : theme.primary;
     final fontSize = active
-        ? _chatActiveFontSize
+        ? metrics.activeFontSize
         : line == null
-        ? 18.0
-        : 18 * .95;
-    final padding = active
-        ? const EdgeInsets.symmetric(horizontal: 20, vertical: 16)
-        : const EdgeInsets.symmetric(horizontal: 16, vertical: 12);
+        ? metrics.inactiveFontSize
+        : metrics.inactiveFontSize * .95;
+    final padding = active ? metrics.activePadding : metrics.inactivePadding;
 
     Widget bubble = AnimatedContainer(
       duration: const Duration(milliseconds: 320),
       curve: Curves.easeOutCubic,
       constraints: BoxConstraints(
-        maxWidth: 553,
-        minWidth: active ? 72 : 0,
-        minHeight: active ? 64 : 44,
+        maxWidth: metrics.maxBubbleWidth,
+        minWidth: active ? (metrics.isMobile ? 48 : 64) : 0,
+        minHeight:
+            active ? (metrics.isMobile ? 40 : 52) : (metrics.isMobile ? 32 : 40),
       ),
       padding: padding,
       decoration: BoxDecoration(
@@ -573,18 +660,18 @@ class _ChatBubbleRow extends StatelessWidget {
               )
             : null,
         borderRadius: BorderRadius.only(
-          topLeft: const Radius.circular(24),
-          topRight: const Radius.circular(24),
-          bottomLeft: Radius.circular(right ? 24 : 4),
-          bottomRight: Radius.circular(right ? 4 : 24),
+          topLeft: const Radius.circular(20),
+          topRight: const Radius.circular(20),
+          bottomLeft: Radius.circular(right ? 20 : 4),
+          bottomRight: Radius.circular(right ? 4 : 20),
         ),
         border: Border.all(color: border),
         boxShadow: active
             ? [
                 BoxShadow(
                   color: _mix(theme.background, theme.accent, .2, .26),
-                  blurRadius: 48,
-                  offset: const Offset(0, 18),
+                  blurRadius: metrics.isMobile ? 24 : 48,
+                  offset: Offset(0, metrics.isMobile ? 8 : 18),
                 ),
               ]
             : const [],
@@ -593,20 +680,22 @@ class _ChatBubbleRow extends StatelessWidget {
           ? _ActiveChatText(
               line: line!,
               playback: playback!,
+              metrics: metrics,
               style: TextStyle(
                 color: textColor,
                 fontSize: fontSize,
                 fontWeight: FontWeight.w400,
-                height: 1.45,
+                height: metrics.activeLineHeight,
               ),
             )
           : Text(
               text,
+              softWrap: true,
               style: TextStyle(
                 color: textColor,
                 fontSize: fontSize,
                 fontWeight: FontWeight.w400,
-                height: 1.45,
+                height: metrics.activeLineHeight,
               ),
             ),
     );
@@ -618,13 +707,13 @@ class _ChatBubbleRow extends StatelessWidget {
           bubble,
           Positioned(
             bottom: 4,
-            left: right ? null : -40,
-            right: right ? -40 : null,
+            left: right ? null : -34,
+            right: right ? -34 : null,
             child: Text(
               '${total ~/ 60}:${(total % 60).toString().padLeft(2, '0')}',
               style: TextStyle(
                 color: theme.secondary.withValues(alpha: .62),
-                fontSize: 11,
+                fontSize: 10,
                 fontWeight: FontWeight.w500,
                 fontFeatures: const [FontFeature.tabularFigures()],
               ),
@@ -635,9 +724,9 @@ class _ChatBubbleRow extends StatelessWidget {
     }
     bubble = AnimatedScale(
       scale: active
-          ? _chatActiveScale
+          ? metrics.activeScale
           : passed
-          ? .95
+          ? .96
           : 1,
       // Keep the top edge stable. Bottom anchoring made an outgoing bubble
       // shrink downward immediately before the incoming row pushed the queue
@@ -652,35 +741,37 @@ class _ChatBubbleRow extends StatelessWidget {
       ),
     );
 
+    final avatar = _ChatAvatar(
+      side: side,
+      avatarIndex: avatarIndex,
+      cover: cover,
+      rightAvatarUrl: rightAvatarUrl,
+      theme: theme,
+      size: metrics.avatarSize,
+    );
+
     final row = Row(
-      mainAxisAlignment: right
-          ? MainAxisAlignment.end
-          : MainAxisAlignment.start,
+      mainAxisAlignment:
+          right ? MainAxisAlignment.end : MainAxisAlignment.start,
       crossAxisAlignment: CrossAxisAlignment.end,
       children: right
           ? [
-              const Spacer(flex: 32),
-              Flexible(flex: 68, child: bubble),
-              const SizedBox(width: 12),
-              _ChatAvatar(
-                side: side,
-                avatarIndex: avatarIndex,
-                cover: cover,
-                rightAvatarUrl: rightAvatarUrl,
-                theme: theme,
+              if (!metrics.isMobile) const Spacer(flex: 24),
+              Flexible(
+                flex: metrics.isMobile ? 1 : 76,
+                child: bubble,
               ),
+              SizedBox(width: metrics.avatarGap),
+              avatar,
             ]
           : [
-              _ChatAvatar(
-                side: side,
-                avatarIndex: avatarIndex,
-                cover: cover,
-                rightAvatarUrl: rightAvatarUrl,
-                theme: theme,
+              avatar,
+              SizedBox(width: metrics.avatarGap),
+              Flexible(
+                flex: metrics.isMobile ? 1 : 76,
+                child: bubble,
               ),
-              const SizedBox(width: 12),
-              Flexible(flex: 68, child: bubble),
-              const Spacer(flex: 32),
+              if (!metrics.isMobile) const Spacer(flex: 24),
             ],
     );
     if (line == null) return row;
@@ -691,6 +782,7 @@ class _ChatBubbleRow extends StatelessWidget {
     return SizedBox(
       height: _chatLyricSlotHeight(
         line!.fullText,
+        metrics: metrics,
         textScaler: MediaQuery.textScalerOf(context),
       ),
       child: Align(alignment: Alignment.topCenter, child: row),
@@ -772,12 +864,14 @@ class _ChatAvatar extends StatelessWidget {
     required this.cover,
     required this.rightAvatarUrl,
     required this.theme,
+    this.size = 38,
   });
   final _ChatSide side;
   final int avatarIndex;
   final ImageProvider? cover;
   final String? rightAvatarUrl;
   final _ChatTheme theme;
+  final double size;
 
   @override
   Widget build(BuildContext context) {
@@ -788,9 +882,10 @@ class _ChatAvatar extends StatelessWidget {
         : const [0, 4][avatarIndex % 2];
     final col = resolvedIndex % 3;
     final row = resolvedIndex ~/ 3;
+    final maxInnerSize = size * 3;
     return Container(
-      width: 40,
-      height: 40,
+      width: size,
+      height: size,
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
@@ -803,11 +898,11 @@ class _ChatAvatar extends StatelessWidget {
           : cover == null
           ? null
           : SizedBox(
-              width: 40,
-              height: 40,
+              width: size,
+              height: size,
               child: OverflowBox(
-                maxWidth: 120,
-                maxHeight: 120,
+                maxWidth: maxInnerSize,
+                maxHeight: maxInnerSize,
                 alignment: Alignment(
                   col == 0
                       ? -1
@@ -821,8 +916,8 @@ class _ChatAvatar extends StatelessWidget {
                       : 1,
                 ),
                 child: SizedBox(
-                  width: 120,
-                  height: 120,
+                  width: maxInnerSize,
+                  height: maxInnerSize,
                   child: Image(image: cover!, fit: BoxFit.cover),
                 ),
               ),
@@ -836,14 +931,18 @@ class _ActiveChatText extends StatefulWidget {
     required this.line,
     required this.playback,
     required this.style,
+    required this.metrics,
   });
   final DefaultLine line;
   final PlaybackController playback;
   final TextStyle style;
+  final _ChatLayoutMetrics metrics;
 
   @override
   State<_ActiveChatText> createState() => _ActiveChatTextState();
 }
+
+const _chatBubbleSizeLookahead = .28;
 
 class _ActiveChatTextState extends State<_ActiveChatText>
     with SingleTickerProviderStateMixin {
@@ -873,8 +972,6 @@ class _ActiveChatTextState extends State<_ActiveChatText>
     widget.playback.positionListenable.addListener(_syncPosition);
     widget.playback.addListener(_syncPlaybackState);
     _syncPosition();
-    // The original Framer Motion spring keeps ticking independently from the
-    // playback clock so it can finish settling after pauses and seeks.
     _visualClock.repeat();
   }
 
@@ -888,7 +985,9 @@ class _ActiveChatTextState extends State<_ActiveChatText>
       widget.playback.addListener(_syncPlaybackState);
       _syncPosition();
     }
-    if (oldWidget.line != widget.line || oldWidget.style != widget.style) {
+    if (oldWidget.line != widget.line ||
+        oldWidget.style != widget.style ||
+        oldWidget.metrics.maxTextWidth != widget.metrics.maxTextWidth) {
       _springInitialized = false;
       _bubbleWidthVelocity = 0;
       _bubbleHeightVelocity = 0;
@@ -899,7 +998,6 @@ class _ActiveChatTextState extends State<_ActiveChatText>
     _anchorPosition =
         widget.playback.positionListenable.value.inMicroseconds / 1000000 + .3;
     _anchorWallTime = _wallClock.elapsed;
-    // A paused seek has no running visual ticker to request a frame.
     if (mounted && !_visualClock.isAnimating) setState(() {});
   }
 
@@ -923,27 +1021,43 @@ class _ActiveChatTextState extends State<_ActiveChatText>
   }
 
   List<(String, double, double)> _characters() {
+    final fullChars = widget.line.fullText.characters.toList();
+    if (fullChars.isEmpty) return const [];
+
     final result = <(String, double, double)>[];
-    for (final word in widget.line.words) {
-      final chars = word.text.characters.toList();
-      final duration = math.max(.04, word.endTime - word.startTime);
-      for (var index = 0; index < chars.length; index++) {
-        final start = word.startTime + duration * index / chars.length;
-        final fade = math.max(.04, math.min(.22, duration / chars.length));
-        result.add((chars[index], start, fade));
+    if (widget.line.words.isNotEmpty) {
+      for (final word in widget.line.words) {
+        final chars = word.text.characters.toList();
+        final duration = math.max(.04, word.endTime - word.startTime);
+        for (var index = 0; index < chars.length; index++) {
+          final start = word.startTime + duration * index / chars.length;
+          final fade = math.max(.04, math.min(.22, duration / chars.length));
+          result.add((chars[index], start, fade));
+        }
       }
     }
-    if (result.isEmpty) return result;
 
-    // A few lyric providers let the final word timing extend past the line's
-    // effective end. Compress only when necessary so every character finishes
-    // revealing before this row is replaced by the next one.
+    // 如果 words 字符数与 fullText 不一致，使用 fullText 生成平滑时间轴确保零丢字
+    if (result.length != fullChars.length) {
+      result.clear();
+      final start = widget.line.startTime;
+      final end = math.max(start + 0.1, widget.line.endTime);
+      final totalDuration = end - start;
+      for (var index = 0; index < fullChars.length; index++) {
+        final charStart = start + totalDuration * index / fullChars.length;
+        final charFade =
+            math.max(.04, math.min(.22, totalDuration / fullChars.length));
+        result.add((fullChars[index], charStart, charFade));
+      }
+    }
+
     final sourceEnd = result.fold<double>(
       result.first.$2 + result.first.$3,
       (latest, item) => math.max(latest, item.$2 + item.$3),
     );
     final anchor = math.min(widget.line.startTime, result.first.$2);
-    final deadline = math.max(anchor + .008, widget.line.endTime - .06);
+    // 预留 0.22s 缓冲期，确保末尾字符在换行前有充裕时间完全展开与点亮
+    final deadline = math.max(anchor + .008, widget.line.endTime - .22);
     if (sourceEnd <= deadline) return result;
 
     final sourceSpan = math.max(.001, sourceEnd - anchor);
@@ -966,8 +1080,6 @@ class _ActiveChatTextState extends State<_ActiveChatText>
   void _advanceBubbleSpring(double targetWidth, double targetHeight) {
     final now = _wallClock.elapsed;
     if (!_springInitialized) {
-      // Framer's spring.jump() is also used by the Next.js implementation when
-      // a line first becomes active, avoiding a visible expansion from zero.
       _bubbleWidth = targetWidth;
       _bubbleHeight = targetHeight;
       _lastSpringWallTime = now;
@@ -1019,6 +1131,7 @@ class _ActiveChatTextState extends State<_ActiveChatText>
       builder: (context, _) {
         final time = _visualPosition;
         final textScaler = MediaQuery.textScalerOf(context);
+
         final spans = <InlineSpan>[];
         for (final item in plan) {
           if (time + _chatBubbleSizeLookahead < item.$2) break;
@@ -1032,21 +1145,27 @@ class _ActiveChatTextState extends State<_ActiveChatText>
             ),
           );
         }
+
         final paragraph = TextPainter(
           text: TextSpan(children: spans),
           textDirection: Directionality.of(context),
           textScaler: textScaler,
-        )..layout(maxWidth: _chatMaxTextWidth);
+        )..layout(maxWidth: widget.metrics.maxTextWidth);
+
         final lineHeight =
-            textScaler.scale(widget.style.fontSize ?? 18) *
-            (widget.style.height ?? 1);
-        final targetWidth = math.max(
-          textScaler.scale(widget.style.fontSize ?? 18),
-          paragraph.width.ceilToDouble() + 1,
+            textScaler.scale(widget.style.fontSize ?? widget.metrics.activeFontSize) *
+            (widget.style.height ?? widget.metrics.activeLineHeight);
+
+        final targetWidth = math.min(
+          widget.metrics.maxTextWidth,
+          math.max(
+            textScaler.scale(widget.style.fontSize ?? widget.metrics.activeFontSize),
+            paragraph.width.ceilToDouble() + 4.0,
+          ),
         );
         final targetHeight = math.max(
           lineHeight,
-          paragraph.height.ceilToDouble() + 1,
+          paragraph.height.ceilToDouble() + 2.0,
         );
         paragraph.dispose();
         _advanceBubbleSpring(targetWidth, targetHeight);
@@ -1057,8 +1176,8 @@ class _ActiveChatTextState extends State<_ActiveChatText>
           child: ClipRect(
             child: OverflowBox(
               alignment: Alignment.topLeft,
-              minWidth: _chatMaxTextWidth,
-              maxWidth: _chatMaxTextWidth,
+              minWidth: 0,
+              maxWidth: widget.metrics.maxTextWidth + 8.0,
               minHeight: 0,
               maxHeight: double.infinity,
               child: Text.rich(

@@ -68,7 +68,7 @@ class _SuperCyreneFullscreenPlayerState
       windowManager.addListener(this);
       _syncMaximizedState();
     } else {
-      // 移动端：进入 SuperCyrene 强制横屏，退出由 dispose 恢复竖屏。
+      // 移动端：解除方向锁定，支持竖屏与横屏自适应旋转。
       _applyMobileOrientation();
     }
   }
@@ -84,20 +84,24 @@ class _SuperCyreneFullscreenPlayerState
     super.dispose();
   }
 
-  /// 移动端强制横屏并切沉浸模式（隐藏系统栏）。
+  /// 移动端解除方向锁定，允许自由旋转（竖屏与横屏自适应排版）。
   void _applyMobileOrientation() {
     SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
 
-  /// 移动端退出 SuperCyrene 时恢复竖屏与系统栏。
+  /// 移动端退出 SuperCyrene 时恢复方向。
   void _restoreMobileOrientation() {
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
     ]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
@@ -130,205 +134,284 @@ class _SuperCyreneFullscreenPlayerState
   }
 
   @override
-  Widget build(BuildContext context) => CallbackShortcuts(
-    bindings: {
-      const SingleActivator(LogicalKeyboardKey.escape): () =>
-          Navigator.of(context).pop(),
-      const SingleActivator(LogicalKeyboardKey.space):
-          widget.playback.togglePlay,
-    },
-    child: Focus(
-      autofocus: true,
-      child: Material(
-        type: MaterialType.transparency,
-        child: AnimatedBuilder(
-          animation: widget.playback,
-          builder: (context, _) {
-            final track = widget.playback.state.currentTrack;
-            return Stack(
-              fit: StackFit.expand,
-              children: [
-                SuperCyreneAmllBackground(
-                  imageProvider: PlayerService().currentCoverImageProvider,
-                  isPlaying: widget.playback.state.isPlaying,
-                ),
-                const ColoredBox(color: Color(0x26000000)),
-                if (track != null)
-                  Positioned.fill(
-                    child: switch (_lyricsTheme) {
-                      'chat' => SuperCyreneChatLyrics(
-                        playback: widget.playback,
-                        track: track,
-                        cover: PlayerService().currentCoverImageProvider,
-                        rightAvatarUrl:
-                            widget.account.state.user?.avatarUrl,
-                      ),
-                      'pixel' => SuperCyrenePixelLyrics(
-                        playback: widget.playback,
-                        track: track,
-                        onTranslationChanged: (value) {
-                          if (mounted && value != _translation) {
-                            setState(() => _translation = value);
-                          }
-                        },
-                      ),
-                      _ => SuperCyreneClassicLyrics(
-                        playback: widget.playback,
-                        track: track,
-                        onTranslationChanged: (value) {
-                          if (mounted && value != _translation) {
-                            setState(() => _translation = value);
-                          }
-                        },
-                      ),
-                    },
-                  )
-                else
-                  Center(
-                    child: Text(
-                      '暂无正在播放的歌曲',
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: .3),
-                        letterSpacing: 2,
+  Widget build(BuildContext context) {
+    final isPortrait =
+        !_isDesktop && MediaQuery.orientationOf(context) == Orientation.portrait;
+    final padding = MediaQuery.paddingOf(context);
+
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): () =>
+            Navigator.of(context).pop(),
+        const SingleActivator(LogicalKeyboardKey.space):
+            widget.playback.togglePlay,
+      },
+      child: Focus(
+        autofocus: true,
+        child: Material(
+          type: MaterialType.transparency,
+          child: AnimatedBuilder(
+            animation: widget.playback,
+            builder: (context, _) {
+              final track = widget.playback.state.currentTrack;
+              return Stack(
+                fit: StackFit.expand,
+                children: [
+                  SuperCyreneAmllBackground(
+                    imageProvider: PlayerService().currentCoverImageProvider,
+                    isPlaying: widget.playback.state.isPlaying,
+                  ),
+                  const ColoredBox(color: Color(0x26000000)),
+                  if (track != null)
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: isPortrait ? (padding.bottom + 100) : 0,
+                      child: switch (_lyricsTheme) {
+                        'chat' => SuperCyreneChatLyrics(
+                          playback: widget.playback,
+                          track: track,
+                          cover: PlayerService().currentCoverImageProvider,
+                          rightAvatarUrl:
+                              widget.account.state.user?.avatarUrl,
+                        ),
+                        'pixel' => SuperCyrenePixelLyrics(
+                          playback: widget.playback,
+                          track: track,
+                          onTranslationChanged: (value) {
+                            if (mounted && value != _translation) {
+                              setState(() => _translation = value);
+                            }
+                          },
+                        ),
+                        _ => SuperCyreneClassicLyrics(
+                          playback: widget.playback,
+                          track: track,
+                          onTranslationChanged: (value) {
+                            if (mounted && value != _translation) {
+                              setState(() => _translation = value);
+                            }
+                          },
+                        ),
+                      },
+                    )
+                  else
+                    Center(
+                      child: Text(
+                        '暂无正在播放的歌曲',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: .3),
+                          letterSpacing: 2,
+                        ),
                       ),
                     ),
-                  ),
-                if (_isDesktop) ...[
-                  // 桌面端：顶部悬停触发标题栏（含最小化/最大化/关闭）。
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    height: 32,
-                    child: MouseRegion(
-                      onEnter: (_) => _showTitleBar(),
-                      child: const SizedBox.expand(),
+                  if (_isDesktop) ...[
+                    // 桌面端：顶部悬停触发标题栏（含最小化/最大化/关闭）。
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: 32,
+                      child: MouseRegion(
+                        onEnter: (_) => _showTitleBar(),
+                        child: const SizedBox.expand(),
+                      ),
                     ),
-                  ),
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: IgnorePointer(
-                      ignoring: !_titleBarVisible,
-                      child: AnimatedSlide(
-                        offset: _titleBarVisible
-                            ? Offset.zero
-                            : const Offset(0, -1),
-                        duration: const Duration(milliseconds: 500),
-                        curve: Curves.easeOutCubic,
-                        child: AnimatedOpacity(
-                          opacity: _titleBarVisible ? 1 : 0,
-                          duration: const Duration(milliseconds: 350),
-                          child: MouseRegion(
-                            onEnter: (_) => _showTitleBar(),
-                            onExit: (_) => _scheduleTitleBarHide(),
-                            child: _SuperCyreneTitleBar(
-                              title: track?.name ?? 'SuperCyrene',
-                              isMaximized: _isMaximized,
-                              onSwitchToClassic: widget.onSwitchToClassic,
-                              onExit: () => Navigator.of(context).pop(),
-                              onMinimize: windowManager.minimize,
-                              onToggleMaximize: () => _isMaximized
-                                  ? windowManager.unmaximize()
-                                  : windowManager.maximize(),
-                              onClose: windowManager.close,
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: IgnorePointer(
+                        ignoring: !_titleBarVisible,
+                        child: AnimatedSlide(
+                          offset: _titleBarVisible
+                              ? Offset.zero
+                              : const Offset(0, -1),
+                          duration: const Duration(milliseconds: 500),
+                          curve: Curves.easeOutCubic,
+                          child: AnimatedOpacity(
+                            opacity: _titleBarVisible ? 1 : 0,
+                            duration: const Duration(milliseconds: 350),
+                            child: MouseRegion(
+                              onEnter: (_) => _showTitleBar(),
+                              onExit: (_) => _scheduleTitleBarHide(),
+                              child: _SuperCyreneTitleBar(
+                                title: track?.name ?? 'SuperCyrene',
+                                isMaximized: _isMaximized,
+                                onSwitchToClassic: widget.onSwitchToClassic,
+                                onExit: () => Navigator.of(context).pop(),
+                                onMinimize: windowManager.minimize,
+                                onToggleMaximize: () => _isMaximized
+                                    ? windowManager.unmaximize()
+                                    : windowManager.maximize(),
+                                onClose: windowManager.close,
+                              ),
                             ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                ] else ...[
-                  // 移动端：无窗口概念，左上角一个返回按钮 + 切回经典按钮。
-                  Positioned(
-                    top: MediaQuery.paddingOf(context).top + 8,
-                    right: 16,
-                    child: _MobileTopAction(
-                      icon: CupertinoIcons.back,
-                      tooltip: '退出',
-                      onTap: () => Navigator.of(context).pop(),
-                    ),
-                  ),
-                  Positioned(
-                    top: MediaQuery.paddingOf(context).top + 8,
-                    left: 16,
-                    child: _MobileTopAction(
-                      icon: CupertinoIcons.chevron_left_square,
-                      tooltip: '切回经典',
-                      onTap: widget.onSwitchToClassic,
-                    ),
-                  ),
-                ],
-                Positioned(
-                  left: 80,
-                  right: 80,
-                  bottom: 20,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 180),
-                        child: _translation?.isNotEmpty == true
-                            ? Padding(
-                                key: ValueKey(_translation),
-                                padding: const EdgeInsets.only(bottom: 12),
-                                child: Text(
-                                  _translation!,
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    color: Colors.white.withValues(alpha: .75),
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w500,
-                                    letterSpacing: .5,
-                                    shadows: const [
-                                      Shadow(
-                                        color: Colors.black87,
-                                        blurRadius: 16,
-                                        offset: Offset(0, 2),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              )
-                            : const SizedBox.shrink(),
+                  ] else ...[
+                    // 移动端：返回按钮与切回经典按钮（根据屏幕方向自适应排布）。
+                    Positioned(
+                      top: padding.top + 8,
+                      left: 16,
+                      child: _MobileTopAction(
+                        icon: CupertinoIcons.back,
+                        tooltip: '退出',
+                        onTap: () => Navigator.of(context).pop(),
                       ),
-                      Center(
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 384),
-                          child: _PlaybackCapsule(playback: widget.playback),
+                    ),
+                    Positioned(
+                      top: padding.top + 8,
+                      right: 16,
+                      child: _MobileTopAction(
+                        icon: CupertinoIcons.chevron_left_square,
+                        tooltip: '切回经典',
+                        onTap: widget.onSwitchToClassic,
+                      ),
+                    ),
+                  ],
+                  if (isPortrait) ...[
+                    // 移动端竖屏：歌词翻译浮层
+                    if (_translation?.isNotEmpty == true)
+                      Positioned(
+                        left: 24,
+                        right: 24,
+                        bottom: padding.bottom + 88,
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 180),
+                          child: Padding(
+                            key: ValueKey(_translation),
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Text(
+                              _translation!,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: .75),
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                                letterSpacing: .5,
+                                shadows: const [
+                                  Shadow(
+                                    color: Colors.black87,
+                                    blurRadius: 16,
+                                    offset: Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
                         ),
                       ),
-                    ],
-                  ),
-                ),
-                Positioned(
-                  left: 20,
-                  bottom: 20,
-                  child: SuperCyreneControlPanel(
-                    playback: widget.playback,
-                    account: widget.account,
-                    track: track,
-                    cover: PlayerService().currentCoverImageProvider,
-                    lyricsTheme: _lyricsTheme,
-                    onLyricsThemeChanged: (value) {
-                      if (_lyricsTheme == value) return;
-                      setState(() {
-                        _lyricsTheme = value;
-                        if (value == 'chat') _translation = null;
-                      });
-                      FullscreenSettingsStore.instance
-                          .setSuperCyreneLyricsTheme(value);
-                    },
-                  ),
-                ),
-              ],
-            );
-          },
+                    // 移动端竖屏：左侧控制面板入口（独立绝对定位，不挤占胶囊横向空间）
+                    Positioned(
+                      left: 16,
+                      bottom: padding.bottom + 14,
+                      child: SuperCyreneControlPanel(
+                        playback: widget.playback,
+                        account: widget.account,
+                        track: track,
+                        cover: PlayerService().currentCoverImageProvider,
+                        lyricsTheme: _lyricsTheme,
+                        onLyricsThemeChanged: (value) {
+                          if (_lyricsTheme == value) return;
+                          setState(() {
+                            _lyricsTheme = value;
+                            if (value == 'chat') _translation = null;
+                          });
+                          FullscreenSettingsStore.instance
+                              .setSuperCyreneLyricsTheme(value);
+                        },
+                      ),
+                    ),
+                    // 移动端竖屏：播放控制胶囊（拥有充裕的自适应宽度，杜绝溢出）
+                    Positioned(
+                      left: 74,
+                      right: 16,
+                      bottom: padding.bottom + 14,
+                      child: _PlaybackCapsule(
+                        playback: widget.playback,
+                      ),
+                    ),
+                  ] else ...[
+                    // 横屏与桌面端：居中胶囊 + 左下角面板。
+                    Positioned(
+                      left: 80,
+                      right: 80,
+                      bottom: 20,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 180),
+                            child: _translation?.isNotEmpty == true
+                                ? Padding(
+                                    key: ValueKey(_translation),
+                                    padding: const EdgeInsets.only(bottom: 12),
+                                    child: Text(
+                                      _translation!,
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        color:
+                                            Colors.white.withValues(alpha: .75),
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w500,
+                                        letterSpacing: .5,
+                                        shadows: const [
+                                          Shadow(
+                                            color: Colors.black87,
+                                            blurRadius: 16,
+                                            offset: Offset(0, 2),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  )
+                                : const SizedBox.shrink(),
+                          ),
+                          Center(
+                            child: ConstrainedBox(
+                              constraints:
+                                  const BoxConstraints(maxWidth: 384),
+                              child: _PlaybackCapsule(
+                                playback: widget.playback,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Positioned(
+                      left: 20,
+                      bottom: 20,
+                      child: SuperCyreneControlPanel(
+                        playback: widget.playback,
+                        account: widget.account,
+                        track: track,
+                        cover: PlayerService().currentCoverImageProvider,
+                        lyricsTheme: _lyricsTheme,
+                        onLyricsThemeChanged: (value) {
+                          if (_lyricsTheme == value) return;
+                          setState(() {
+                            _lyricsTheme = value;
+                            if (value == 'chat') _translation = null;
+                          });
+                          FullscreenSettingsStore.instance
+                              .setSuperCyreneLyricsTheme(value);
+                        },
+                      ),
+                    ),
+                  ],
+                ],
+              );
+            },
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _SuperCyreneTitleBar extends StatelessWidget {
@@ -487,117 +570,125 @@ class _PlaybackCapsuleState extends State<_PlaybackCapsule> {
           _hovering = false;
           _scheduleCollapse();
         },
-        child: DecoratedBox(
-          decoration: const BoxDecoration(
-            borderRadius: BorderRadius.all(Radius.circular(28)),
-            boxShadow: [
-              BoxShadow(
-                color: Color(0x3D000000),
-                blurRadius: 34,
-                spreadRadius: -4,
-                offset: Offset(0, 12),
-              ),
-            ],
-          ),
-          child: Stack(
-            children: [
-              if (defaultTargetPlatform == TargetPlatform.windows)
-                const Positioned.fill(child: _WindowsGlassRefraction()),
-              GlassContainer(
-                shape: const LiquidRoundedSuperellipse(borderRadius: 28),
-                settings: const LiquidGlassSettings(
-                  glassColor: Color(0x0FFFFFFF),
-                  thickness: 10,
-                  // The Windows refraction layer below owns backdrop sampling. Keep
-                  // this at zero so blur kernels cannot pull the translation line
-                  // above the controller into the capsule.
-                  blur: 0,
-                  chromaticAberration: 0,
-                  lightIntensity: 0,
-                  ambientStrength: 0,
-                  ambientRim: 0,
-                  glowIntensity: 0,
-                  shadowElevation: 0,
-                  whitenStrength: 0,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {
+            // 折叠态防误触：点击胶囊仅唤醒展开，不触发进度调整。
+            if (!_expanded) _onUserActivity();
+          },
+          child: DecoratedBox(
+            decoration: const BoxDecoration(
+              borderRadius: BorderRadius.all(Radius.circular(28)),
+              boxShadow: [
+                BoxShadow(
+                  color: Color(0x3D000000),
+                  blurRadius: 34,
+                  spreadRadius: -4,
+                  offset: Offset(0, 12),
                 ),
-                useOwnLayer: true,
-                clipBehavior: Clip.antiAlias,
-                allowElevation: false,
-                glowIntensity: 0,
-                padding: const EdgeInsets.fromLTRB(18, 11, 18, 10),
-                child: AnimatedBuilder(
-                  animation: widget.playback,
-                  builder: (context, _) => Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // 控制按钮行：折叠时淡出 + 收缩高度，只留进度条可见。
-                      AnimatedSize(
-                        duration: const Duration(milliseconds: 280),
-                        curve: Curves.easeOutCubic,
-                        alignment: Alignment.topCenter,
-                        child: AnimatedOpacity(
-                          opacity: _expanded ? 1 : 0,
-                          duration: const Duration(milliseconds: 200),
-                          child: _expanded
-                              ? _buildControls()
-                              : const SizedBox(width: double.infinity),
+              ],
+            ),
+            child: Stack(
+              children: [
+                if (defaultTargetPlatform == TargetPlatform.windows)
+                  const Positioned.fill(child: _WindowsGlassRefraction()),
+                GlassContainer(
+                  shape: const LiquidRoundedSuperellipse(borderRadius: 28),
+                  settings: const LiquidGlassSettings(
+                    glassColor: Color(0x0FFFFFFF),
+                    thickness: 10,
+                    // The Windows refraction layer below owns backdrop sampling. Keep
+                    // this at zero so blur kernels cannot pull the translation line
+                    // above the controller into the capsule.
+                    blur: 0,
+                    chromaticAberration: 0,
+                    lightIntensity: 0,
+                    ambientStrength: 0,
+                    ambientRim: 0,
+                    glowIntensity: 0,
+                    shadowElevation: 0,
+                    whitenStrength: 0,
+                  ),
+                  useOwnLayer: true,
+                  clipBehavior: Clip.antiAlias,
+                  allowElevation: false,
+                  glowIntensity: 0,
+                  padding: const EdgeInsets.fromLTRB(18, 11, 18, 10),
+                  child: AnimatedBuilder(
+                    animation: widget.playback,
+                    builder: (context, _) => Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // 控制按钮行：折叠时淡出 + 收缩高度，只留进度条可见。
+                        AnimatedSize(
+                          duration: const Duration(milliseconds: 280),
+                          curve: Curves.easeOutCubic,
+                          alignment: Alignment.topCenter,
+                          child: AnimatedOpacity(
+                            opacity: _expanded ? 1 : 0,
+                            duration: const Duration(milliseconds: 200),
+                            child: _expanded
+                                ? _buildControls()
+                                : const SizedBox(width: double.infinity),
+                          ),
                         ),
-                      ),
-                      // 折叠态上沿保留一点间距，避免进度条贴顶。
-                      AnimatedSize(
-                        duration: const Duration(milliseconds: 280),
-                        curve: Curves.easeOutCubic,
-                        child: SizedBox(height: _expanded ? 8 : 2),
-                      ),
-                      ValueListenableBuilder<Duration>(
-                        valueListenable: widget.playback.positionListenable,
-                        builder: (context, position, _) {
-                          final duration = widget.playback.state.duration;
-                          final value =
-                              _dragValue ??
-                              (duration.inMilliseconds <= 0
-                                  ? 0.0
-                                  : (position.inMilliseconds /
-                                            duration.inMilliseconds)
-                                        .clamp(0.0, 1.0));
-                          // 折叠态下提高轨道透明度 + 加粗进度条，让仅剩的进度条更醒目。
-                          return TweenAnimationBuilder<double>(
-                            tween: Tween(
-                              end: _expanded ? 0.18 : 0.45,
-                            ),
-                            duration: const Duration(milliseconds: 280),
-                            curve: Curves.easeOutCubic,
-                            builder: (context, trackOpacity, _) =>
-                                TweenAnimationBuilder<double>(
-                                  tween: Tween(
-                                    end: _expanded ? 4.0 : 6.0,
+                        // 折叠态上沿保留一点间距，避免进度条贴顶。
+                        AnimatedSize(
+                          duration: const Duration(milliseconds: 280),
+                          curve: Curves.easeOutCubic,
+                          child: SizedBox(height: _expanded ? 8 : 2),
+                        ),
+                        ValueListenableBuilder<Duration>(
+                          valueListenable: widget.playback.positionListenable,
+                          builder: (context, position, _) {
+                            final duration = widget.playback.state.duration;
+                            final value =
+                                _dragValue ??
+                                (duration.inMilliseconds <= 0
+                                    ? 0.0
+                                    : (position.inMilliseconds /
+                                              duration.inMilliseconds)
+                                          .clamp(0.0, 1.0));
+                            // 折叠态下提高轨道透明度 + 加粗进度条，让仅剩的进度条更醒目。
+                            return TweenAnimationBuilder<double>(
+                              tween: Tween(
+                                end: _expanded ? 0.18 : 0.45,
+                              ),
+                              duration: const Duration(milliseconds: 280),
+                              curve: Curves.easeOutCubic,
+                              builder: (context, trackOpacity, _) =>
+                                  TweenAnimationBuilder<double>(
+                                    tween: Tween(
+                                      end: _expanded ? 4.0 : 6.0,
+                                    ),
+                                    duration: const Duration(milliseconds: 280),
+                                    curve: Curves.easeOutCubic,
+                                    builder: (context, barHeight, _) =>
+                                        _GlassProgressTrack(
+                                          value: value,
+                                          enabled: _expanded,
+                                          trackOpacity: trackOpacity,
+                                          barHeight: barHeight,
+                                          onChanged: (next) {
+                                            setState(() => _dragValue = next);
+                                            _onUserActivity();
+                                          },
+                                          onChangeEnd: (next) {
+                                            widget.playback.seek(duration * next);
+                                            setState(() => _dragValue = null);
+                                            _onUserActivity();
+                                          },
+                                        ),
                                   ),
-                                  duration: const Duration(milliseconds: 280),
-                                  curve: Curves.easeOutCubic,
-                                  builder: (context, barHeight, _) =>
-                                      _GlassProgressTrack(
-                                        value: value,
-                                        trackOpacity: trackOpacity,
-                                        barHeight: barHeight,
-                                        onChanged: (next) {
-                                          setState(() => _dragValue = next);
-                                          _onUserActivity();
-                                        },
-                                        onChangeEnd: (next) {
-                                          widget.playback.seek(duration * next);
-                                          setState(() => _dragValue = null);
-                                          _onUserActivity();
-                                        },
-                                      ),
-                                ),
-                          );
-                        },
-                      ),
-                    ],
+                            );
+                          },
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       );
@@ -744,6 +835,7 @@ class _GlassProgressTrack extends StatelessWidget {
     required this.value,
     required this.onChanged,
     required this.onChangeEnd,
+    this.enabled = true,
     this.trackOpacity = 0.18,
     this.barHeight = 4,
   });
@@ -751,6 +843,7 @@ class _GlassProgressTrack extends StatelessWidget {
   final double value;
   final ValueChanged<double> onChanged;
   final ValueChanged<double> onChangeEnd;
+  final bool enabled;
 
   /// 背景轨道透明度；折叠态调高让进度条更醒目。
   final double trackOpacity;
@@ -765,11 +858,15 @@ class _GlassProgressTrack extends StatelessWidget {
   Widget build(BuildContext context) => LayoutBuilder(
         builder: (context, constraints) => GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTapDown: (details) =>
-              onChangeEnd(_valueFor(details.localPosition, constraints.maxWidth)),
-          onHorizontalDragUpdate: (details) =>
-              onChanged(_valueFor(details.localPosition, constraints.maxWidth)),
-          onHorizontalDragEnd: (_) => onChangeEnd(value),
+          onTapDown: enabled
+              ? (details) => onChangeEnd(
+                  _valueFor(details.localPosition, constraints.maxWidth))
+              : null,
+          onHorizontalDragUpdate: enabled
+              ? (details) => onChanged(
+                  _valueFor(details.localPosition, constraints.maxWidth))
+              : null,
+          onHorizontalDragEnd: enabled ? (_) => onChangeEnd(value) : null,
           child: SizedBox(
             height: 16,
             child: Center(

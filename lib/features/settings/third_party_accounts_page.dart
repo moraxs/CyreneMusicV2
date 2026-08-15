@@ -608,9 +608,12 @@ class _QrImage extends StatelessWidget {
         data: url,
         version: QrVersions.auto,
         size: 200,
-        eyeStyle: QrEyeStyle(color: colors.onBackground, eyeShape: QrEyeShape.square),
-        dataModuleStyle: QrDataModuleStyle(
-          color: colors.onBackground,
+        eyeStyle: const QrEyeStyle(
+          color: Colors.black,
+          eyeShape: QrEyeShape.square,
+        ),
+        dataModuleStyle: const QrDataModuleStyle(
+          color: Colors.black,
           dataModuleShape: QrDataModuleShape.square,
         ),
         backgroundColor: Colors.white,
@@ -624,7 +627,7 @@ class _QrImage extends StatelessWidget {
     height: 220,
     padding: const EdgeInsets.all(10),
     decoration: BoxDecoration(
-      color: MiuixTheme.of(context).colors.surface,
+      color: Colors.white,
       borderRadius: BorderRadius.circular(16),
     ),
     child: child,

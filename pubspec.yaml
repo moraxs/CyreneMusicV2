@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 2.0.0+1
+version: 2.0.2+3
 
 environment:
   sdk: ^3.12.2
@@ -71,6 +71,7 @@ dependencies:
   path_provider: ^2.1.6
   path: ^1.9.0
   charset: ^2.0.1
+  tray_manager: ^0.5.3
 
   # 暂时停用：该版本在 Windows 上触发 Kotlin 增量编译跨盘符路径异常。
   # adaptive_platform_ui: ^0.1.110
@@ -107,6 +108,8 @@ flutter:
 
   assets:
     - assets/icons/new_ico_white.png
+    - assets/icons/tray_icon.ico
+    - assets/icons/tray_icon.png
     - assets/icons/OouiNextLtr.svg
     - assets/icons/OouiNextRtl.svg
     - assets/icons/icon_forward.svg

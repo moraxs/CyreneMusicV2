@@ -5,7 +5,9 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../../domain/models/audio_source_config.dart';
+import '../../domain/models/music_source.dart';
 import '../../domain/models/search.dart';
+import '../../domain/models/search_playlist.dart';
 import '../../domain/models/track.dart';
 import '../../domain/playback/audio_source_preferences_store.dart';
 import '../../domain/search/search_repository.dart';
@@ -15,12 +17,12 @@ import '../search/apple_track_dto.dart';
 import '../search/kugou_track_dto.dart';
 import '../search/kuwo_track_dto.dart';
 import '../search/netease_track_dto.dart';
-import '../search/qishui_track_dto.dart';
 import '../search/qq_track_dto.dart';
 import '../search/spotify_track_dto.dart';
 
 typedef _PlatformOutcome = ({List<Track> tracks, String? error});
 typedef _ArtistOutcome = ({List<NeteaseArtistBrief> artists, String? error});
+typedef _PlaylistOutcome = ({List<SearchPlaylist> playlists, String? error});
 
 /// 多平台并行搜索仓储（对应 Next.js demo/lib/services/searchService.ts）。
 ///
@@ -73,7 +75,6 @@ class SearchService implements SearchRepository {
           'kuwo',
           'apple',
           'spotify',
-          'qishui',
         ];
       case AudioSourceType.lxMusic:
         // TODO: 从脚本内容中解析支持的平台，暂时默认四大平台
@@ -123,10 +124,8 @@ class SearchService implements SearchRepository {
     final spotifyFuture = supported.contains('spotify')
         ? _searchSpotify(trimmed)
         : Future<_PlatformOutcome?>.value();
-    final qishuiFuture = supported.contains('qishui')
-        ? _searchQishui(trimmed)
-        : Future<_PlatformOutcome?>.value();
     final artistFuture = _searchArtists(trimmed); // 总是搜索歌手
+    final playlistsFuture = _searchPlaylists(trimmed);
 
     final netease = await neteaseFuture;
     final qq = await qqFuture;
@@ -134,8 +133,8 @@ class SearchService implements SearchRepository {
     final kuwo = await kuwoFuture;
     final apple = await appleFuture;
     final spotify = await spotifyFuture;
-    final qishui = await qishuiFuture;
     final artists = await artistFuture;
+    final playlists = await playlistsFuture;
 
     final result = SearchResult(
       neteaseResults: netease?.tracks ?? const <Track>[],
@@ -144,16 +143,16 @@ class SearchService implements SearchRepository {
       kuwoResults: kuwo?.tracks ?? const <Track>[],
       appleResults: apple?.tracks ?? const <Track>[],
       spotifyResults: spotify?.tracks ?? const <Track>[],
-      qishuiResults: qishui?.tracks ?? const <Track>[],
       artistResults: artists.artists,
+      playlists: playlists.playlists,
       neteaseError: netease?.error,
       qqError: qq?.error,
       kugouError: kugou?.error,
       kuwoError: kuwo?.error,
       appleError: apple?.error,
       spotifyError: spotify?.error,
-      qishuiError: qishui?.error,
       artistError: artists.error,
+      playlistsError: playlists.error,
     );
     return result;
   }
@@ -304,31 +303,6 @@ class SearchService implements SearchRepository {
     }
   }
 
-  Future<_PlatformOutcome> _searchQishui(
-    String keyword, {
-    int cursor = 0,
-  }) async {
-    try {
-      final response = await _apiClient.apiFetch(
-        '${_urls.qishuiSearchUrl}?keyword=${Uri.encodeQueryComponent(keyword)}&cursor=$cursor',
-      );
-      final data = _decode(response);
-      if (data['status'] == 200) {
-        final tracks = _asListOfMaps(
-          data['tracks'],
-        ).map((e) => QishuiTrackDto(e).toTrack()).toList(growable: false);
-        return (tracks: tracks, error: null);
-      }
-      return (
-        tracks: const <Track>[],
-        error: data['msg']?.toString() ?? 'Search failed',
-      );
-    } catch (e) {
-      debugPrint('[SearchService] qishui search failed: $e');
-      return (tracks: const <Track>[], error: e.toString());
-    }
-  }
-
   Future<_ArtistOutcome> _searchArtists(String keyword) async {
     try {
       final response = await _apiClient.apiFetch(
@@ -357,6 +331,74 @@ class SearchService implements SearchRepository {
     } catch (e) {
       debugPrint('[SearchService] artist search failed: $e');
       return (artists: const <NeteaseArtistBrief>[], error: e.toString());
+    }
+  }
+
+  // --- 歌单搜索（网易云 + 酷狗并行，聚合） ---
+
+  Future<_PlaylistOutcome> _searchPlaylists(String keyword) async {
+    final results = await Future.wait([
+      _searchNeteasePlaylists(keyword),
+      _searchKugouPlaylists(keyword),
+    ]);
+    final playlists = <SearchPlaylist>[
+      ...results[0].playlists,
+      ...results[1].playlists,
+    ]..shuffle();
+    final errors = [
+      results[0].error,
+      results[1].error,
+    ].whereType<String>().toList();
+    return (
+      playlists: playlists,
+      error: errors.isEmpty ? null : errors.join('；'),
+    );
+  }
+
+  Future<_PlaylistOutcome> _searchNeteasePlaylists(String keyword) async {
+    try {
+      final response = await _apiClient.apiFetch(
+        _urls.neteasePlaylistSearchUrl,
+        method: 'POST',
+        headers: const {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: {'keywords': keyword, 'limit': '30'},
+      );
+      final data = _decode(response);
+      if (data['status'] == 200) {
+        final playlists = _asListOfMaps(
+          data['result'],
+        ).map((e) => SearchPlaylist.fromJson(e, source: MusicSource.netease)).toList(growable: false);
+        return (playlists: playlists, error: null);
+      }
+      return (
+        playlists: const <SearchPlaylist>[],
+        error: data['msg']?.toString() ?? 'Search failed',
+      );
+    } catch (e) {
+      debugPrint('[SearchService] netease playlist search failed: $e');
+      return (playlists: const <SearchPlaylist>[], error: e.toString());
+    }
+  }
+
+  Future<_PlaylistOutcome> _searchKugouPlaylists(String keyword) async {
+    try {
+      final response = await _apiClient.apiFetch(
+        '${_urls.kugouPlaylistSearchUrl}?keywords=${Uri.encodeQueryComponent(keyword)}&limit=30',
+      );
+      final data = _decode(response);
+      if (data['status'] == 200) {
+        final playlists = _asListOfMaps(
+          data['result'],
+        ).map((e) => SearchPlaylist.fromJson(e, source: MusicSource.kugou)).toList(growable: false);
+        return (playlists: playlists, error: null);
+      }
+      return (
+        playlists: const <SearchPlaylist>[],
+        error: data['msg']?.toString() ?? 'Search failed',
+      );
+    } catch (e) {
+      debugPrint('[SearchService] kugou playlist search failed: $e');
+      return (playlists: const <SearchPlaylist>[], error: e.toString());
     }
   }
 }

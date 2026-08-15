@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_miuix/miuix.dart';
 
 import '../../application/auth/account_session_controller.dart';
 import '../../application/playback/playback_controller.dart';
@@ -161,34 +160,109 @@ class _DesktopFavoriteButtonState extends State<DesktopFavoriteButton> {
     if (changed == true) await _refreshLike();
   }
 
+  bool _hovered = false;
+  bool _pressed = false;
+
   @override
   Widget build(BuildContext context) {
-    final theme = MiuixTheme.of(context);
     final favorited = _favorited;
     final tooltip = favorited
         ? '已收藏到: ${_playlistNames.join(", ")}'
         : '添加到歌单';
-    final tint = favorited
+
+    final Color backgroundColor;
+    final Border? border;
+    final List<BoxShadow>? shadows;
+
+    if (favorited) {
+      backgroundColor = const Color(0xFFEF4444).withValues(
+        alpha: _hovered ? 0.22 : 0.14,
+      );
+      border = Border.all(
+        color: const Color(0xFFEF4444).withValues(
+          alpha: _hovered ? 0.40 : 0.25,
+        ),
+        width: 0.8,
+      );
+      shadows = [
+        BoxShadow(
+          color: const Color(0xFFEF4444).withValues(
+            alpha: _hovered ? 0.20 : 0.10,
+          ),
+          blurRadius: 10,
+        ),
+      ];
+    } else if (_hovered) {
+      backgroundColor = Colors.white.withValues(alpha: 0.12);
+      border = Border.all(
+        color: Colors.white.withValues(alpha: 0.18),
+        width: 0.8,
+      );
+      shadows = null;
+    } else {
+      backgroundColor = Colors.transparent;
+      border = null;
+      shadows = null;
+    }
+
+    final Color iconColor = favorited
         ? const Color(0xFFEF4444)
-        : theme.colors.onSurfaceContainer;
+        : (_hovered
+            ? Colors.white.withValues(alpha: 0.95)
+            : Colors.white.withValues(alpha: 0.68));
+
+    final double scale;
+    if (_pressed) {
+      scale = 0.92;
+    } else if (_hovered) {
+      scale = 1.05;
+    } else {
+      scale = 1.0;
+    }
+
     return Tooltip(
       message: tooltip,
-      child: IconButton(
-        onPressed: _onTap,
-        icon: Icon(
-          favorited ? Icons.favorite : Icons.favorite_border,
-          size: widget.iconSize,
-          color: tint,
-        ),
-        style: IconButton.styleFrom(
-          backgroundColor: Colors.transparent,
-          hoverColor: theme.colors.onSurfaceContainer.withValues(alpha: 0.08),
-          highlightColor:
-              theme.colors.onSurfaceContainer.withValues(alpha: 0.13),
-          minimumSize: const Size(44, 44),
-          padding: EdgeInsets.zero,
+      waitDuration: const Duration(milliseconds: 400),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() {
+          _hovered = false;
+          _pressed = false;
+        }),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (_) => setState(() => _pressed = true),
+          onTapUp: (_) => setState(() => _pressed = false),
+          onTapCancel: () => setState(() => _pressed = false),
+          onTap: _onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: backgroundColor,
+              shape: BoxShape.circle,
+              border: border,
+              boxShadow: shadows,
+            ),
+            child: Center(
+              child: AnimatedScale(
+                scale: scale,
+                duration: const Duration(milliseconds: 150),
+                curve: Curves.easeOutCubic,
+                child: Icon(
+                  favorited ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                  size: widget.iconSize,
+                  color: iconColor,
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );
   }
 }
+

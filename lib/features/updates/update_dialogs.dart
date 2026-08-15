@@ -23,7 +23,11 @@ Future<void> showUpdateDialog(
   // 强制更新与维护公告都不允许点遮罩溜走。
   final dismissible = !info.forceUpdate && !info.fixing;
 
-  await showCyreneDialog<void>(
+  // 返回用户是否点了「立即更新」。不能在按钮回调里直接压进度弹窗：dismiss 只是
+  // 触发 Miuix 退场动画，真正的 Navigator.pop 要等动画结束才发生。若此刻立刻
+  // push 进度弹窗，退场动画收尾的 pop 会误关掉压在顶上的进度弹窗（见
+  // _CyreneOverlayPage.onDismissFinished）。所以先等这里完整 pop 返回，再压进度弹窗。
+  final proceed = await showCyreneDialog<bool>(
     context: context,
     title: info.fixing ? '服务器正在维护' : '发现新版本',
     summary: info.fixing ? null : 'v$appVersion → v${info.version}',
@@ -60,7 +64,7 @@ Future<void> showUpdateDialog(
                   '稍后提醒',
                   onPressed: () {
                     update.remindLater(info.version);
-                    dismiss();
+                    dismiss(false);
                     CyreneToast.show('下次启动时会再次提示');
                   },
                 ),
@@ -68,19 +72,16 @@ Future<void> showUpdateDialog(
                   '忽略此版本',
                   onPressed: () async {
                     await update.ignoreVersion(info.version);
-                    dismiss();
+                    dismiss(false);
                     CyreneToast.show('已忽略 v${info.version}');
                   },
                 ),
               ],
               if (info.fixing)
-                MiuixTextButton('我知道了', onPressed: () => dismiss())
+                MiuixTextButton('我知道了', onPressed: () => dismiss(false))
               else
                 MiuixButton(
-                  onPressed: () {
-                    dismiss();
-                    _startUpdate(context, info, update);
-                  },
+                  onPressed: () => dismiss(true),
                   colors: MiuixButtonDefaults.buttonColorsPrimary(
                     dialogContext,
                   ),
@@ -95,6 +96,10 @@ Future<void> showUpdateDialog(
       );
     },
   );
+
+  if (proceed == true && context.mounted) {
+    _startUpdate(context, info, update);
+  }
 }
 
 /// 平台支持应用内更新就走下载安装流程，否则把下载地址交给系统浏览器。

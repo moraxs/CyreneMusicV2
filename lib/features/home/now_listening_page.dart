@@ -391,7 +391,7 @@ class _NowListeningPageState extends State<NowListeningPage>
         sliver: SliverToBoxAdapter(
           child: Align(
             alignment: AlignmentDirectional.centerStart,
-            child: MiuixOverlayDropdownMenu(
+            child: MiuixWindowDropdownMenu(
               title: isSpotify ? 'Spotify' : '网易云音乐',
               insideMargin: const EdgeInsets.symmetric(
                 horizontal: 14,

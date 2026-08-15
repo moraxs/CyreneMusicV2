@@ -18,6 +18,8 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         // 注册系统通知栏媒体控制器插件
         flutterEngine.plugins.add(MediaNotificationPlugin())
+        // 注册本地音乐导入插件（SAF 选文件/选文件夹，复制为应用私有真实文件）
+        flutterEngine.plugins.add(LocalMusicPlugin())
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

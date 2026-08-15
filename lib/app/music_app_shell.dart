@@ -199,8 +199,11 @@ class _MusicAppShellState extends State<MusicAppShell> {
   void _openSearch() {
     Navigator.of(context).push(
       CupertinoPageRoute<void>(
-        builder: (_) =>
-            SearchPage(search: widget.search, playback: widget.playback),
+        builder: (_) => SearchPage(
+          search: widget.search,
+          playback: widget.playback,
+          token: widget.account.token,
+        ),
       ),
     );
   }
@@ -239,6 +242,8 @@ class _MusicAppShellState extends State<MusicAppShell> {
           playlistId: playlist.id,
           title: playlist.name,
           coverUrl: playlist.coverImgUrl,
+          creator: playlist.creatorNickname,
+          trackCount: playlist.trackCount,
           playback: widget.playback,
           token: widget.account.token,
         ),

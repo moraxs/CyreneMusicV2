@@ -43,7 +43,9 @@ class PlaylistImportService {
         case MusicPlatform.apple:
           return _parseAppleId(trimmed);
         case MusicPlatform.kugou:
-          return null;
+          // 酷狗短链/分享URL/ID 的解析在后端 /kugou/playlist/import 完成，
+          // 这里原样返回输入，交由后端统一解析。
+          return trimmed.isEmpty ? null : trimmed;
       }
     } catch (e) {
       return null;
@@ -104,7 +106,10 @@ class PlaylistImportService {
         apiUrl = '${UrlService.instance.baseUrl}/apple/playlist?id=$playlistId';
         break;
       case MusicPlatform.kugou:
-        return null;
+        // 酷狗由后端解析短链/分享URL并拉取歌单（匿名）
+        apiUrl =
+            '${UrlService.instance.baseUrl}/kugou/playlist/import?url=${Uri.encodeQueryComponent(playlistId)}';
+        break;
     }
 
     try {
@@ -117,6 +122,28 @@ class PlaylistImportService {
         headers: headers,
       );
       final result = _decode(response);
+      // 酷狗后端返回 { code:200, data:{ id,name,pic,intro,creator,total,tracks } }
+      if (platform == MusicPlatform.kugou) {
+        if (result['code'] != 200 || result['data'] is! Map) return null;
+        final data = Map<String, Object?>.from(result['data'] as Map);
+        final tracksRaw = data['tracks'];
+        final trackList = (tracksRaw is List ? tracksRaw : const <Object>[])
+            .whereType<Map>()
+            .map(
+              (t) => _convertKugouTrack(Map<String, Object?>.from(t)),
+            )
+            .toList();
+        return ExternalPlaylist(
+          id: data['id']?.toString() ?? playlistId,
+          name: data['name']?.toString() ?? '酷狗歌单',
+          coverImgUrl: data['pic']?.toString() ?? '',
+          creator: data['creator']?.toString(),
+          trackCount: (data['total'] as num?)?.toInt() ?? trackList.length,
+          description: (data['intro'] as String?)?.toString(),
+          tracks: trackList,
+          platform: platform,
+        );
+      }
       if (result['success'] == true ||
           (result['status'] == 200 && result['data'] != null)) {
         final dataRoot = result['data'];
@@ -227,6 +254,35 @@ class PlaylistImportService {
       album: album,
       picUrl: picUrl,
       source: _mapPlatformToSource(platform),
+      duration: Duration(milliseconds: (seconds * 1000).round()),
+    );
+  }
+
+  /// 转换酷狗歌单歌曲（后端 /kugou/playlist/import 返回的 kugou 风格字段）。
+  Track _convertKugouTrack(Map<String, Object?> song) {
+    final name = song['filename']?.toString() ?? song['name']?.toString() ?? '';
+    final nameParts = name.split(' - ');
+    final singer = (song['singer']?.toString().isNotEmpty ?? false)
+        ? song['singer']!.toString()
+        : (nameParts.length > 1 ? nameParts[0] : '');
+    final title =
+        nameParts.length > 1 ? nameParts.sublist(1).join(' - ') : name;
+
+    final durationRaw = song['duration'];
+    final seconds = durationRaw is num
+        ? durationRaw.toDouble() / 1000
+        : (num.tryParse(durationRaw?.toString() ?? '') ?? 0) / 1000;
+
+    return Track(
+      // hash 作为 id，供后续取流使用
+      id: (song['hash']?.toString() ?? '').isEmpty
+          ? (song['album_audio_id']?.toString() ?? '')
+          : song['hash'].toString(),
+      name: title,
+      artists: singer,
+      album: song['album_name']?.toString() ?? '',
+      picUrl: song['img']?.toString() ?? '',
+      source: MusicSource.kugou,
       duration: Duration(milliseconds: (seconds * 1000).round()),
     );
   }

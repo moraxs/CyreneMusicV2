@@ -9,24 +9,47 @@ import '../../application/playback/playback_controller.dart';
 import '../../application/search/search_controller.dart';
 import '../../domain/models/media_url.dart';
 import '../../domain/models/search.dart';
+import '../../domain/models/search_playlist.dart';
 import '../../domain/models/track.dart';
+import '../../infrastructure/services/developer_mode_service.dart';
 import '../../infrastructure/services/search_suggestion_service.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
-import '../../presentation/cyrene/cyrene_toast.dart';
 import '../artist/artist_detail_page.dart';
 import '../player/cyrene_track_tile.dart';
+import '../player/track_action_menu.dart';
+import '../playlist/playlist_detail_page.dart';
 
 class SearchPage extends StatefulWidget {
   const SearchPage({
     super.key,
     required this.search,
     required this.playback,
+    this.token,
     this.initialQuery = '',
+    this.body,
+    this.onOpenPlaylist,
+    this.onOpenArtist,
+    this.onOpenSecondary,
   });
 
   final SearchController search;
   final PlaybackController playback;
+
+  /// 登录 token（用于收藏到歌单）。null 表示未登录，收藏入口提示先登录。
+  final String? token;
   final String initialQuery;
+
+  /// 桌面端内容区二级页。非空时保留桌面外壳，仅用详情页替换搜索页内容。
+  final Widget? body;
+
+  /// 自定义打开歌单（桌面端压入搜索页二级栈；移动端为 null 走全局 push 路由）。
+  final void Function(SearchPlaylist playlist)? onOpenPlaylist;
+
+  /// 自定义打开歌手详情（桌面端压入搜索页二级栈；移动端为 null 走全局 push 路由）。
+  final void Function(NeteaseArtistBrief artist)? onOpenArtist;
+
+  /// 压入二级页（通用回调）。
+  final void Function(Widget page)? onOpenSecondary;
 
   @override
   State<SearchPage> createState() => _SearchPageState();
@@ -51,6 +74,9 @@ class _SearchPageState extends State<SearchPage> {
   @override
   void initState() {
     super.initState();
+    _tab = _searchTabs(
+      DeveloperModeService.instance.isSearchResultMergeEnabled,
+    ).first;
     if (widget.initialQuery.trim().isNotEmpty) {
       widget.search.search(widget.initialQuery);
     }
@@ -104,12 +130,20 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   @override
-  Widget build(BuildContext context) => CyrenePage(
-    title: '搜索',
-    body: AnimatedBuilder(
-      animation: widget.search,
+  Widget build(BuildContext context) {
+    final body = widget.body;
+    if (body != null) return body;
+
+    return CyrenePage(
+      title: '搜索',
+      body: AnimatedBuilder(
+        animation: widget.search,
       builder: (context, _) {
         final state = widget.search.state;
+        final tabs = _searchTabs(
+          DeveloperModeService.instance.isSearchResultMergeEnabled,
+        );
+        if (!tabs.contains(_tab)) _tab = tabs.first;
         final typed = _query.trim();
         // 输入中且与已提交关键词不同 → 展示搜索建议（与 Web 弹层条件一致）。
         final showSuggestions =
@@ -134,6 +168,7 @@ class _SearchPageState extends State<SearchPage> {
             ),
             if (state.keyword.isNotEmpty && !showSuggestions && !showDiscover)
               _PlatformTabs(
+                tabs: tabs,
                 selected: _tab,
                 result: state.result,
                 onSelected: (tab) => setState(() => _tab = tab),
@@ -151,6 +186,7 @@ class _SearchPageState extends State<SearchPage> {
       },
     ),
   );
+  }
 
   Widget _buildContent(dynamic state) {
     if (state.isLoading) {
@@ -181,6 +217,9 @@ class _SearchPageState extends State<SearchPage> {
     final result = state.result as SearchResult;
     if (_tab == _SearchTab.artist) {
       return _artistResults(result.artistResults, result.artistError);
+    }
+    if (_tab == _SearchTab.playlist) {
+      return _playlistResults(result.playlists, result.playlistsError);
     }
     return _trackResults(_tracksFor(result, _tab), _errorFor(result, _tab));
   }
@@ -225,11 +264,13 @@ class _SearchPageState extends State<SearchPage> {
         final track = tracks[trackIndex];
         return CyreneTrackTile(
           track: track,
-          onPlay: () => widget.playback.playTrack(track, queue: [track]),
-          onAddToQueue: () {
-            widget.playback.addToQueue(track);
-            CyreneToast.show('已加入播放队列：${track.name}');
-          },
+          onPlay: () => widget.playback.playNextToQueue(track),
+          onShowMenu: () => showTrackActionMenu(
+            context,
+            track: track,
+            playback: widget.playback,
+            token: widget.token,
+          ),
         );
       },
     );
@@ -271,30 +312,130 @@ class _SearchPageState extends State<SearchPage> {
         final artist = artists[index];
         return _ArtistCard(
           artist: artist,
-          onTap: () => Navigator.of(context).push(
-            CupertinoPageRoute<void>(
-              builder: (_) => ArtistDetailPage(
-                playback: widget.playback,
-                artistId: artist.id,
-                artistName: artist.name,
-              ),
-            ),
-          ),
+          onTap: () => _openArtist(artist),
         );
       },
     );
   }
 
+  void _openArtist(NeteaseArtistBrief artist) {
+    if (widget.onOpenArtist != null) {
+      widget.onOpenArtist!(artist);
+      return;
+    }
+    Navigator.of(context).push(
+      CupertinoPageRoute<void>(
+        builder: (_) => ArtistDetailPage(
+          playback: widget.playback,
+          artistId: artist.id,
+          artistName: artist.name,
+        ),
+      ),
+    );
+  }
+
+  Widget _playlistResults(List<SearchPlaylist> playlists, String? error) {
+    if (error != null && playlists.isEmpty) {
+      return CyreneEmptyState(
+        icon: Icons.library_music_outlined,
+        title: '歌单搜索失败',
+        description: error,
+        action: MiuixButton(
+          onPressed: _submit,
+          child: MiuixText(
+            '重试',
+            style: MiuixTheme.of(context).textStyles.button,
+          ),
+        ),
+      );
+    }
+    if (playlists.isEmpty) {
+      return const CyreneEmptyState(
+        icon: Icons.queue_music,
+        title: '暂无歌单结果',
+        description: '换个关键词再试试。',
+      );
+    }
+    return Column(
+      children: [
+        if (error != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: CyreneInlineAlert(
+              icon: Icons.warning_amber_rounded,
+              title: '部分结果不可用',
+              description: error,
+              destructive: true,
+            ),
+          ),
+        Expanded(
+          child: GridView.builder(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+            physics: const BouncingScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 190,
+              mainAxisSpacing: 14,
+              crossAxisSpacing: 12,
+              childAspectRatio: .8,
+            ),
+            itemCount: playlists.length,
+            itemBuilder: (context, index) {
+              final playlist = playlists[index];
+              return _PlaylistTile(
+                playlist: playlist,
+                onTap: () => _openPlaylist(playlist),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 打开歌单详情页（网易云走既有详情，酷狗走新增的 /kugou/playlist/detail）。
+  void _openPlaylist(SearchPlaylist playlist) {
+    if (widget.onOpenPlaylist != null) {
+      widget.onOpenPlaylist!(playlist);
+      return;
+    }
+    Navigator.of(context).push(
+      CupertinoPageRoute<void>(
+        builder: (_) => PlaylistDetailPage(
+          playlistId: playlist.id,
+          title: playlist.name,
+          coverUrl: playlist.coverUrl,
+          creator: playlist.creator,
+          trackCount: playlist.trackCount,
+          source: playlist.source,
+          playback: widget.playback,
+          token: widget.token,
+        ),
+      ),
+    );
+  }
+
   List<Track> _tracksFor(SearchResult result, _SearchTab tab) => switch (tab) {
     _SearchTab.aggregate => result.aggregatedTracks,
+    _SearchTab.netease => result.neteaseResults,
+    _SearchTab.qq => result.qqResults,
+    _SearchTab.kugou => result.kugouResults,
+    _SearchTab.kuwo => result.kuwoResults,
+    _SearchTab.apple => result.appleResults,
     _SearchTab.spotify => result.spotifyResults,
     _SearchTab.artist => const [],
+    _SearchTab.playlist => const [],
   };
 
   String? _errorFor(SearchResult result, _SearchTab tab) => switch (tab) {
     _SearchTab.aggregate => result.aggregatedError,
+    _SearchTab.netease => result.neteaseError,
+    _SearchTab.qq => result.qqError,
+    _SearchTab.kugou => result.kugouError,
+    _SearchTab.kuwo => result.kuwoError,
+    _SearchTab.apple => result.appleError,
     _SearchTab.spotify => result.spotifyError,
     _SearchTab.artist => result.artistError,
+    _SearchTab.playlist => result.playlistsError,
   };
 
   Future<void> _submit() async {
@@ -520,8 +661,14 @@ class _SearchChip extends StatelessWidget {
 
 enum _SearchTab {
   aggregate('聚合搜索'),
+  netease('网易云'),
+  qq('QQ 音乐'),
+  kugou('酷狗'),
+  kuwo('酷我'),
+  apple('Apple Music'),
   spotify('Spotify'),
-  artist('歌手');
+  artist('歌手'),
+  playlist('歌单');
 
   const _SearchTab(this.label);
   final String label;
@@ -529,25 +676,47 @@ enum _SearchTab {
   /// 失败空态标题（避免 '聚合搜索搜索失败' 这类读感）。
   String get failureTitle => switch (this) {
     _SearchTab.aggregate => '搜索失败',
-    _SearchTab.spotify => 'Spotify 搜索失败',
     _SearchTab.artist => '歌手搜索失败',
+    _ => '$label 搜索失败',
   };
 
   /// 无结果空态标题。
   String get emptyTitle => switch (this) {
     _SearchTab.aggregate => '暂无结果',
-    _SearchTab.spotify => 'Spotify 暂无结果',
     _SearchTab.artist => '暂无歌手结果',
+    _ => '$label 暂无结果',
   };
 }
 
+/// 搜索标签列表：合并模式展示「聚合搜索 / Spotify / 歌手」，
+/// 分平台模式按平台展开（含歌手）。
+List<_SearchTab> _searchTabs(bool mergeEnabled) => mergeEnabled
+    ? const [
+        _SearchTab.aggregate,
+        _SearchTab.spotify,
+        _SearchTab.artist,
+        _SearchTab.playlist,
+      ]
+    : const [
+        _SearchTab.netease,
+        _SearchTab.qq,
+        _SearchTab.kugou,
+        _SearchTab.kuwo,
+        _SearchTab.apple,
+        _SearchTab.spotify,
+        _SearchTab.artist,
+        _SearchTab.playlist,
+      ];
+
 class _PlatformTabs extends StatelessWidget {
   const _PlatformTabs({
+    required this.tabs,
     required this.selected,
     required this.result,
     required this.onSelected,
   });
 
+  final List<_SearchTab> tabs;
   final _SearchTab selected;
   final SearchResult result;
   final ValueChanged<_SearchTab> onSelected;
@@ -559,11 +728,11 @@ class _PlatformTabs extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16),
       scrollDirection: Axis.horizontal,
       physics: const BouncingScrollPhysics(),
-      itemCount: _SearchTab.values.length,
+      itemCount: tabs.length,
       separatorBuilder: (_, _) => const SizedBox(width: 8),
       itemBuilder: (context, index) {
         final theme = MiuixTheme.of(context);
-        final tab = _SearchTab.values[index];
+        final tab = tabs[index];
         final label = '${tab.label} ${_count(tab)}';
         // insideMargin 收窄以适配 42 高的横向标签条（默认竖向 13 会溢出）。
         const tabMargin = EdgeInsets.symmetric(horizontal: 16, vertical: 9);
@@ -585,8 +754,14 @@ class _PlatformTabs extends StatelessWidget {
 
   int _count(_SearchTab tab) => switch (tab) {
     _SearchTab.aggregate => result.aggregatedTracks.length,
+    _SearchTab.netease => result.neteaseResults.length,
+    _SearchTab.qq => result.qqResults.length,
+    _SearchTab.kugou => result.kugouResults.length,
+    _SearchTab.kuwo => result.kuwoResults.length,
+    _SearchTab.apple => result.appleResults.length,
     _SearchTab.spotify => result.spotifyResults.length,
     _SearchTab.artist => result.artistResults.length,
+    _SearchTab.playlist => result.playlists.length,
   };
 }
 
@@ -656,6 +831,97 @@ class _ArtistCard extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: theme.textStyles.body2.copyWith(
+                color: colors.onSurfaceVariantSummary,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// 歌单搜索结果卡片（纵向）：封面在上，名称与创建者/曲目数在下。
+class _PlaylistTile extends StatelessWidget {
+  const _PlaylistTile({required this.playlist, required this.onTap});
+
+  final SearchPlaylist playlist;
+  final VoidCallback onTap;
+
+  String _subtitle() {
+    final creator = playlist.creator?.trim();
+    if (creator != null && creator.isNotEmpty) {
+      if (playlist.trackCount > 0) {
+        return '$creator · ${playlist.trackCount} 首';
+      }
+      return creator;
+    }
+    if (playlist.trackCount > 0) {
+      return '${playlist.trackCount} 首';
+    }
+    return '';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = MiuixTheme.of(context);
+    final colors = theme.colors;
+    final fallback = ColoredBox(
+      color: colors.secondaryContainer,
+      child: Icon(
+        Icons.queue_music,
+        size: 42,
+        color: colors.onSurfaceVariantSummary,
+      ),
+    );
+    final subtitle = _subtitle();
+    return MiuixCard(
+      onPressed: onTap,
+      feedbackType: MiuixPressFeedbackType.sink,
+      insideMargin: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: playlist.coverUrl.isEmpty
+                  ? fallback
+                  : LayoutBuilder(
+                      builder: (context, constraints) => CachedNetworkImage(
+                        imageUrl: playlist.coverUrl,
+                        httpHeaders: imageHeaders(playlist.coverUrl),
+                        fit: BoxFit.cover,
+                        // 按 cell 实际宽降采样解码，避免全尺寸封面拖累滚动。
+                        memCacheWidth: coverDecodeWidth(
+                          constraints.maxWidth.isFinite &&
+                                  constraints.maxWidth > 0
+                              ? constraints.maxWidth
+                              : 160,
+                          MediaQuery.devicePixelRatioOf(context),
+                        ),
+                        errorWidget: (_, _, _) => fallback,
+                      ),
+                    ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            playlist.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textStyles.body2.copyWith(
+              color: colors.onSurfaceContainer,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          if (subtitle.isNotEmpty) ...[
+            const SizedBox(height: 3),
+            Text(
+              subtitle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textStyles.footnote1.copyWith(
                 color: colors.onSurfaceVariantSummary,
               ),
             ),

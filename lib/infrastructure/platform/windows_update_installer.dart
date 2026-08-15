@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart';
@@ -41,7 +42,7 @@ class WindowsUpdateInstaller implements UpdateInstaller {
     tempDir.createSync(recursive: true);
 
     try {
-      _extract(package, tempDir);
+      await _extract(package, tempDir);
     } catch (e) {
       throw UpdateInstallFailure('更新包解压失败：$e');
     }
@@ -83,9 +84,20 @@ class WindowsUpdateInstaller implements UpdateInstaller {
   ///
   /// 打包方式不同，zip 里可能是 `Cyrene/xxx.exe` 也可能直接是 `xxx.exe`。
   /// 不剥的话文件会被覆盖到 `<安装目录>/Cyrene/` 而非安装目录本身。
-  void _extract(File package, Directory target) {
+  ///
+  /// 读盘 + CRC 校验 + 逐文件落盘对 ~70MB 的包是重活，放在独立 isolate 里跑，
+  /// 否则会阻塞主 isolate，窗口表现为无响应（点击弹「窗口被占用」的提示音）。
+  Future<void> _extract(File package, Directory target) async {
+    final count = await Isolate.run(
+      () => _extractSync(package.path, target.path),
+    );
+    debugPrint('[WindowsUpdateInstaller] 解压完成，共 $count 个文件');
+  }
+
+  /// [_extract] 的同步实现，只在后台 isolate 中执行。
+  static int _extractSync(String packagePath, String targetPath) {
     final archive = ZipDecoder().decodeBytes(
-      package.readAsBytesSync(),
+      File(packagePath).readAsBytesSync(),
       verify: true,
     );
 
@@ -108,7 +120,7 @@ class WindowsUpdateInstaller implements UpdateInstaller {
       }
       if (name.isEmpty) continue;
 
-      final outputPath = p.join(target.path, name);
+      final outputPath = p.join(targetPath, name);
       if (entry.isDirectory) {
         Directory(outputPath).createSync(recursive: true);
         continue;
@@ -118,7 +130,7 @@ class WindowsUpdateInstaller implements UpdateInstaller {
       file.writeAsBytesSync(entry.readBytes() ?? const <int>[], flush: true);
       count++;
     }
-    debugPrint('[WindowsUpdateInstaller] 解压完成，共 $count 个文件');
+    return count;
   }
 
   /// 压缩包条目名的防穿越处理：带 `..` 的一律丢弃，避免写到安装目录之外。

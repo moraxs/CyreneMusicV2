@@ -100,6 +100,7 @@ class UrlService extends ChangeNotifier {
   String get searchHotUrl => _path('/search/hot');
   String get songUrl => _path('/song');
   String get toplistsUrl => _path('/toplists');
+  String get neteasePlaylistSearchUrl => _path('/search/playlist');
 
   // QQ Music
   String get qqSearchUrl => _path('/qq/search');
@@ -108,6 +109,7 @@ class UrlService extends ChangeNotifier {
   // Kugou
   String get kugouSearchUrl => _path('/kugou/search');
   String get kugouSongUrl => _path('/kugou/song');
+  String get kugouPlaylistSearchUrl => _path('/kugou/search/playlist');
 
   // Kuwo
   String get kuwoSearchUrl => _path('/kuwo/search');
@@ -120,9 +122,6 @@ class UrlService extends ChangeNotifier {
   String get spotifySearchUrl => _path('/spotify/search');
   String spotifyPlaylistUrl(String playlistId, {int limit = 50}) =>
       _path('/spotify/playlist/$playlistId?limit=$limit');
-
-  // Qishui
-  String get qishuiSearchUrl => _path('/qishui/search');
 
   // Update
   /// 应用更新检查端点：返回最新版本号、更新说明与各平台下载地址。

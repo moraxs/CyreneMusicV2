@@ -1,3 +1,5 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
@@ -14,6 +16,8 @@ import '../../presentation/cyrene/cyrene_overlays.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
 import '../../presentation/cyrene/cyrene_toast.dart';
 import '../player/cyrene_track_tile.dart';
+import '../player/mobile/compat/color_extraction_service.dart';
+import '../player/track_action_menu.dart';
 import '../player/track_artwork.dart';
 
 class PlaylistDetailPage extends StatefulWidget {
@@ -27,10 +31,11 @@ class PlaylistDetailPage extends StatefulWidget {
     this.onOpenPlaylist,
     this.desktopLayout = false,
     this.source = MusicSource.netease,
+    this.creator,
+    this.trackCount = 0,
     this.initialPlaylist,
     this.reloadable = true,
-  }) : isPersonal = false,
-       trackCount = 0;
+  }) : isPersonal = false;
 
   /// 个人歌单模式：曲目走 Cyrene 后端 `/playlists/:id/tracks`（需 [token]）。
   const PlaylistDetailPage.personal({
@@ -41,6 +46,7 @@ class PlaylistDetailPage extends StatefulWidget {
     required this.playback,
     required String this.token,
     this.trackCount = 0,
+    this.creator,
     this.onOpenPlaylist,
     this.desktopLayout = false,
     this.source = MusicSource.netease,
@@ -51,6 +57,7 @@ class PlaylistDetailPage extends StatefulWidget {
   final Object playlistId;
   final String title;
   final String coverUrl;
+  final String? creator;
   final PlaybackController playback;
   final String? token;
   final bool isPersonal;
@@ -88,12 +95,14 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   bool _isSyncing = false;
   int _loadGeneration = 0;
   List<Track> _tracks = const [];
+  Color? _extractedThemeColor;
 
   /// 是否展开歌单内搜索框；关闭时清空关键词与输入控制器。
   bool _searching = false;
   String _searchQuery = '';
   final _searchController = TextEditingController();
   final _searchFocusNode = FocusNode();
+  final _scrollController = ScrollController();
 
   /// 当前排序方式；默认保持歌单原始顺序。
   PlaylistSortMode _sortMode = PlaylistSortMode.defaultOrder;
@@ -101,9 +110,26 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   @override
   void initState() {
     super.initState();
-    _playlist = widget.initialPlaylist;
+    _playlist = widget.initialPlaylist ??
+        PlaylistDetail(
+          id: widget.playlistId is int
+              ? widget.playlistId as int
+              : (int.tryParse(widget.playlistId.toString()) ?? 0),
+          name: widget.title,
+          coverImgUrl: widget.coverUrl,
+          description: '',
+          tracks: const [],
+          source: widget.source,
+          playCount: 0,
+          creator: widget.creator ?? '',
+          trackCount: widget.trackCount,
+          createTime: 0,
+          updateTime: 0,
+          tags: const [],
+        );
     _tracks = _mapTracks(widget.initialPlaylist);
     _isLoading = widget.initialPlaylist == null;
+    _triggerColorExtraction();
     if (widget.initialPlaylist == null) _load();
   }
 
@@ -112,6 +138,7 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
     _loadGeneration++;
     _searchController.dispose();
     _searchFocusNode.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -210,7 +237,7 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
     });
 
     try {
-      final playlist = widget.isPersonal
+      final fetched = widget.isPersonal
           ? await _loadPersonal()
           : await DiscoveryService.instance.getPlaylistDetail(
               widget.playlistId,
@@ -219,18 +246,83 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
             );
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
-        _playlist = playlist;
-        _tracks = _mapTracks(playlist);
+        if (fetched != null) {
+          final mergedName = (fetched.name.isNotEmpty && fetched.name != '酷狗歌单')
+              ? fetched.name
+              : (widget.title.isNotEmpty ? widget.title : fetched.name);
+          final mergedCover = fetched.coverImgUrl.isNotEmpty
+              ? fetched.coverImgUrl
+              : widget.coverUrl;
+          final mergedCreator = (fetched.creator.isNotEmpty && fetched.creator != '酷狗音乐')
+              ? fetched.creator
+              : (widget.creator?.isNotEmpty == true ? widget.creator! : fetched.creator);
+          final mergedTrackCount = fetched.trackCount > 0
+              ? fetched.trackCount
+              : (widget.trackCount > 0
+                  ? widget.trackCount
+                  : fetched.tracks.length);
+
+          _playlist = PlaylistDetail(
+            id: fetched.id != 0
+                ? fetched.id
+                : (widget.playlistId is int
+                    ? widget.playlistId as int
+                    : (int.tryParse(widget.playlistId.toString()) ?? 0)),
+            name: mergedName,
+            coverImgUrl: mergedCover,
+            description: fetched.description,
+            tracks: fetched.tracks,
+            source: fetched.source ?? widget.source,
+            playCount: fetched.playCount,
+            creator: mergedCreator,
+            trackCount: mergedTrackCount,
+            createTime: fetched.createTime,
+            updateTime: fetched.updateTime,
+            tags: fetched.tags,
+          );
+          _triggerColorExtraction();
+        }
+        _tracks = _mapTracks(_playlist);
         _isLoading = false;
-        if (playlist == null) _errorMessage = '未能获取这个歌单，请稍后重试。';
+        if (fetched == null && _tracks.isEmpty) {
+          _errorMessage = '未能获取这个歌单，请稍后重试。';
+        }
       });
     } catch (_) {
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _isLoading = false;
-        _errorMessage = '歌单加载失败，请检查网络后重试。';
+        if (_tracks.isEmpty) {
+          _errorMessage = '歌单加载失败，请检查网络后重试。';
+        }
       });
     }
+  }
+
+  void _triggerColorExtraction() {
+    final cover = _playlist?.coverImgUrl.isNotEmpty == true
+        ? _playlist!.coverImgUrl
+        : widget.coverUrl;
+    if (cover.isEmpty) return;
+
+    final cached = ColorExtractionService().getCachedColors(cover);
+    if (cached?.themeColor != null) {
+      _extractedThemeColor = cached!.themeColor;
+      return;
+    }
+
+    final gen = _loadGeneration;
+    ColorExtractionService()
+        .extractColorsFromUrl(cover, sampleSize: 32)
+        .then((result) {
+      if (!mounted || gen != _loadGeneration) return;
+      if (result?.themeColor != null &&
+          result!.themeColor != _extractedThemeColor) {
+        setState(() {
+          _extractedThemeColor = result.themeColor;
+        });
+      }
+    });
   }
 
   /// 加载个人歌单曲目并组装为 [PlaylistDetail]（元信息来自跳转参数）。
@@ -264,40 +356,34 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   );
 
   @override
-  Widget build(BuildContext context) => CyrenePage(
-    // 桌面外壳已有标题栏，详情信息卡也会展示歌单名；内部顶栏仅保留操作区，
-    // 不再重复渲染一份居中的歌单标题。移动端标题保持原样。
-    title: widget.desktopLayout
-        ? ''
-        : (_playlist?.name.isNotEmpty == true ? _playlist!.name : widget.title),
-    largeTitle: !widget.desktopLayout,
-    actions: [
-      // 在线歌单：同步收藏到自己的歌单（绑定来源 + 增量同步，对应原版发现页功能）。
-      if (!widget.desktopLayout &&
-          !widget.isPersonal &&
-          widget.token?.isNotEmpty == true) ...[
-        MiuixIconButton(
-          key: const Key('sync-playlist-button'),
-          enabled: !_isSyncing,
-          onPressed: () => _syncToAccount(context),
-          child: _isSyncing
-              ? const MiuixCircularProgressIndicator(size: 18, strokeWidth: 2)
-              : const MiuixIcon(icon: Icons.sync_rounded, size: 20),
-        ),
-        const SizedBox(width: 8),
-      ],
-      // 歌单内搜索：展开/收起歌曲列表上方的过滤输入框。
-      MiuixIconButton(
-        key: const Key('playlist-search-button'),
-        onPressed: _toggleSearch,
-        child: MiuixIcon(
-          vector: MiuixIcons.extended.byName(_searching ? 'close' : 'search')!,
-          size: 20,
-        ),
+  Widget build(BuildContext context) {
+    if (widget.desktopLayout) {
+      return CyrenePage(
+        title: '',
+        largeTitle: false,
+        actions: [
+          MiuixIconButton(
+            key: const Key('playlist-search-button'),
+            onPressed: _toggleSearch,
+            child: MiuixIcon(
+              vector:
+                  MiuixIcons.extended.byName(_searching ? 'close' : 'search')!,
+              size: 20,
+            ),
+          ),
+        ],
+        bodyBuilder: (context, topPadding) => _buildBody(topPadding),
+      );
+    }
+
+    return MiuixScaffold(
+      containerColor: Colors.transparent,
+      content: (_) => Material(
+        type: MaterialType.transparency,
+        child: _buildBody(EdgeInsets.zero),
       ),
-    ],
-    bodyBuilder: (context, topPadding) => _buildBody(topPadding),
-  );
+    );
+  }
 
   Future<void> _syncToAccount(BuildContext context) async {
     final token = widget.token;
@@ -369,11 +455,12 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   }
 
   Widget _buildBody(EdgeInsets topPadding) {
-    if (_isLoading && _playlist == null) {
-      return const Center(child: MiuixCircularProgressIndicator());
-    }
-    if (_errorMessage != null && _playlist == null) {
-      return CyreneEmptyState(
+    final theme = MiuixTheme.of(context);
+    final isDesktop = widget.desktopLayout;
+    final canPop = Navigator.of(context).canPop();
+
+    if (_errorMessage != null && _tracks.isEmpty) {
+      final emptyState = CyreneEmptyState(
         icon: Icons.cloud_off,
         title: '歌单暂时不可用',
         description: _errorMessage!,
@@ -381,8 +468,26 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
           onPressed: _load,
           child: MiuixText(
             '重试',
-            style: MiuixTheme.of(context).textStyles.button,
+            style: theme.textStyles.button,
           ),
+        ),
+      );
+      if (isDesktop) return emptyState;
+      return SafeArea(
+        child: Column(
+          children: [
+            if (canPop)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: CyreneBackButton(
+                    onPressed: () => Navigator.maybePop(context),
+                  ),
+                ),
+              ),
+            Expanded(child: emptyState),
+          ],
         ),
       );
     }
@@ -391,48 +496,144 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
     final allTracks = _tracks;
     final tracks = _sortedTracks;
     final isFiltering = _searchQuery.trim().isNotEmpty;
-    final scrollView = CustomScrollView(
+    final cover = playlist.coverImgUrl.isNotEmpty
+        ? playlist.coverImgUrl
+        : widget.coverUrl;
+
+    if (isDesktop) {
+      final scrollView = CustomScrollView(
+        physics: const AlwaysScrollableScrollPhysics(
+          parent: ClampingScrollPhysics(),
+        ),
+        slivers: [
+          SliverPadding(
+            padding: topPadding,
+            sliver: SliverToBoxAdapter(
+              child: _DesktopPlaylistHeader(
+                playlist: playlist,
+                fallbackCoverUrl: widget.coverUrl,
+                onPlayAll: tracks.isEmpty
+                    ? null
+                    : () => _play(tracks.first, tracks),
+                onSync:
+                    !widget.isPersonal &&
+                        widget.token?.isNotEmpty == true &&
+                        !_isSyncing
+                    ? () => _syncToAccount(context)
+                    : null,
+                isSyncing: _isSyncing,
+              ),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: _PlaylistSortBar(
+              mode: _sortMode,
+              trackCount: isFiltering ? tracks.length : playlist.trackCount,
+              onTap: () => _openSortSheet(context),
+              desktopLayout: true,
+            ),
+          ),
+          if (_searching)
+            SliverToBoxAdapter(
+              child: _PlaylistSearchField(
+                controller: _searchController,
+                focusNode: _searchFocusNode,
+                onChanged: (value) => setState(() => _searchQuery = value),
+                onClear: _closeSearch,
+                resultCount: isFiltering ? tracks.length : null,
+                desktopLayout: true,
+              ),
+            ),
+          if (_isLoading && allTracks.isEmpty)
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(child: MiuixCircularProgressIndicator()),
+            )
+          else if (allTracks.isEmpty)
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: CyreneEmptyState(
+                icon: Icons.music_note,
+                title: '歌单里还没有歌曲',
+                description: '稍后再来看看吧。',
+              ),
+            )
+          else if (tracks.isEmpty)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: CyreneEmptyState(
+                icon: Icons.search_off,
+                title: '没有匹配的歌曲',
+                description: '换个关键词试试，或清空搜索查看全部。',
+                action: MiuixButton(
+                  onPressed: _closeSearch,
+                  child: MiuixText('清空搜索', style: theme.textStyles.button),
+                ),
+              ),
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 36),
+              sliver: _DesktopTrackTable(
+                tracks: tracks,
+                playback: widget.playback,
+                onPlay: (track) => _play(track, tracks),
+                onShowMenu: (track) => showTrackActionMenu(
+                  context,
+                  track: track,
+                  playback: widget.playback,
+                  token: widget.token,
+                ),
+              ),
+            ),
+        ],
+      );
+
+      return CyrenePullToRefresh(
+        onRefresh: _load,
+        contentPadding: EdgeInsets.only(top: topPadding.top),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 960),
+            child: scrollView,
+          ),
+        ),
+      );
+    }
+
+    // 移动端：全宽顶部固定封面 + 向上滑动的详情与歌曲内容 + 悬浮操作栏
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final heroHeight = (screenWidth * 0.95).clamp(330.0, 420.0);
+    final topSafeInset = MediaQuery.paddingOf(context).top;
+
+    final mobileScrollView = CustomScrollView(
+      controller: _scrollController,
       physics: const AlwaysScrollableScrollPhysics(
         parent: ClampingScrollPhysics(),
       ),
       slivers: [
-        SliverPadding(
-          padding: topPadding,
-          sliver: SliverToBoxAdapter(
-            child: widget.desktopLayout
-                ? _DesktopPlaylistHeader(
-                    playlist: playlist,
-                    fallbackCoverUrl: widget.coverUrl,
-                    // 搜索过滤时「播放全部」作用于过滤后的列表，符合预期。
-                    onPlayAll: tracks.isEmpty
-                        ? null
-                        : () => _play(tracks.first, tracks),
-                    onSync:
-                        !widget.isPersonal &&
-                            widget.token?.isNotEmpty == true &&
-                            !_isSyncing
-                        ? () => _syncToAccount(context)
-                        : null,
-                    isSyncing: _isSyncing,
-                  )
-                : _PlaylistHeader(
-                    playlist: playlist,
-                    fallbackCoverUrl: widget.coverUrl,
-                    onPlayAll: tracks.isEmpty
-                        ? null
-                        : () => _play(tracks.first, tracks),
-                    onOpenPlaylist: widget.onOpenPlaylist,
-                  ),
+        // 移动端顶部透明留白与歌单元数据（滚动时向上推入）
+        SliverToBoxAdapter(
+          child: _MobilePlaylistContentHeader(
+            playlist: playlist,
+            heroHeight: heroHeight,
+            extractedColor: _extractedThemeColor,
+            onPlayAll:
+                tracks.isEmpty ? null : () => _play(tracks.first, tracks),
+            onOpenPlaylist: widget.onOpenPlaylist,
           ),
         ),
-        // 常驻排序工具条：右对齐排序按钮，点击弹排序方式选择。
+
+        // 常驻排序工具条：左侧歌曲数量，右侧排序方式切换
         SliverToBoxAdapter(
           child: _PlaylistSortBar(
             mode: _sortMode,
+            trackCount: isFiltering ? tracks.length : playlist.trackCount,
             onTap: () => _openSortSheet(context),
-            desktopLayout: widget.desktopLayout,
+            desktopLayout: false,
           ),
         ),
+
         if (_searching)
           SliverToBoxAdapter(
             child: _PlaylistSearchField(
@@ -441,10 +642,16 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
               onChanged: (value) => setState(() => _searchQuery = value),
               onClear: _closeSearch,
               resultCount: isFiltering ? tracks.length : null,
-              desktopLayout: widget.desktopLayout,
+              desktopLayout: false,
             ),
           ),
-        if (allTracks.isEmpty)
+
+        if (_isLoading && allTracks.isEmpty)
+          const SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(child: MiuixCircularProgressIndicator()),
+          )
+        else if (allTracks.isEmpty)
           const SliverFillRemaining(
             hasScrollBody: false,
             child: CyreneEmptyState(
@@ -454,7 +661,6 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
             ),
           )
         else if (tracks.isEmpty)
-          // 有歌曲但被搜索过滤掉：给出「无匹配」提示，并可一键清空关键词。
           SliverFillRemaining(
             hasScrollBody: false,
             child: CyreneEmptyState(
@@ -463,26 +669,13 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
               description: '换个关键词试试，或清空搜索查看全部。',
               action: MiuixButton(
                 onPressed: _closeSearch,
-                child: MiuixText(
-                  '清空搜索',
-                  style: MiuixTheme.of(context).textStyles.button,
-                ),
+                child: MiuixText('清空搜索', style: theme.textStyles.button),
               ),
-            ),
-          )
-        else if (widget.desktopLayout)
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 36),
-            sliver: _DesktopTrackTable(
-              tracks: tracks,
-              playback: widget.playback,
-              onPlay: (track) => _play(track, tracks),
-              onAddToQueue: widget.playback.addToQueue,
             ),
           )
         else
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
             sliver: SliverList.separated(
               itemCount: tracks.length,
               separatorBuilder: (_, _) => const SizedBox(height: 10),
@@ -492,10 +685,16 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
                   animation: widget.playback,
                   builder: (context, _) => CyreneTrackTile(
                     track: track,
+                    isGlass: true,
                     isActive:
                         widget.playback.state.currentTrack?.key == track.key,
                     onPlay: () => _play(track, tracks),
-                    onAddToQueue: () => widget.playback.addToQueue(track),
+                    onShowMenu: () => showTrackActionMenu(
+                      context,
+                      track: track,
+                      playback: widget.playback,
+                      token: widget.token,
+                    ),
                   ),
                 );
               },
@@ -503,17 +702,79 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
           ),
       ],
     );
-    return CyrenePullToRefresh(
-      onRefresh: _load,
-      contentPadding: EdgeInsets.only(top: topPadding.top),
-      child: widget.desktopLayout
-          ? Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 960),
-                child: scrollView,
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // 0. 全屏主题色环境渐变背景（从封面提取色全屏自然铺满，自上而下沉浸式过渡）
+        Positioned.fill(
+          child: _FullScreenThemeBackground(
+            extractedColor: _extractedThemeColor,
+          ),
+        ),
+
+        // 1. 3D 视差分速滚动的 100% 宽度顶部专辑封面：
+        // 下拉刷新时保持不动（offset <= 0 偏移锁定为 0），向上滑动时以 0.45x 较慢速度向上滑移并配合 3D 缩放，
+        // 与下方 1.0x 正常速度滚动的主内容形成分层的 3D 视差景深感。
+        AnimatedBuilder(
+          animation: _scrollController,
+          builder: (context, _) {
+            final offset = _scrollController.hasClients
+                ? _scrollController.offset
+                : 0.0;
+            // 向上滑动时取 0.45x 视差上移，下拉刷新（offset < 0）时锁定为 0 保持绝对不动
+            final parallaxOffset = offset > 0 ? offset * 0.45 : 0.0;
+            final progress = (offset / heroHeight).clamp(0.0, 1.0);
+            final scale = 1.0 - progress * 0.05;
+
+            return Positioned(
+              top: -parallaxOffset,
+              left: 0,
+              right: 0,
+              height: heroHeight,
+              child: RepaintBoundary(
+                child: Transform.scale(
+                  scale: scale,
+                  alignment: Alignment.bottomCenter,
+                  child: _FixedMobileHeroCover(
+                    coverUrl: cover,
+                    topPadding: topSafeInset,
+                    heroHeight: heroHeight,
+                    extractedColor: _extractedThemeColor,
+                  ),
+                ),
               ),
-            )
-          : scrollView,
+            );
+          },
+        ),
+
+        // 2. 页面滚动区域与下拉刷新（内容在封面上方平滑滚动，下拉刷新不移动封面）
+        Positioned.fill(
+          child: CyrenePullToRefresh(
+            onRefresh: _load,
+            contentPadding: EdgeInsets.only(top: topSafeInset + 48),
+            child: mobileScrollView,
+          ),
+        ),
+
+        // 3. 固定在顶部的悬浮操作栏（返回 / 同步 / 搜索）
+        Positioned(
+          top: topSafeInset + 6,
+          left: 16,
+          right: 16,
+          child: _FloatingTopBar(
+            canPop: canPop,
+            onSync: !widget.isPersonal &&
+                    widget.token?.isNotEmpty == true &&
+                    !_isSyncing
+                ? () => _syncToAccount(context)
+                : null,
+            isSyncing: _isSyncing,
+            searching: _searching,
+            onToggleSearch: _toggleSearch,
+          ),
+        ),
+      ],
     );
   }
 
@@ -545,7 +806,7 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
 }
 
 /// 桌面端专用的歌单头部：参考桌面音乐客户端的横向信息层级，大封面在左，
-/// 标题、简介、创建者、统计与操作集中在右侧。移动端仍使用 [_PlaylistHeader]。
+/// 标题、简介、创建者、统计与操作集中在右侧。移动端使用 [_MobilePlaylistHeroHeader]。
 class _DesktopPlaylistHeader extends StatelessWidget {
   const _DesktopPlaylistHeader({
     required this.playlist,
@@ -632,7 +893,7 @@ class _DesktopPlaylistHeader extends StatelessWidget {
                       ),
                     Text(
                       '${playlist.trackCount} 首歌曲 · '
-                      '${_PlaylistHeader._formatPlayCount(playlist.playCount)} 次播放',
+                      '${_formatPlayCount(playlist.playCount)} 次播放',
                       style: theme.textStyles.body2.copyWith(
                         color: colors.onSurfaceVariantSummary,
                       ),
@@ -747,13 +1008,13 @@ class _DesktopTrackTable extends StatelessWidget {
     required this.tracks,
     required this.playback,
     required this.onPlay,
-    required this.onAddToQueue,
+    required this.onShowMenu,
   });
 
   final List<Track> tracks;
   final PlaybackController playback;
   final ValueChanged<Track> onPlay;
-  final ValueChanged<Track> onAddToQueue;
+  final ValueChanged<Track> onShowMenu;
 
   @override
   Widget build(BuildContext context) {
@@ -814,7 +1075,7 @@ class _DesktopTrackTable extends StatelessWidget {
                 showAlbum: showAlbum,
                 showDuration: showDuration,
                 onPlay: () => onPlay(track),
-                onAddToQueue: () => onAddToQueue(track),
+                onShowMenu: () => onShowMenu(track),
               ),
             );
           }, childCount: tracks.length + 1),
@@ -832,7 +1093,7 @@ class _DesktopTrackRow extends StatelessWidget {
     required this.showAlbum,
     required this.showDuration,
     required this.onPlay,
-    required this.onAddToQueue,
+    required this.onShowMenu,
   });
 
   final int index;
@@ -841,7 +1102,7 @@ class _DesktopTrackRow extends StatelessWidget {
   final bool showAlbum;
   final bool showDuration;
   final VoidCallback onPlay;
-  final VoidCallback onAddToQueue;
+  final VoidCallback onShowMenu;
 
   @override
   Widget build(BuildContext context) {
@@ -925,8 +1186,8 @@ class _DesktopTrackRow extends StatelessWidget {
               SizedBox(
                 width: 44,
                 child: MiuixIconButton(
-                  key: ValueKey('desktop-add-${track.key}'),
-                  onPressed: onAddToQueue,
+                  key: ValueKey('desktop-menu-${track.key}'),
+                  onPressed: onShowMenu,
                   child: MiuixIcon(
                     vector: MiuixIcons.extended.byName('more')!,
                     size: 18,
@@ -949,149 +1210,593 @@ class _DesktopTrackRow extends StatelessWidget {
   }
 }
 
-class _PlaylistHeader extends StatelessWidget {
-  const _PlaylistHeader({
+/// 移动端：全屏沉浸式主题色背景渐变层（从封面提取的主题色自顶向下自然铺展至底色）。
+class _FullScreenThemeBackground extends StatelessWidget {
+  const _FullScreenThemeBackground({
+    this.extractedColor,
+  });
+
+  final Color? extractedColor;
+
+  static List<Color> _buildFullScreenGradient(
+    Color seedColor,
+    Color surfaceColor,
+  ) {
+    final hsl = HSLColor.fromColor(seedColor);
+    final isDark = surfaceColor.computeLuminance() < 0.5;
+
+    // 调和全屏背景色：保持浓郁的主题色氛围感，并根据深浅主题平滑延展
+    final saturation = hsl.saturation < 0.12
+        ? hsl.saturation
+        : hsl.saturation.clamp(0.40, 0.85);
+    final topLightness = isDark
+        ? hsl.lightness.clamp(0.20, 0.38)
+        : hsl.lightness.clamp(0.70, 0.86);
+    final midLightness = isDark
+        ? hsl.lightness.clamp(0.10, 0.20)
+        : hsl.lightness.clamp(0.85, 0.94);
+
+    final topColor = hsl
+        .withSaturation(saturation)
+        .withLightness(topLightness)
+        .toColor();
+    final midColor = hsl
+        .withSaturation(saturation * 0.75)
+        .withLightness(midLightness)
+        .toColor();
+
+    return [
+      topColor,
+      midColor,
+      Color.lerp(midColor, surfaceColor, 0.70)!,
+      surfaceColor,
+    ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MiuixTheme.of(context).colors;
+    final themeSeed = extractedColor ?? colors.primary;
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 450),
+      curve: Curves.easeOutCubic,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: _buildFullScreenGradient(themeSeed, colors.surface),
+          stops: const [0.0, 0.38, 0.72, 1.0],
+        ),
+      ),
+    );
+  }
+}
+
+/// 移动端：固定在顶部的 100% 宽度专辑封面背景（不随滚动与下拉刷新移位，平滑融入全屏背景）。
+class _FixedMobileHeroCover extends StatelessWidget {
+  const _FixedMobileHeroCover({
+    required this.coverUrl,
+    required this.topPadding,
+    required this.heroHeight,
+    this.extractedColor,
+  });
+
+  final String coverUrl;
+  final double topPadding;
+  final double heroHeight;
+  final Color? extractedColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      height: heroHeight,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // 封面图片：通过 ShaderMask 将底部平滑 Alpha 渐隐至完全透明（0），
+          // 从而无缝自然透出底层的全屏主题色环境渐变，彻底根除任何硬切边和分割线。
+          if (coverUrl.isNotEmpty)
+            ShaderMask(
+              shaderCallback: (Rect bounds) {
+                return const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.white,
+                    Colors.white,
+                    Color(0xB3FFFFFF), // 70%
+                    Color(0x33FFFFFF), // 20%
+                    Colors.transparent, // 0% 完全透明
+                  ],
+                  stops: [0.0, 0.35, 0.65, 0.88, 1.0],
+                ).createShader(bounds);
+              },
+              blendMode: BlendMode.dstIn,
+              child: CachedNetworkImage(
+                imageUrl: coverUrl,
+                httpHeaders: imageHeaders(coverUrl),
+                fit: BoxFit.cover,
+                errorWidget: (_, _, _) => const _FallbackCoverBackground(),
+              ),
+            )
+          else
+            const _FallbackCoverBackground(),
+
+          // 顶部暗色渐变遮罩（保证返回、搜索按钮与状态栏清晰）
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: topPadding + 68,
+            child: const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0x8C000000), // ~55% 黑色
+                    Color(0x00000000),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 移动端：固定在顶部的悬浮操作栏（返回 / 同步 / 搜索）。
+class _FloatingTopBar extends StatelessWidget {
+  const _FloatingTopBar({
+    required this.canPop,
+    required this.onSync,
+    required this.isSyncing,
+    required this.searching,
+    required this.onToggleSearch,
+  });
+
+  final bool canPop;
+  final VoidCallback? onSync;
+  final bool isSyncing;
+  final bool searching;
+  final VoidCallback onToggleSearch;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        if (canPop)
+          _FrostedCircleButton(
+            onPressed: () => Navigator.maybePop(context),
+            icon: MiuixIcons.extended.byName('back')!,
+          ),
+        const Spacer(),
+        if (onSync != null || isSyncing) ...[
+          _FrostedCircleButton(
+            onPressed: onSync ?? () {},
+            iconData: Icons.sync_rounded,
+            isLoading: isSyncing,
+          ),
+          const SizedBox(width: 10),
+        ],
+        _FrostedCircleButton(
+          onPressed: onToggleSearch,
+          icon: MiuixIcons.extended.byName(
+            searching ? 'close' : 'search',
+          )!,
+        ),
+      ],
+    );
+  }
+}
+
+class _PlaylistHeaderPalette {
+  const _PlaylistHeaderPalette({
+    required this.titleColor,
+    required this.creatorColor,
+    required this.descColor,
+    required this.subtitleColor,
+    required this.tagContainerColor,
+    required this.tagContentColor,
+    required this.toggleColor,
+    required this.accentIconColor,
+  });
+
+  final Color titleColor;
+  final Color creatorColor;
+  final Color descColor;
+  final Color subtitleColor;
+  final Color tagContainerColor;
+  final Color tagContentColor;
+  final Color toggleColor;
+  final Color accentIconColor;
+}
+
+/// 移动端：跟随列表滚动的歌单信息头部（透明留白露底 + 详情与操作）。
+class _MobilePlaylistContentHeader extends StatelessWidget {
+  const _MobilePlaylistContentHeader({
     required this.playlist,
-    required this.fallbackCoverUrl,
+    required this.heroHeight,
     required this.onPlayAll,
     this.onOpenPlaylist,
+    this.extractedColor,
   });
 
   final PlaylistDetail playlist;
-  final String fallbackCoverUrl;
+  final double heroHeight;
   final VoidCallback? onPlayAll;
 
   /// 详情页内再打开歌单（个人歌单子项）的跳转回调。null 则不渲染入口。
   final void Function(int id, String title, String coverUrl)? onOpenPlaylist;
+  final Color? extractedColor;
+
+  static _PlaylistHeaderPalette _deriveHeaderPalette({
+    required Color seedColor,
+    required Color surfaceColor,
+    required bool isSystemDark,
+  }) {
+    final hsl = HSLColor.fromColor(seedColor);
+    final isSurfaceDark = surfaceColor.computeLuminance() < 0.5;
+    // 背景在顶部呈现的主题亮度
+    final topBgLightness = isSurfaceDark
+        ? hsl.lightness.clamp(0.20, 0.38)
+        : hsl.lightness.clamp(0.70, 0.86);
+    final isDarkBg = isSurfaceDark || topBgLightness < 0.5;
+
+    if (isDarkBg) {
+      // 深色背景：文字从提取色中保留相同色相，大幅提亮至浅调（0.74 ~ 0.92），保证与背景对比度 > 7:1
+      final titleColor = hsl
+          .withSaturation((hsl.saturation * 0.7).clamp(0.20, 0.65))
+          .withLightness(0.92)
+          .toColor();
+      final creatorColor = hsl
+          .withSaturation((hsl.saturation * 0.9).clamp(0.40, 0.85))
+          .withLightness(0.84)
+          .toColor();
+      final descColor = hsl
+          .withSaturation((hsl.saturation * 0.45).clamp(0.12, 0.40))
+          .withLightness(0.82)
+          .toColor();
+      final subtitleColor = hsl
+          .withSaturation((hsl.saturation * 0.35).clamp(0.10, 0.35))
+          .withLightness(0.74)
+          .toColor();
+      final tagContentColor = hsl
+          .withSaturation((hsl.saturation * 0.9).clamp(0.50, 0.90))
+          .withLightness(0.88)
+          .toColor();
+      final tagContainerColor = tagContentColor.withValues(alpha: 0.20);
+      final toggleColor = tagContentColor;
+
+      return _PlaylistHeaderPalette(
+        titleColor: titleColor,
+        creatorColor: creatorColor,
+        descColor: descColor,
+        subtitleColor: subtitleColor,
+        tagContainerColor: tagContainerColor,
+        tagContentColor: tagContentColor,
+        toggleColor: toggleColor,
+        accentIconColor: tagContentColor,
+      );
+    } else {
+      // 浅色背景：文字从提取色中保留相同色相，大幅加深至深调（0.12 ~ 0.42），保证与背景对比度 > 8:1
+      final titleColor = hsl
+          .withSaturation((hsl.saturation * 0.9).clamp(0.50, 0.90))
+          .withLightness(0.12)
+          .toColor();
+      final creatorColor = hsl
+          .withSaturation((hsl.saturation * 0.85).clamp(0.45, 0.85))
+          .withLightness(0.22)
+          .toColor();
+      final descColor = hsl
+          .withSaturation((hsl.saturation * 0.5).clamp(0.20, 0.50))
+          .withLightness(0.28)
+          .toColor();
+      final subtitleColor = hsl
+          .withSaturation((hsl.saturation * 0.35).clamp(0.15, 0.40))
+          .withLightness(0.42)
+          .toColor();
+      final tagContentColor = hsl
+          .withSaturation((hsl.saturation * 0.95).clamp(0.60, 0.95))
+          .withLightness(0.30)
+          .toColor();
+      final tagContainerColor = tagContentColor.withValues(alpha: 0.12);
+      final toggleColor = tagContentColor;
+
+      return _PlaylistHeaderPalette(
+        titleColor: titleColor,
+        creatorColor: creatorColor,
+        descColor: descColor,
+        subtitleColor: subtitleColor,
+        tagContainerColor: tagContainerColor,
+        tagContentColor: tagContentColor,
+        toggleColor: toggleColor,
+        accentIconColor: tagContentColor,
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = MiuixTheme.of(context);
     final colors = theme.colors;
-    final cover = playlist.coverImgUrl.isNotEmpty
-        ? playlist.coverImgUrl
-        : fallbackCoverUrl;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 20, 16, 14),
-      child: MiuixCard(
-        insideMargin: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _CoverImage(
-                  url: cover,
-                  size: 116,
-                  icon: MiuixIcons.extended.byName('playlist')!,
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        playlist.name,
-                        style: theme.textStyles.title3.copyWith(
-                          color: colors.onSurfaceContainer,
-                          fontWeight: FontWeight.w600,
+    final description = playlist.description.trim();
+    final createdAt = _formatCreateDate(playlist.createTime);
+    final themeSeed = extractedColor ?? colors.primary;
+
+    final palette = _deriveHeaderPalette(
+      seedColor: themeSeed,
+      surfaceColor: colors.surface,
+      isSystemDark: theme.brightness == Brightness.dark,
+    );
+
+    // 顶部透明留白高度：让封面在初始状态下充分展现，随后无缝过渡到信息
+    final topSpacerHeight = (heroHeight * 0.48).clamp(160.0, 240.0);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // 顶部透明留白区（透出下方固定的专辑封面大图）
+        SizedBox(height: topSpacerHeight),
+
+        // 歌单详情元信息排版（位于渐变过渡区域）
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 歌单标签
+              if (playlist.tags.isNotEmpty) ...[
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final tag in playlist.tags)
+                      MiuixBadge(
+                        containerColor: palette.tagContainerColor,
+                        contentColor: palette.tagContentColor,
+                        child: MiuixText(
+                          tag,
+                          style: theme.textStyles.footnote2.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: palette.tagContentColor,
+                          ),
                         ),
                       ),
-                      if (playlist.creator.isNotEmpty) ...[
-                        const SizedBox(height: 7),
+                  ],
+                ),
+                const SizedBox(height: 10),
+              ],
+
+              // 歌单名称
+              Text(
+                playlist.name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textStyles.title1.copyWith(
+                  color: palette.titleColor,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  height: 1.25,
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              // 创建者 & 播放统计
+              Wrap(
+                spacing: 12,
+                runSpacing: 6,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  if (playlist.creator.isNotEmpty)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        MiuixIcon(
+                          icon: Icons.person_rounded,
+                          size: 15,
+                          tint: palette.accentIconColor,
+                        ),
+                        const SizedBox(width: 5),
                         Text(
                           playlist.creator,
                           style: theme.textStyles.body2.copyWith(
-                            color: colors.onSurfaceContainer,
-                            fontWeight: FontWeight.w500,
+                            color: palette.creatorColor,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
                           ),
                         ),
                       ],
-                      const SizedBox(height: 10),
-                      Text(
-                        '${playlist.trackCount} 首 · ${_formatPlayCount(playlist.playCount)} 次播放',
-                        style: theme.textStyles.body2.copyWith(
-                          color: colors.onSurfaceVariantSummary,
-                        ),
-                      ),
-                      if (playlist.tags.isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: playlist.tags
-                              .map(
-                                (tag) => MiuixBadge(
-                                  containerColor: colors.secondaryContainer,
-                                  contentColor: colors.onSecondaryContainer,
-                                  child: MiuixText(
-                                    tag,
-                                    style: theme.textStyles.footnote2,
-                                  ),
-                                ),
-                              )
-                              .toList(),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            if (playlist.description.trim().isNotEmpty) ...[
-              const SizedBox(height: 14),
-              _ExpandableDescription(text: playlist.description.trim()),
-            ],
-            // 个人歌单：把关联的在线歌单项再打开时继续向下钻取（桌面端压
-            // 二级栈，支持逐级后退/前进；移动端不传回调，此处不渲染）。
-            if (onOpenPlaylist != null &&
-                _LinkedPlaylistRow.childrenOf(playlist).isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Column(
-                children: [
-                  for (final child in _LinkedPlaylistRow.childrenOf(playlist))
-                    _LinkedPlaylistRow(
-                      playlist: child,
-                      onTap: () => onOpenPlaylist!(
-                        child.id,
-                        child.name,
-                        child.coverImgUrl,
+                    ),
+                  if (createdAt != null)
+                    Text(
+                      '$createdAt 创建',
+                      style: theme.textStyles.body2.copyWith(
+                        color: palette.subtitleColor,
+                        fontSize: 13,
                       ),
                     ),
+                  Text(
+                    '${playlist.trackCount} 首歌曲 · ${_formatPlayCount(playlist.playCount)} 次播放',
+                    style: theme.textStyles.body2.copyWith(
+                      color: palette.subtitleColor,
+                      fontSize: 13,
+                    ),
+                  ),
                 ],
               ),
-            ],
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: MiuixButton(
-                onPressed: onPlayAll,
-                colors: MiuixButtonDefaults.buttonColorsPrimary(context),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
+
+              // 歌单描述
+              if (description.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                _ExpandableDescription(
+                  text: description,
+                  textColor: palette.descColor,
+                  toggleColor: palette.toggleColor,
+                ),
+              ],
+
+              // 关联子歌单
+              if (onOpenPlaylist != null &&
+                  _LinkedPlaylistRow.childrenOf(playlist).isNotEmpty) ...[
+                const SizedBox(height: 14),
+                Column(
                   children: [
-                    MiuixIcon(
-                      vector: MiuixIcons.extended.byName('play')!,
-                      size: 18,
-                    ),
-                    const SizedBox(width: 8),
-                    MiuixText('播放全部', style: theme.textStyles.button),
+                    for (final child
+                        in _LinkedPlaylistRow.childrenOf(playlist))
+                      _LinkedPlaylistRow(
+                        playlist: child,
+                        onTap: () => onOpenPlaylist!(
+                          child.id,
+                          child.name,
+                          child.coverImgUrl,
+                        ),
+                      ),
                   ],
+                ),
+              ],
+
+              // 播放全部主按钮（高光玻璃胶囊效果）
+              const SizedBox(height: 18),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(24),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+                  child: MiuixHighlight(
+                    highlight: Highlight.glassStrokeSmallDark,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    child: Material(
+                      color: const Color(0x40000000),
+                      child: InkWell(
+                        onTap: onPlayAll,
+                        child: Container(
+                          height: 48,
+                          alignment: Alignment.center,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              MiuixIcon(
+                                vector: MiuixIcons.extended.byName('play')!,
+                                size: 18,
+                                tint: Colors.white,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                playlist.trackCount > 0
+                                    ? '播放全部 (${playlist.trackCount})'
+                                    : '播放全部',
+                                style: theme.textStyles.button.copyWith(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _FrostedCircleButton extends StatelessWidget {
+  const _FrostedCircleButton({
+    required this.onPressed,
+    this.icon,
+    this.iconData,
+    this.isLoading = false,
+  });
+
+  final VoidCallback onPressed;
+  final MiuixVectorIcon? icon;
+  final IconData? iconData;
+  final bool isLoading;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipOval(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+        child: MiuixHighlight(
+          highlight: Highlight.glassStrokeSmallDark,
+          shape: const CircleBorder(),
+          child: Material(
+            color: const Color(0x40000000),
+            shape: const CircleBorder(),
+            child: InkWell(
+              onTap: isLoading ? null : onPressed,
+              customBorder: const CircleBorder(),
+              child: SizedBox(
+                width: 38,
+                height: 38,
+                child: Center(
+                  child: isLoading
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor:
+                                AlwaysStoppedAnimation<Color>(Colors.white),
+                          ),
+                        )
+                      : (icon != null
+                          ? MiuixIcon(
+                              vector: icon!,
+                              size: 20,
+                              tint: Colors.white,
+                            )
+                          : Icon(iconData, size: 20, color: Colors.white)),
                 ),
               ),
             ),
-          ],
+          ),
         ),
       ),
     );
   }
+}
 
-  static String _formatPlayCount(int count) {
-    if (count >= 100000000) {
-      return '${(count / 100000000).toStringAsFixed(1)}亿';
-    }
-    if (count >= 10000) return '${(count / 10000).toStringAsFixed(1)}万';
-    return count.toString();
+class _FallbackCoverBackground extends StatelessWidget {
+  const _FallbackCoverBackground();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MiuixTheme.of(context).colors;
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            colors.primary.withValues(alpha: 0.3),
+            colors.secondaryContainer,
+          ],
+        ),
+      ),
+      child: Center(
+        child: MiuixIcon(
+          vector: MiuixIcons.extended.byName('playlist')!,
+          size: 64,
+          tint: colors.onSurfaceVariantSummary,
+        ),
+      ),
+    );
   }
 }
 
@@ -1158,9 +1863,15 @@ class _LinkedPlaylistRow extends StatelessWidget {
 /// 歌单介绍：超过 [_collapsedLines] 行时折叠为省略号，点按「展开/收起」
 /// 切换完整内容，尺寸变化经 [AnimatedSize] 平滑过渡。
 class _ExpandableDescription extends StatefulWidget {
-  const _ExpandableDescription({required this.text});
+  const _ExpandableDescription({
+    required this.text,
+    this.textColor,
+    this.toggleColor,
+  });
 
   final String text;
+  final Color? textColor;
+  final Color? toggleColor;
 
   @override
   State<_ExpandableDescription> createState() => _ExpandableDescriptionState();
@@ -1176,8 +1887,12 @@ class _ExpandableDescriptionState extends State<_ExpandableDescription> {
     final theme = MiuixTheme.of(context);
     final colors = theme.colors;
     final style = theme.textStyles.body2.copyWith(
-      color: colors.onSurfaceVariantSummary,
+      color: widget.textColor ?? colors.onSurfaceVariantSummary,
+      fontSize: 13,
+      height: 1.45,
     );
+    final effectiveToggleColor = widget.toggleColor ?? colors.primary;
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final painter = TextPainter(
@@ -1218,8 +1933,9 @@ class _ExpandableDescriptionState extends State<_ExpandableDescription> {
                           Text(
                             _expanded ? '收起' : '展开',
                             style: theme.textStyles.body2.copyWith(
-                              color: colors.primary,
-                              fontWeight: FontWeight.w500,
+                              color: effectiveToggleColor,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
                             ),
                           ),
                           const SizedBox(width: 2),
@@ -1230,7 +1946,7 @@ class _ExpandableDescriptionState extends State<_ExpandableDescription> {
                             child: MiuixIcon(
                               vector: MiuixIcons.extended.byName('expandMore')!,
                               size: 16,
-                              tint: colors.primary,
+                              tint: effectiveToggleColor,
                             ),
                           ),
                         ],
@@ -1323,17 +2039,19 @@ class _PlaylistSearchField extends StatelessWidget {
   }
 }
 
-/// 常驻排序工具条：右对齐的排序按钮，显示当前排序方式，点击弹出选择抽屉。
+/// 常驻排序工具条：左侧曲目数量提示，右侧排序方式切换。
 class _PlaylistSortBar extends StatelessWidget {
   const _PlaylistSortBar({
     required this.mode,
     required this.onTap,
     required this.desktopLayout,
+    this.trackCount,
   });
 
   final PlaylistSortMode mode;
   final VoidCallback onTap;
   final bool desktopLayout;
+  final int? trackCount;
 
   @override
   Widget build(BuildContext context) {
@@ -1341,39 +2059,52 @@ class _PlaylistSortBar extends StatelessWidget {
     final colors = theme.colors;
     return Padding(
       padding: EdgeInsets.fromLTRB(
-        desktopLayout ? 20 : 16,
+        desktopLayout ? 20 : 18,
         4,
         desktopLayout ? 20 : 16,
         4,
       ),
-      child: Align(
-        alignment: Alignment.centerRight,
-        child: MiuixPressable(
-          onPressed: onTap,
-          borderRadius: BorderRadius.circular(20),
-          feedbackType: MiuixPressFeedbackType.sink,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                MiuixIcon(
-                  vector: MiuixIcons.extended.byName('sort')!,
-                  size: 16,
-                  tint: colors.onSurfaceVariantSummary,
-                ),
-                const SizedBox(width: 6),
-                MiuixText(
-                  mode.label,
-                  style: theme.textStyles.body2.copyWith(
-                    color: colors.onSurfaceVariantSummary,
-                    fontSize: 13,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          if (trackCount != null && trackCount! > 0)
+            Text(
+              '歌曲列表 ($trackCount)',
+              style: theme.textStyles.title3.copyWith(
+                color: colors.onSurfaceContainer,
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+              ),
+            )
+          else
+            const SizedBox.shrink(),
+          MiuixPressable(
+            onPressed: onTap,
+            borderRadius: BorderRadius.circular(20),
+            feedbackType: MiuixPressFeedbackType.sink,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  MiuixIcon(
+                    vector: MiuixIcons.extended.byName('sort')!,
+                    size: 16,
+                    tint: colors.onSurfaceVariantSummary,
                   ),
-                ),
-              ],
+                  const SizedBox(width: 6),
+                  MiuixText(
+                    mode.label,
+                    style: theme.textStyles.body2.copyWith(
+                      color: colors.onSurfaceVariantSummary,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -1423,4 +2154,21 @@ class _CoverImage extends StatelessWidget {
       ),
     );
   }
+}
+
+String? _formatCreateDate(int timestamp) {
+  if (timestamp <= 0) return null;
+  final milliseconds =
+      timestamp < 1000000000000 ? timestamp * 1000 : timestamp;
+  final date = DateTime.fromMillisecondsSinceEpoch(milliseconds);
+  String twoDigits(int value) => value.toString().padLeft(2, '0');
+  return '${date.year}-${twoDigits(date.month)}-${twoDigits(date.day)}';
+}
+
+String _formatPlayCount(int count) {
+  if (count >= 100000000) {
+    return '${(count / 100000000).toStringAsFixed(1)}亿';
+  }
+  if (count >= 10000) return '${(count / 10000).toStringAsFixed(1)}万';
+  return count.toString();
 }

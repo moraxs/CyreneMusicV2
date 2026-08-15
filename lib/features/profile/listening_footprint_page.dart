@@ -104,7 +104,7 @@ class _ListeningFootprintPageState extends State<ListeningFootprintPage> {
       picUrl: item.picUrl,
       source: MusicSource.fromWireName(item.source),
     );
-    playback.playTrack(track, queue: [track]);
+    playback.playNextToQueue(track);
   }
 
   @override

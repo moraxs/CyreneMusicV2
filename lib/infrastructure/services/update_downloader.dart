@@ -31,7 +31,6 @@ class UpdateDownloader {
   UpdateDownloader._(this._client);
 
   final http.Client? _client;
-  http.Client get _http => _client ?? http.Client();
 
   /// 整体下载超时。大包（APK 约 70MB）在弱网下也该有个尽头，否则进度条会
   /// 永远停在某个百分比而没有任何反馈。
@@ -63,54 +62,64 @@ class UpdateDownloader {
 
     debugPrint('[UpdateDownloader] 开始下载 $resolved → ${file.path}');
 
-    final response = await _http
-        .send(http.Request('GET', uri))
-        .timeout(_timeout);
-    if (response.statusCode != 200) {
-      throw UpdateDownloadFailure('下载失败（HTTP ${response.statusCode}）');
-    }
-
-    final contentLength = response.contentLength ?? 0;
-    var received = 0;
-    var lastReported = 0.0;
-    var lastReportedAt = DateTime.now();
-
-    final sink = file.openWrite();
+    // 生产环境每次下载新建一个 client、用完即关，不与 API 请求共用连接池；
+    // 测试注入的 _client 由测试方负责关闭。
+    final ownsClient = _client == null;
+    final http.Client client = _client ?? http.Client();
     try {
-      await for (final chunk in response.stream.timeout(_timeout)) {
-        received += chunk.length;
-        sink.add(chunk);
-
-        if (contentLength <= 0 || onProgress == null) continue;
-        final progress = (received / contentLength).clamp(0.0, 1.0);
-        final now = DateTime.now();
-        final enoughProgress = progress - lastReported >= _progressStep;
-        final enoughTime =
-            now.difference(lastReportedAt) >= _progressInterval;
-        if (enoughProgress || enoughTime || progress >= 1) {
-          lastReported = progress;
-          lastReportedAt = now;
-          onProgress(progress);
-        }
+      final response = await client
+          .send(http.Request('GET', uri))
+          .timeout(_timeout);
+      if (response.statusCode != 200) {
+        throw UpdateDownloadFailure('下载失败（HTTP ${response.statusCode}）');
       }
-      await sink.flush();
-    } catch (e) {
+
+      final contentLength = response.contentLength ?? 0;
+      var received = 0;
+      var lastReported = 0.0;
+      var lastReportedAt = DateTime.now();
+
+      final sink = file.openWrite();
+      try {
+        await for (final chunk in response.stream.timeout(_timeout)) {
+          received += chunk.length;
+          sink.add(chunk);
+
+          if (contentLength <= 0 || onProgress == null) continue;
+          final progress = (received / contentLength).clamp(0.0, 1.0);
+          final now = DateTime.now();
+          final enoughProgress = progress - lastReported >= _progressStep;
+          final enoughTime =
+              now.difference(lastReportedAt) >= _progressInterval;
+          if (enoughProgress || enoughTime || progress >= 1) {
+            lastReported = progress;
+            lastReportedAt = now;
+            onProgress(progress);
+          }
+        }
+        await sink.flush();
+      } catch (e) {
+        await sink.close();
+        if (file.existsSync()) file.delete().ignore();
+        if (e is TimeoutException) {
+          throw const UpdateDownloadFailure('下载超时，请重试');
+        }
+        rethrow;
+      }
       await sink.close();
-      if (file.existsSync()) file.delete().ignore();
-      if (e is TimeoutException) throw const UpdateDownloadFailure('下载超时，请重试');
-      rethrow;
-    }
-    await sink.close();
 
-    // 后端不下发 sha256/size，长度是唯一能校验的东西：截断的安装包装上去
-    // 只会得到一个更难排查的「解析失败」。
-    if (contentLength > 0 && received != contentLength) {
-      if (file.existsSync()) file.delete().ignore();
-      throw const UpdateDownloadFailure('下载不完整，请重试');
-    }
+      // 后端不下发 sha256/size，长度是唯一能校验的东西：截断的安装包装上去
+      // 只会得到一个更难排查的「解析失败」。
+      if (contentLength > 0 && received != contentLength) {
+        if (file.existsSync()) file.delete().ignore();
+        throw const UpdateDownloadFailure('下载不完整，请重试');
+      }
 
-    debugPrint('[UpdateDownloader] 下载完成: $received 字节');
-    return file;
+      debugPrint('[UpdateDownloader] 下载完成: $received 字节');
+      return file;
+    } finally {
+      if (ownsClient) client.close();
+    }
   }
 
   /// 更新包的落地目录。

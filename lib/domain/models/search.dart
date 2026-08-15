@@ -1,3 +1,4 @@
+import 'search_playlist.dart';
 import 'track.dart';
 
 /// 网易云歌手简介（对应 NeteaseArtistBrief）。
@@ -34,15 +35,14 @@ class SearchResult {
     this.kuwoResults = const [],
     this.appleResults = const [],
     this.spotifyResults = const [],
-    this.qishuiResults = const [],
     this.artistResults = const [],
+    this.playlists = const [],
     this.neteaseLoading = false,
     this.qqLoading = false,
     this.kugouLoading = false,
     this.kuwoLoading = false,
     this.appleLoading = false,
     this.spotifyLoading = false,
-    this.qishuiLoading = false,
     this.artistLoading = false,
     this.neteaseError,
     this.qqError,
@@ -50,8 +50,8 @@ class SearchResult {
     this.kuwoError,
     this.appleError,
     this.spotifyError,
-    this.qishuiError,
     this.artistError,
+    this.playlistsError,
   });
 
   final List<Track> neteaseResults;
@@ -60,8 +60,8 @@ class SearchResult {
   final List<Track> kuwoResults;
   final List<Track> appleResults;
   final List<Track> spotifyResults;
-  final List<Track> qishuiResults;
   final List<NeteaseArtistBrief> artistResults;
+  final List<SearchPlaylist> playlists;
 
   final bool neteaseLoading;
   final bool qqLoading;
@@ -69,7 +69,6 @@ class SearchResult {
   final bool kuwoLoading;
   final bool appleLoading;
   final bool spotifyLoading;
-  final bool qishuiLoading;
   final bool artistLoading;
 
   final String? neteaseError;
@@ -78,8 +77,8 @@ class SearchResult {
   final String? kuwoError;
   final String? appleError;
   final String? spotifyError;
-  final String? qishuiError;
   final String? artistError;
+  final String? playlistsError;
 
   List<Track> get tracks => [
     ...neteaseResults,
@@ -88,7 +87,6 @@ class SearchResult {
     ...kuwoResults,
     ...appleResults,
     ...spotifyResults,
-    ...qishuiResults,
   ];
 
   /// 将同名同歌手的跨平台结果合并为一个可播放条目。
@@ -116,7 +114,7 @@ class SearchResult {
         .toList(growable: false);
   }
 
-  /// 聚合分类结果：除 Spotify 外的平台按「网易云 > 酷狗 > QQ > 酷我 > Apple > 汽水」
+  /// 聚合分类结果：除 Spotify 外的平台按「网易云 > 酷狗 > QQ > 酷我 > Apple」
   /// 优先级合并去重，主源与 alternatives 顺序即播放回退序列。
   List<Track> get aggregatedTracks => _mergeByPriority([
     ...neteaseResults,
@@ -124,7 +122,6 @@ class SearchResult {
     ...qqResults,
     ...kuwoResults,
     ...appleResults,
-    ...qishuiResults,
   ]);
 
   /// 聚合分类中失败的平台提示，供 UI 顶部 inline alert 或失败空态使用。
@@ -136,7 +133,6 @@ class SearchResult {
       'qq': 'QQ 音乐',
       'kuwo': '酷我',
       'apple': 'Apple Music',
-      'qishui': '汽水音乐',
     };
     final failed = [
       ('netease', neteaseError),
@@ -144,7 +140,6 @@ class SearchResult {
       ('qq', qqError),
       ('kuwo', kuwoError),
       ('apple', appleError),
-      ('qishui', qishuiError),
     ].where((e) => e.$2 != null).map((e) => labels[e.$1]!).toList();
     return failed.isEmpty ? null : '${failed.join('、')}搜索失败';
   }
@@ -156,7 +151,6 @@ class SearchResult {
     kuwoError,
     appleError,
     spotifyError,
-    qishuiError,
     artistError,
   ].any((error) => error != null);
 

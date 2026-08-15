@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../services/network_capture_service.dart';
+
 /// 鉴权失效识别与会话处理（对应 Next.js demo/lib/services/apiClient.ts）。
 ///
 /// 各 service 带 Authorization 的请求应使用 [apiFetch]，而非裸 [http] 调用，
@@ -35,12 +37,31 @@ class ApiClient {
     Object? body,
     Encoding? encoding,
   }) async {
-    final response = await _send(
-      url,
+    final http.Response response;
+    try {
+      response = await _send(
+        url,
+        method: method,
+        headers: headers,
+        body: body,
+        encoding: encoding,
+      );
+    } catch (e) {
+      NetworkCaptureService.instance.captureError(
+        method: method,
+        url: url,
+        requestBody: body,
+        error: e.toString(),
+      );
+      rethrow;
+    }
+
+    NetworkCaptureService.instance.capture(
       method: method,
-      headers: headers,
-      body: body,
-      encoding: encoding,
+      url: url,
+      requestBody: body,
+      status: response.statusCode,
+      responseBody: response.body,
     );
 
     if (!_hasAuthorization(headers)) return response;

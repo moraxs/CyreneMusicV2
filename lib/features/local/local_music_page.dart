@@ -4,6 +4,8 @@ import 'package:flutter_miuix/miuix.dart';
 
 import '../../application/playback/playback_controller.dart';
 import '../../domain/models/local_track.dart';
+import '../../infrastructure/services/local_music_native.dart'
+    show LocalMusicNative, ImportedNativeFile;
 import '../../infrastructure/services/local_music_service.dart';
 import '../../presentation/cyrene/cyrene_overlays.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
@@ -113,6 +115,13 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
   }
 
   Future<void> _importFiles() async {
+    // Android 上走原生 SAF 通道：file_picker 会把文件拷进缓存 / 返回可能不存在的
+    // 目录路径，原生侧复制成应用私有真实文件后按「真实路径 + 原始文件名」入库。
+    if (LocalMusicNative.instance.isSupported) {
+      await _importNative(() => LocalMusicNative.instance.pickFiles());
+      return;
+    }
+
     try {
       final result = await FilePicker.pickFiles(
         allowMultiple: true,
@@ -150,6 +159,12 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
 
   /// 选择文件夹并扫描目录内所有音频（含同名 .lrc 歌词）。
   Future<void> _importFolder() async {
+    // Android 上走原生 SAF 目录选择，递归扫描并复制真实文件。
+    if (LocalMusicNative.instance.isSupported) {
+      await _importNative(() => LocalMusicNative.instance.pickFolder());
+      return;
+    }
+
     try {
       final folderPath = await FilePicker.getDirectoryPath(
         dialogTitle: '选择要扫描的文件夹',
@@ -168,6 +183,31 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
     } catch (_) {
       if (mounted) {
         _showToast('导入失败', description: '无法扫描所选文件夹。');
+      }
+    } finally {
+      if (mounted) setState(() => _isImporting = false);
+    }
+  }
+
+  /// 走原生导入通道，统一处理返回结果、进度态与提示。
+  Future<void> _importNative(
+    Future<List<ImportedNativeFile>?> Function() pick,
+  ) async {
+    try {
+      setState(() => _isImporting = true);
+      final files = await pick();
+      if (!mounted || files == null) return;
+      if (files.isEmpty) {
+        _showToast('未导入任何歌曲', description: '所选位置没有支持的音频文件。');
+        return;
+      }
+      final count = await LocalMusicService.instance.importNativeFiles(files);
+      if (!mounted) return;
+      _showToast('已导入 $count 首歌曲');
+      await _load();
+    } catch (_) {
+      if (mounted) {
+        _showToast('导入失败', description: '无法读取所选音频文件。');
       }
     } finally {
       if (mounted) setState(() => _isImporting = false);

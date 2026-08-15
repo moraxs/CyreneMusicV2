@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../../infrastructure/services/system_tray_service.dart';
+
 /// 极简窗口标题栏：应用图标 + 应用名 + 拖拽区 + caption 按钮。
 ///
 /// Win32 原生标题栏在 main 的 `_initDesktopWindow` 里被隐藏了
@@ -126,7 +128,7 @@ class _WindowCaptionBarState extends State<WindowCaptionBar> with WindowListener
             ),
           WindowCaptionButton.close(
             brightness: theme.brightness,
-            onPressed: windowManager.close,
+            onPressed: () => SystemTrayService.instance.hideToTray(),
           ),
         ],
       ),

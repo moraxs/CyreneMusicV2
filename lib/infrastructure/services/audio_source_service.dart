@@ -54,6 +54,19 @@ class AudioSourceService {
     }
   }
 
+  /// 将 [AudioQuality] 映射为酷狗 /v5/url 的音质字符串。
+  /// 网易云专属音质先回落；hiRes 在酷狗侧无 24bit 档位，回落 flac。
+  String _kugouQuality(AudioQuality quality) {
+    final q = quality.effectiveFor(MusicSource.kugou);
+    return switch (q) {
+      AudioQuality.standard => '128',
+      AudioQuality.exHigh => '320',
+      AudioQuality.lossless => 'flac',
+      AudioQuality.hiRes => 'flac',
+      _ => '128',
+    };
+  }
+
   String _cleanUrl(String url) {
     if (url.isEmpty) return '';
     var result = url.trim();
@@ -113,15 +126,12 @@ class AudioSourceService {
         // 后端期望 ids 或 url 参数
         return '$base?ids=$songId&quality=$qualityStr';
       case MusicSource.kugou:
-        // 搜索返回的 id 格式为 "hash:albumId" 或 "emixsongid"
+        // 搜索返回的 id 格式为 "hash:albumId"；对齐开源项目，取链仅用 hash，
+        // 不传 album_audio_id（后端默认 0）。
+        final kugouQuality = _kugouQuality(quality);
         final idStr = songId.toString();
-        if (idStr.contains(':')) {
-          final parts = idStr.split(':');
-          final hash = parts[0];
-          final albumId = parts.length > 1 ? parts[1] : '0';
-          return '$base?hash=$hash&album_audio_id=$albumId&quality=$qualityStr';
-        }
-        return '$base?emixsongid=$songId&quality=$qualityStr';
+        final hash = idStr.contains(':') ? idStr.split(':').first : idStr;
+        return '$base?hash=$hash&quality=$kugouQuality';
       case MusicSource.kuwo:
         // 后端期望 mid 参数
         return '$base?mid=$songId&quality=$qualityStr';

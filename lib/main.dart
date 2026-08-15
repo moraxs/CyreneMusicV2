@@ -34,6 +34,7 @@ import 'infrastructure/media_notification/media_notification_service.dart';
 import 'infrastructure/media_notification/smtc_service.dart';
 import 'infrastructure/services/developer_mode_service.dart';
 import 'infrastructure/services/listening_card_sync.dart';
+import 'infrastructure/services/system_tray_service.dart';
 import 'infrastructure/services/update_service.dart';
 import 'presentation/cyrene/cyrene_theme.dart';
 import 'presentation/cyrene/cyrene_toast.dart';
@@ -284,7 +285,8 @@ class MyApp extends StatefulWidget {
   State<MyApp> createState() => _MyAppState();
 }
 
-class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+class _MyAppState extends State<MyApp>
+    with WidgetsBindingObserver, WindowListener {
   late final AppDependencies _dependencies =
       widget.dependencies ?? AppDependencies.preview();
   late final PlaybackHistoryRecorder _historyRecorder;
@@ -321,11 +323,30 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     // Windows 系统媒体传输控件（SMTC）：任务栏媒体浮层 / 键盘多媒体键。
     // 服务内部自检平台，非 Windows 上为空操作。
     _smtc = SmtcService(_dependencies.playback)..start();
+    // Windows 系统托盘：关闭主窗口隐藏到托盘后台运行，托盘菜单可恢复/退出。
+    // 关闭拦截走 WindowListener.onWindowClose（见下方覆写）。
+    if (Platform.isWindows) {
+      windowManager.addListener(this);
+      SystemTrayService.instance.bind(
+        onPlayPause: () => _dependencies.playback.togglePlay(),
+      );
+      SystemTrayService.instance.initialize();
+    }
     // Flutter 在 Android 上默认不申请高刷模式（小米/HyperOS 上常被锁 60Hz），
     // 首帧后再请求：过早调用在部分机型会拿到空的显示模式列表。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _enableHighRefreshRate();
     });
+  }
+
+  /// 窗口关闭拦截：改为隐藏到托盘（仅托盘服务开启时），真正退出走托盘菜单。
+  @override
+  void onWindowClose() {
+    if (Platform.isWindows) {
+      SystemTrayService.instance.hideToTray();
+    } else {
+      windowManager.destroy();
+    }
   }
 
   Future<void> _enableHighRefreshRate() async {
@@ -363,6 +384,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    if (Platform.isWindows) windowManager.removeListener(this);
     _historyRecorder.dispose();
     _mediaNotification.dispose();
     _smtc.dispose();

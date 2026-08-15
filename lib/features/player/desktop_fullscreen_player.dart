@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' show ImageFilter;
+import 'dart:ui' as ui show lerpDouble;
+import 'dart:ui' show FontFeature, ImageFilter;
 
 import 'package:flutter/cupertino.dart' show CupertinoIcons, CupertinoPageRoute;
 import 'package:flutter/material.dart';
@@ -311,7 +312,7 @@ class _DesktopFullscreenPlayerState extends State<DesktopFullscreenPlayer>
                 right: 28,
                 bottom: 24,
                 child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     _UtilityCapsule(
                       playback: widget.playback,
@@ -646,38 +647,41 @@ class _UtilityCapsule extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => _Capsule(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
     child: Row(
       mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         _CapsuleButton(
-          vector: MiuixIcons.extended.byName(
-            'playlist',
-            MiuixIconWeight.demibold,
-          )!,
-          iconSize: 25,
+          icon: Icons.queue_music_rounded,
+          iconSize: 22,
           tooltip: '播放列表',
           onPressed: () => QueueSheet.show(context, playback),
         ),
+        const SizedBox(width: 6),
         _CapsuleButton(
-          vector: MiuixIcons.extended.byName(
-            lyricsVisible ? 'notesFill' : 'notes',
-            MiuixIconWeight.demibold,
-          )!,
-          iconSize: 23,
+          icon: lyricsVisible
+              ? CupertinoIcons.quote_bubble_fill
+              : CupertinoIcons.quote_bubble,
+          iconSize: 20,
           tooltip: lyricsVisible ? '关闭歌词面板' : '打开歌词面板',
           selected: lyricsVisible,
           onPressed: onToggleLyrics,
         ),
+        const SizedBox(width: 6),
         _CapsuleButton(
-          vector: MiuixIcons.extended.byName('info', MiuixIconWeight.demibold)!,
-          iconSize: 23,
+          icon: songInfoVisible
+              ? CupertinoIcons.info_circle_fill
+              : CupertinoIcons.info_circle,
+          iconSize: 21,
           selected: songInfoVisible,
           tooltip: '歌曲信息',
           onPressed: onSongInfo,
         ),
+        const SizedBox(width: 6),
         _CapsuleButton(
-          vector: MiuixIcons.extended.byName('tune', MiuixIconWeight.demibold)!,
-          iconSize: 23,
+          icon: Icons.tune_rounded,
+          iconSize: 21,
           tooltip: '均衡器',
           onPressed: () => Navigator.of(context).push(
             CupertinoPageRoute<void>(builder: (_) => const EqualizerPage()),
@@ -687,6 +691,8 @@ class _UtilityCapsule extends StatelessWidget {
     ),
   );
 }
+
+
 
 class _MainCapsule extends StatelessWidget {
   const _MainCapsule({required this.playback, required this.account});
@@ -700,13 +706,14 @@ class _MainCapsule extends StatelessWidget {
     final track = state.currentTrack!;
     final theme = MiuixTheme.of(context);
     return _Capsule(
-      padding: const EdgeInsets.fromLTRB(10, 8, 14, 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          TrackArtwork(track: track, size: 52, borderRadius: 15),
+          TrackArtwork(track: track, size: 50, borderRadius: 14),
           const SizedBox(width: 12),
-          SizedBox(
-            width: 150,
+          ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 90, maxWidth: 170),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -716,16 +723,19 @@ class _MainCapsule extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: theme.textStyles.body1.copyWith(
-                    color: theme.colors.onSurfaceContainer,
+                    color: Colors.white,
                     fontWeight: FontWeight.w600,
+                    fontSize: 13.5,
                   ),
                 ),
+                const SizedBox(height: 2),
                 Text(
                   track.artists,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: theme.textStyles.body2.copyWith(
-                    color: theme.colors.onSurfaceVariantSummary,
+                    color: Colors.white.withValues(alpha: .6),
+                    fontSize: 11.5,
                   ),
                 ),
               ],
@@ -734,28 +744,30 @@ class _MainCapsule extends StatelessWidget {
           const SizedBox(width: 10),
           _CapsuleButton(
             icon: CupertinoIcons.backward_fill,
-            iconSize: 24,
+            iconSize: 22,
             tooltip: '上一首',
             onPressed: playback.playPrevious,
           ),
+          const SizedBox(width: 2),
           _CapsuleButton(
             icon: state.isPlaying
                 ? CupertinoIcons.pause_fill
                 : CupertinoIcons.play_fill,
-            iconSize: 29,
+            iconSize: 28,
             tooltip: state.isPlaying ? '暂停' : '播放',
             emphasized: true,
             onPressed: state.isLoading ? null : playback.togglePlay,
           ),
+          const SizedBox(width: 2),
           _CapsuleButton(
             icon: CupertinoIcons.forward_fill,
-            iconSize: 24,
+            iconSize: 22,
             tooltip: '下一首',
             onPressed: playback.playNext,
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 12),
           Expanded(child: _SeekControl(playback: playback)),
-          const SizedBox(width: 8),
+          const SizedBox(width: 10),
           DesktopFavoriteButton(
             playback: playback,
             account: account,
@@ -791,38 +803,40 @@ class _SeekControlState extends State<_SeekControl> {
       final displayPosition = Duration(
         milliseconds: (duration.inMilliseconds * displayValue).round(),
       );
-      return Column(
-        mainAxisSize: MainAxisSize.min,
+      final remaining = duration > displayPosition
+          ? duration - displayPosition
+          : Duration.zero;
+
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          _PlayerProgressTrack(
-            value: displayValue,
-            enabled: duration > Duration.zero,
-            onChangeStart: (value) => setState(() => _dragValue = value),
-            onChanged: (value) => setState(() => _dragValue = value),
-            onChangeEnd: (value) {
-              widget.playback.seek(duration * value);
-              setState(() => _dragValue = null);
-            },
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 1),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                _ProgressTimeLabel(_time(displayPosition)),
-                _ProgressTimeLabel('-${_time(duration - displayPosition)}'),
-              ],
+          _ProgressTimeLabel(_time(displayPosition)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: _ModernProgressBar(
+              value: displayValue,
+              duration: duration,
+              enabled: duration > Duration.zero,
+              onChangeStart: (value) => setState(() => _dragValue = value),
+              onChanged: (value) => setState(() => _dragValue = value),
+              onChangeEnd: (value) {
+                widget.playback.seek(duration * value);
+                setState(() => _dragValue = null);
+              },
             ),
           ),
+          const SizedBox(width: 10),
+          _ProgressTimeLabel('-${_time(remaining)}'),
         ],
       );
     },
   );
 }
 
-class _PlayerProgressTrack extends StatefulWidget {
-  const _PlayerProgressTrack({
+class _ModernProgressBar extends StatefulWidget {
+  const _ModernProgressBar({
     required this.value,
+    required this.duration,
     required this.enabled,
     required this.onChangeStart,
     required this.onChanged,
@@ -830,139 +844,200 @@ class _PlayerProgressTrack extends StatefulWidget {
   });
 
   final double value;
+  final Duration duration;
   final bool enabled;
   final ValueChanged<double> onChangeStart;
   final ValueChanged<double> onChanged;
   final ValueChanged<double> onChangeEnd;
 
   @override
-  State<_PlayerProgressTrack> createState() => _PlayerProgressTrackState();
+  State<_ModernProgressBar> createState() => _ModernProgressBarState();
 }
 
-class _PlayerProgressTrackState extends State<_PlayerProgressTrack> {
+class _ModernProgressBarState extends State<_ModernProgressBar>
+    with SingleTickerProviderStateMixin {
   bool _hovered = false;
   bool _dragging = false;
-  double? _pendingValue;
+  double? _hoverFraction;
+  double? _dragFraction;
 
-  double _valueFor(double dx, double width) =>
-      width <= 0 ? 0 : (dx / width).clamp(0.0, 1.0).toDouble();
+  late final AnimationController _animController;
+  late final Animation<double> _hoverAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    );
+    _hoverAnim = CurvedAnimation(
+      parent: _animController,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+  }
+
+  @override
+  void dispose() {
+    _animController.dispose();
+    super.dispose();
+  }
+
+  double _calcFraction(double dx, double width) {
+    if (width <= 0) return 0.0;
+    return (dx / width).clamp(0.0, 1.0).toDouble();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final value = widget.value.clamp(0.0, 1.0).toDouble();
-    final showThumb = _hovered || _dragging;
+    final activeFraction = (_dragFraction ?? widget.value).clamp(0.0, 1.0).toDouble();
+
     return MouseRegion(
       cursor: widget.enabled
           ? SystemMouseCursors.click
           : SystemMouseCursors.basic,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
+      onEnter: (_) {
+        if (!widget.enabled) return;
+        setState(() => _hovered = true);
+        _animController.forward();
+      },
+      onExit: (_) {
+        setState(() {
+          _hovered = false;
+          _hoverFraction = null;
+        });
+        if (!_dragging) {
+          _animController.reverse();
+        }
+      },
+      onHover: (event) {
+        if (!widget.enabled) return;
+        final box = context.findRenderObject() as RenderBox?;
+        if (box == null || !box.hasSize) return;
+        final width = box.size.width;
+        final frac = _calcFraction(event.localPosition.dx, width);
+        if (_hoverFraction != frac) {
+          setState(() => _hoverFraction = frac);
+        }
+      },
       child: LayoutBuilder(
         builder: (context, constraints) {
           final width = constraints.maxWidth;
-          final thumbSize = showThumb ? 13.0 : 7.0;
-          final thumbLeft = (width - thumbSize) * value;
+          final hoverFrac = _hoverFraction;
+          final hoverTime = (hoverFrac != null && widget.duration > Duration.zero)
+              ? Duration(
+                  milliseconds:
+                      (widget.duration.inMilliseconds * hoverFrac).round(),
+                )
+              : null;
+
           return GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTapDown: widget.enabled
                 ? (details) {
-                    final next = _valueFor(details.localPosition.dx, width);
+                    final next = _calcFraction(details.localPosition.dx, width);
                     widget.onChangeStart(next);
                     widget.onChangeEnd(next);
                   }
                 : null,
             onHorizontalDragStart: widget.enabled
                 ? (details) {
-                    final next = _valueFor(details.localPosition.dx, width);
+                    final next = _calcFraction(details.localPosition.dx, width);
                     setState(() {
                       _dragging = true;
-                      _pendingValue = next;
+                      _dragFraction = next;
                     });
+                    _animController.forward();
                     widget.onChangeStart(next);
                   }
                 : null,
             onHorizontalDragUpdate: widget.enabled
                 ? (details) {
-                    final next = _valueFor(details.localPosition.dx, width);
-                    _pendingValue = next;
+                    final next = _calcFraction(details.localPosition.dx, width);
+                    setState(() {
+                      _dragFraction = next;
+                      _hoverFraction = next;
+                    });
                     widget.onChanged(next);
                   }
                 : null,
             onHorizontalDragEnd: widget.enabled
                 ? (_) {
-                    widget.onChangeEnd(_pendingValue ?? widget.value);
+                    final endValue = _dragFraction ?? widget.value;
+                    widget.onChangeEnd(endValue);
                     setState(() {
                       _dragging = false;
-                      _pendingValue = null;
+                      _dragFraction = null;
                     });
+                    if (!_hovered) {
+                      _animController.reverse();
+                    }
                   }
                 : null,
             child: SizedBox(
-              height: 26,
+              height: 36,
               child: Stack(
-                alignment: Alignment.centerLeft,
                 clipBehavior: Clip.none,
+                alignment: Alignment.centerLeft,
                 children: [
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 150),
-                      height: _hovered || _dragging ? 7 : 5,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: .22),
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(
-                          color: Colors.black.withValues(alpha: .08),
+                  Positioned.fill(
+                    child: AnimatedBuilder(
+                      animation: _hoverAnim,
+                      builder: (context, _) => CustomPaint(
+                        painter: _ModernProgressPainter(
+                          value: activeFraction,
+                          hoverFraction: _hoverFraction,
+                          hoverProgress: _hoverAnim.value,
                         ),
                       ),
                     ),
                   ),
-                  Positioned(
-                    left: 0,
-                    width: width * value,
-                    child: AnimatedContainer(
-                      duration: _dragging
-                          ? Duration.zero
-                          : const Duration(milliseconds: 90),
-                      height: _hovered || _dragging ? 7 : 5,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: .92),
-                        borderRadius: BorderRadius.circular(999),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.white.withValues(alpha: .18),
-                            blurRadius: 5,
-                          ),
-                        ],
+                  if (hoverTime != null && (_hovered || _dragging))
+                    Positioned(
+                      top: -2,
+                      left: (width * (hoverFrac ?? 0.0) - 22).clamp(
+                        0.0,
+                        math.max(0.0, width - 44.0),
                       ),
-                    ),
-                  ),
-                  AnimatedPositioned(
-                    duration: _dragging
-                        ? Duration.zero
-                        : const Duration(milliseconds: 90),
-                    curve: Curves.easeOutCubic,
-                    left: thumbLeft,
-                    width: thumbSize,
-                    height: thumbSize,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: Colors.black.withValues(alpha: .14),
+                      child: IgnorePointer(
+                        child: AnimatedOpacity(
+                          duration: const Duration(milliseconds: 150),
+                          opacity: _hoverAnim.value,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xEB1A1C23),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.18),
+                                width: 0.8,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.35),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 3),
+                                ),
+                              ],
+                            ),
+                            child: Text(
+                              _time(hoverTime),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w600,
+                                fontFeatures: [FontFeature.tabularFigures()],
+                                letterSpacing: 0.3,
+                              ),
+                            ),
+                          ),
                         ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: .26),
-                            blurRadius: 7,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
                       ),
                     ),
-                  ),
                 ],
               ),
             ),
@@ -971,6 +1046,108 @@ class _PlayerProgressTrackState extends State<_PlayerProgressTrack> {
       ),
     );
   }
+}
+
+class _ModernProgressPainter extends CustomPainter {
+  const _ModernProgressPainter({
+    required this.value,
+    required this.hoverFraction,
+    required this.hoverProgress,
+  });
+
+  final double value;
+  final double? hoverFraction;
+  final double hoverProgress;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final trackHeight = ui.lerpDouble(4.0, 6.0, hoverProgress)!;
+    final trackTop = (size.height - trackHeight) / 2;
+    final trackRect = Rect.fromLTWH(0, trackTop, size.width, trackHeight);
+    final trackRRect = RRect.fromRectAndRadius(
+      trackRect,
+      Radius.circular(trackHeight / 2),
+    );
+
+    // 1. 底轨
+    final bgPaint = Paint()
+      ..color = Colors.white.withValues(
+        alpha: ui.lerpDouble(0.16, 0.22, hoverProgress)!,
+      );
+    canvas.drawRRect(trackRRect, bgPaint);
+
+    // 2. 悬停幽灵预览轨
+    if (hoverFraction != null && hoverProgress > 0) {
+      final hFrac = hoverFraction!.clamp(0.0, 1.0);
+      final ghostWidth = size.width * hFrac;
+      if (ghostWidth > 0) {
+        final ghostRect = Rect.fromLTWH(0, trackTop, ghostWidth, trackHeight);
+        canvas.save();
+        canvas.clipRRect(trackRRect);
+        canvas.drawRect(
+          ghostRect,
+          Paint()..color = Colors.white.withValues(alpha: 0.14 * hoverProgress),
+        );
+        canvas.restore();
+      }
+    }
+
+    // 3. 已播放进度轨
+    final clampedVal = value.clamp(0.0, 1.0);
+    final activeWidth = size.width * clampedVal;
+    if (activeWidth > 0) {
+      final activeRect = Rect.fromLTWH(0, trackTop, activeWidth, trackHeight);
+      canvas.save();
+      canvas.clipRRect(trackRRect);
+      final activePaint = Paint()
+        ..shader = LinearGradient(
+          colors: [
+            Colors.white.withValues(alpha: 0.95),
+            Colors.white,
+          ],
+        ).createShader(activeRect);
+      canvas.drawRect(activeRect, activePaint);
+      canvas.restore();
+    }
+
+    // 4. 滑块 (Thumb)
+    final thumbRadius = ui.lerpDouble(0.0, 5.5, hoverProgress)!;
+    if (thumbRadius > 0.5) {
+      final thumbCenter = Offset(
+        activeWidth.clamp(thumbRadius, size.width - thumbRadius),
+        size.height / 2,
+      );
+
+      canvas.drawCircle(
+        thumbCenter + const Offset(0, 1.5),
+        thumbRadius,
+        Paint()
+          ..color = Colors.black.withValues(alpha: 0.28 * hoverProgress)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3.5),
+      );
+
+      canvas.drawCircle(
+        thumbCenter,
+        thumbRadius,
+        Paint()..color = Colors.white,
+      );
+
+      canvas.drawCircle(
+        thumbCenter,
+        thumbRadius,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0
+          ..color = Colors.white.withValues(alpha: 0.6),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ModernProgressPainter oldDelegate) =>
+      value != oldDelegate.value ||
+      hoverFraction != oldDelegate.hoverFraction ||
+      hoverProgress != oldDelegate.hoverProgress;
 }
 
 class _ProgressTimeLabel extends StatelessWidget {
@@ -982,10 +1159,11 @@ class _ProgressTimeLabel extends StatelessWidget {
   Widget build(BuildContext context) => Text(
     value,
     style: TextStyle(
-      color: Colors.white.withValues(alpha: .58),
-      fontSize: 11,
-      fontWeight: FontWeight.w600,
+      color: Colors.white.withValues(alpha: .6),
+      fontSize: 11.5,
+      fontWeight: FontWeight.w500,
       fontFeatures: const [FontFeature.tabularFigures()],
+      letterSpacing: 0.2,
     ),
   );
 }
@@ -1005,23 +1183,19 @@ class _ExpandableVolumeState extends State<_ExpandableVolume> {
   @override
   Widget build(BuildContext context) {
     final volume = widget.playback.state.volume;
-    final volumeIcon = MiuixIcons.extended.byName(
-      volume <= 0 ? 'volumeOff' : 'volumeUp',
-      MiuixIconWeight.demibold,
-    )!;
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOutCubic,
-        width: _hovered ? 210 : 56,
+        width: _hovered ? 210 : 64,
         child: _Capsule(
-          padding: const EdgeInsets.all(6),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           child: Row(
             children: [
               if (_hovered) ...[
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
                 Expanded(
                   child: _DragBar(
                     value: volume,
@@ -1031,8 +1205,12 @@ class _ExpandableVolumeState extends State<_ExpandableVolume> {
                 const SizedBox(width: 6),
               ],
               _CapsuleButton(
-                vector: volumeIcon,
-                iconSize: 23,
+                icon: volume <= 0
+                    ? CupertinoIcons.volume_off
+                    : (volume < 0.5
+                        ? CupertinoIcons.volume_down
+                        : CupertinoIcons.volume_up),
+                iconSize: 21,
                 tooltip: volume <= 0 ? '取消静音' : '静音',
                 onPressed: () {
                   if (volume > 0) {
@@ -1072,7 +1250,7 @@ class _DragBar extends StatelessWidget {
               .toDouble(),
         ),
         child: SizedBox(
-          height: 18,
+          height: 24,
           child: CustomPaint(
             painter: _GlassTrackPainter(
               value: value.clamp(0.0, 1.0).toDouble(),
@@ -1091,44 +1269,57 @@ class _GlassTrackPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    const trackHeight = 5.0;
-    final trackRect = Rect.fromLTWH(
-      0,
-      (size.height - trackHeight) / 2,
-      size.width,
-      trackHeight,
+    const trackHeight = 4.5;
+    final trackTop = (size.height - trackHeight) / 2;
+    final trackRect = Rect.fromLTWH(0, trackTop, size.width, trackHeight);
+    final trackRRect = RRect.fromRectAndRadius(
+      trackRect,
+      const Radius.circular(trackHeight / 2),
     );
-    final trackRadius = Radius.circular(trackHeight / 2);
+
+    // 背景底轨
     canvas.drawRRect(
-      RRect.fromRectAndRadius(trackRect, trackRadius),
-      Paint()..color = Colors.black.withValues(alpha: .10),
+      trackRRect,
+      Paint()..color = Colors.white.withValues(alpha: 0.18),
     );
 
     if (value <= 0) return;
-    final activeRect = Rect.fromLTWH(
-      trackRect.left,
-      trackRect.top,
-      trackRect.width * value,
-      trackRect.height,
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(activeRect, trackRadius),
-      Paint()..color = Colors.black.withValues(alpha: .30),
-    );
 
-    final thumbCenter = Offset(activeRect.right, size.height / 2);
+    // 激活轨
+    final activeWidth = size.width * value;
+    final activeRect = Rect.fromLTWH(0, trackTop, activeWidth, trackHeight);
+    canvas.save();
+    canvas.clipRRect(trackRRect);
+    canvas.drawRect(
+      activeRect,
+      Paint()..color = Colors.white.withValues(alpha: 0.92),
+    );
+    canvas.restore();
+
+    // 滑块
+    final thumbCenter = Offset(
+      activeWidth.clamp(4.5, size.width - 4.5),
+      size.height / 2,
+    );
+    canvas.drawCircle(
+      thumbCenter + const Offset(0, 1),
+      4.5,
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.25)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5),
+    );
     canvas.drawCircle(
       thumbCenter,
       4.5,
-      Paint()..color = Colors.black.withValues(alpha: .36),
+      Paint()..color = Colors.white,
     );
     canvas.drawCircle(
       thumbCenter,
       4.5,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1
-        ..color = Colors.white.withValues(alpha: .22),
+        ..strokeWidth = 0.8
+        ..color = Colors.white.withValues(alpha: 0.5),
     );
   }
 
@@ -1138,7 +1329,11 @@ class _GlassTrackPainter extends CustomPainter {
 }
 
 class _Capsule extends StatelessWidget {
-  const _Capsule({required this.child, this.padding = const EdgeInsets.all(6)});
+  const _Capsule({
+    required this.child,
+    this.padding = const EdgeInsets.all(6),
+  });
+
   final Widget child;
   final EdgeInsets padding;
 
@@ -1149,8 +1344,9 @@ class _Capsule extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: .12),
-            blurRadius: 22,
+            color: Colors.black.withValues(alpha: .14),
+            blurRadius: 24,
+            spreadRadius: -2,
             offset: const Offset(0, 8),
           ),
         ],
@@ -1158,13 +1354,17 @@ class _Capsule extends StatelessWidget {
       child: GlassContainer(
         shape: const LiquidRoundedSuperellipse(borderRadius: 999),
         clipBehavior: Clip.antiAlias,
-        child: Padding(padding: padding, child: child),
+        child: SizedBox(
+          height: 64,
+          child: Padding(padding: padding, child: child),
+        ),
       ),
     );
   }
 }
 
-class _CapsuleButton extends StatelessWidget {
+
+class _CapsuleButton extends StatefulWidget {
   const _CapsuleButton({
     this.icon,
     this.vector,
@@ -1172,8 +1372,9 @@ class _CapsuleButton extends StatelessWidget {
     required this.onPressed,
     this.selected = false,
     this.emphasized = false,
-    this.iconSize = 22,
+    this.iconSize = 20,
   }) : assert((icon == null) != (vector == null));
+
   final IconData? icon;
   final MiuixVectorIcon? vector;
   final String tooltip;
@@ -1183,38 +1384,140 @@ class _CapsuleButton extends StatelessWidget {
   final double iconSize;
 
   @override
+  State<_CapsuleButton> createState() => _CapsuleButtonState();
+}
+
+class _CapsuleButtonState extends State<_CapsuleButton> {
+  bool _hovered = false;
+  bool _pressed = false;
+
+  @override
   Widget build(BuildContext context) {
-    final tint = onPressed == null
-        ? Colors.white.withValues(alpha: .25)
-        : emphasized || selected
-        ? Colors.white
-        : Colors.white.withValues(alpha: .72);
-    return Tooltip(
-      message: tooltip,
-      child: IconButton(
-        onPressed: onPressed,
-        icon: AnimatedScale(
-          scale: emphasized ? 1.04 : 1,
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOutCubic,
-          child: MiuixIcon(
-            icon: icon,
-            vector: vector,
-            size: iconSize,
-            tint: tint,
-          ),
+    final enabled = widget.onPressed != null;
+    final selected = widget.selected;
+    final emphasized = widget.emphasized;
+    final buttonSize = emphasized ? 48.0 : 44.0;
+
+
+    final Color backgroundColor;
+    final Border? border;
+    final List<BoxShadow>? shadows;
+
+    if (!enabled) {
+      backgroundColor = Colors.transparent;
+      border = null;
+      shadows = null;
+    } else if (selected) {
+      backgroundColor = Colors.white.withValues(alpha: _hovered ? 0.28 : 0.22);
+      border = Border.all(
+        color: Colors.white.withValues(alpha: 0.35),
+        width: 0.8,
+      );
+      shadows = [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.18),
+          blurRadius: 8,
+          offset: const Offset(0, 2),
         ),
-        style: IconButton.styleFrom(
-          backgroundColor: Colors.transparent,
-          hoverColor: Colors.white.withValues(alpha: .08),
-          highlightColor: Colors.white.withValues(alpha: .13),
-          minimumSize: const Size(44, 44),
-          padding: EdgeInsets.zero,
+      ];
+    } else if (emphasized) {
+      backgroundColor = Colors.white.withValues(alpha: _hovered ? 0.24 : 0.16);
+      border = Border.all(
+        color: Colors.white.withValues(alpha: _hovered ? 0.32 : 0.20),
+        width: 0.8,
+      );
+      shadows = [
+        BoxShadow(
+          color: Colors.white.withValues(alpha: _hovered ? 0.15 : 0.08),
+          blurRadius: 10,
+        ),
+      ];
+    } else if (_hovered) {
+      backgroundColor = Colors.white.withValues(alpha: 0.12);
+      border = Border.all(
+        color: Colors.white.withValues(alpha: 0.18),
+        width: 0.8,
+      );
+      shadows = null;
+    } else {
+      backgroundColor = Colors.transparent;
+      border = null;
+      shadows = null;
+    }
+
+    final Color iconColor;
+    if (!enabled) {
+      iconColor = Colors.white.withValues(alpha: 0.25);
+    } else if (selected || emphasized) {
+      iconColor = Colors.white;
+    } else if (_hovered) {
+      iconColor = Colors.white.withValues(alpha: 0.95);
+    } else {
+      iconColor = Colors.white.withValues(alpha: 0.68);
+    }
+
+    final double scale;
+    if (_pressed) {
+      scale = 0.92;
+    } else if (_hovered) {
+      scale = emphasized ? 1.06 : 1.04;
+    } else {
+      scale = emphasized ? 1.02 : 1.0;
+    }
+
+    return Tooltip(
+      message: widget.tooltip,
+      waitDuration: const Duration(milliseconds: 400),
+      child: MouseRegion(
+        cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() {
+          _hovered = false;
+          _pressed = false;
+        }),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: enabled ? (_) => setState(() => _pressed = true) : null,
+          onTapUp: enabled ? (_) => setState(() => _pressed = false) : null,
+          onTapCancel: enabled ? () => setState(() => _pressed = false) : null,
+          onTap: widget.onPressed,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            width: buttonSize,
+            height: buttonSize,
+
+            decoration: BoxDecoration(
+              color: backgroundColor,
+              shape: BoxShape.circle,
+              border: border,
+              boxShadow: shadows,
+            ),
+            child: Center(
+              child: AnimatedScale(
+                scale: scale,
+                duration: const Duration(milliseconds: 150),
+                curve: Curves.easeOutCubic,
+                child: widget.icon != null
+                    ? Icon(
+                        widget.icon,
+                        size: widget.iconSize,
+                        color: iconColor,
+                      )
+                    : MiuixIcon(
+                        vector: widget.vector,
+                        size: widget.iconSize,
+                        tint: iconColor,
+                      ),
+              ),
+            ),
+          ),
         ),
       ),
     );
   }
 }
+
 
 String _time(Duration value) {
   final minutes = value.inMinutes.remainder(60).toString().padLeft(2, '0');
