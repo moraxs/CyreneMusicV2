@@ -72,10 +72,49 @@ void main() {
     expect(audio.loaded.last, second.playbackUrl);
   });
 
-  test('解析成功但首个 CDN 加载失败时继续下一个候选', () async {
+  test('单曲循环：播放结束回绕到起点续播，不重开媒体', () async {
+    final track = _track('one');
+    await controller.playTrack(track, queue: [track]);
+    controller.setRepeatMode(RepeatMode.one);
+    audio.positions.add(const Duration(minutes: 3));
+    await Future<void>.delayed(Duration.zero);
+    final loadsBefore = audio.loaded.length;
+
+    audio.statuses.add(PlaybackStatus.completed);
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.state.currentTrack, track);
+    expect(controller.state.isPlaying, isTrue);
+    expect(controller.state.position, Duration.zero);
+    expect(audio.seeks, contains(Duration.zero));
+    expect(audio.playCalls, 2);
+    // 单曲循环不重新加载同一 URL，避免 EOS 后重开媒体的竞态与重新缓冲。
+    expect(audio.loaded.length, loadsBefore);
+  });
+
+  test('关闭循环：列表最后一首播放完即暂停', () async {
+    final first = _track('one');
+    final second = _track('two');
+    await controller.playTrack(first, queue: [first, second]);
+    controller.setRepeatMode(RepeatMode.off);
+    // 播到最后一首。
+    await controller.playNext();
+    audio.statuses.add(PlaybackStatus.playing);
+    await Future<void>.delayed(Duration.zero);
+
+    audio.statuses.add(PlaybackStatus.completed);
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.state.currentTrack, second);
+    expect(controller.state.isPlaying, isFalse);
+  });
+
+  test('解析成功但首个平台 CDN 加载失败时回退到下一平台', () async {
     controller.dispose();
-    final first = _track('first');
-    final second = _track('second');
+    final first = _track('first'); // 网易云（加载失败）
+    final second = _track('second', source: MusicSource.kugou); // 酷狗（可播）
     audio = FakeAudioGateway()..loadFailures.add(first.playbackUrl!);
     controller = PlaybackController(
       audio: audio,
@@ -93,8 +132,54 @@ void main() {
 
     await controller.playTrack(unresolved);
 
+    // 网易云加载失败 → 排除后回退到酷狗，最终播放酷狗。
     expect(audio.loaded, [first.playbackUrl, second.playbackUrl]);
     expect(controller.state.currentTrack, second);
+    expect(controller.state.errorMessage, isNull);
+    expect(audio.playCalls, 1);
+  });
+
+  test('跨平台逐个回退：更高优先级平台全部加载失败时最终播放最低平台', () async {
+    controller.dispose();
+    final netease = _track('netease'); // 网易云（加载失败）
+    final kugou = _track('kugou', source: MusicSource.kugou); // 酷狗（加载失败）
+    final qq = _track('qq', source: MusicSource.qq); // QQ（加载失败）
+    final kuwo = _track('kuwo', source: MusicSource.kuwo); // 酷我（可播）
+    audio = FakeAudioGateway()
+      ..loadFailures.addAll([
+        netease.playbackUrl!,
+        kugou.playbackUrl!,
+        qq.playbackUrl!,
+      ]);
+    controller = PlaybackController(
+      audio: audio,
+      store: store,
+      sourceResolver: _FakeSourceResolver([
+        netease,
+        kugou,
+        qq,
+        kuwo,
+      ]),
+    );
+
+    await controller.playTrack(const Track(
+      id: 'origin',
+      name: '待解析歌曲',
+      artists: '歌手',
+      album: '专辑',
+      picUrl: '',
+      source: MusicSource.netease,
+    ));
+
+    // 依次排除网易云→酷狗→QQ，最终落到酷我并播放；每平台只加载一次，
+    // 不会把已成功的平台再请求一遍。
+    expect(audio.loaded, [
+      netease.playbackUrl,
+      kugou.playbackUrl,
+      qq.playbackUrl,
+      kuwo.playbackUrl,
+    ]);
+    expect(controller.state.currentTrack, kuwo);
     expect(controller.state.errorMessage, isNull);
     expect(audio.playCalls, 1);
   });
@@ -436,13 +521,13 @@ void main() {
   });
 }
 
-Track _track(String id) => Track(
+Track _track(String id, {MusicSource source = MusicSource.netease}) => Track(
   id: id,
   name: '歌曲 $id',
   artists: '歌手',
   album: '专辑',
   picUrl: '',
-  source: MusicSource.netease,
+  source: source,
   playbackUrl: Uri.parse('https://example.test/$id.mp3'),
 );
 
@@ -500,12 +585,22 @@ class _FakeSourceResolver implements AudioSourceResolver {
 
   final List<Track> tracks;
 
+  /// 模拟真实解析器的「短路 + 排除」：跳过已被排除的平台，返回第一个未
+  /// 排除候选；全部被排除则抛 AudioSourceResolutionFailure。
   @override
-  Future<ResolvedAudioSources> resolve(Track track) async =>
-      ResolvedAudioSources([
-        for (var index = 0; index < tracks.length; index++)
-          PlaybackCandidate(track: tracks[index], sourceId: 'source-$index'),
+  Future<ResolvedAudioSources> resolve(
+    Track track, {
+    Set<String>? exclude,
+  }) async {
+    final excluded = exclude ?? const <String>{};
+    for (final candidate in tracks) {
+      if (excluded.contains(candidate.source.wireName)) continue;
+      return ResolvedAudioSources([
+        PlaybackCandidate(track: candidate, sourceId: 'source-${candidate.id}'),
       ]);
+    }
+    throw const AudioSourceResolutionFailure('所有音源解析均失败。');
+  }
 }
 
 class FakePlaybackSnapshotStore implements PlaybackSnapshotStore {

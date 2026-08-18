@@ -44,7 +44,10 @@ class NeteaseMusicRepository implements SearchRepository, AudioSourceResolver {
   }
 
   @override
-  Future<ResolvedAudioSources> resolve(Track track) async {
+  Future<ResolvedAudioSources> resolve(
+    Track track, {
+    Set<String>? exclude,
+  }) async {
     if (track.playbackUrl != null) {
       return ResolvedAudioSources([
         PlaybackCandidate(track: track, sourceId: 'embedded'),

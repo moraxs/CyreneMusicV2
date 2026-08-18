@@ -25,22 +25,26 @@ class ConfiguredAudioSourceResolver implements AudioSourceResolver {
   final AudioCache _cache;
 
   @override
-  Future<ResolvedAudioSources> resolve(Track track) async {
+  Future<ResolvedAudioSources> resolve(
+    Track track, {
+    Set<String>? exclude,
+  }) async {
     if (track.playbackUrl != null) {
       return ResolvedAudioSources([
         PlaybackCandidate(track: track, sourceId: 'embedded'),
       ]);
     }
 
+    final excluded = exclude ?? const <String>{};
     final preferences = await _preferences.read();
     final enabledSources = preferences.sources
         .where((source) => source.isEnabled)
         .toList(growable: false);
-    final candidates = <PlaybackCandidate>[];
     final failures = <String>[];
 
     for (final config in enabledSources) {
       for (final sourceRef in track.sourceCandidates) {
+        if (excluded.contains(sourceRef.source.wireName)) continue;
         if (!_supports(config, sourceRef.source)) continue;
         final sourceTrack = track.withSource(sourceRef);
         // 网易云专属音质（higher/dolby/jyeffect/sky/jymaster）仅对网易云
@@ -48,29 +52,6 @@ class ConfiguredAudioSourceResolver implements AudioSourceResolver {
         final quality = preferences.quality.effectiveFor(sourceRef.source);
 
         final cached = await _cache.find(sourceTrack, quality);
-        LyricData? prefetchedLyric;
-        int? cachedCandidateIndex;
-        if (cached != null) {
-          // 自动切到队列下一首时通常会直接命中音频缓存。旧逻辑把
-          // 不含歌词的缓存候选放在最前面，播放器成功加载它后就不会
-          // 继续使用后面已携带歌词的网络候选，因此第二首会显示暂无歌词。
-          prefetchedLyric = await _sourceClient.fetchLyrics(sourceTrack);
-          final lyric = prefetchedLyric ?? const LyricData();
-          cachedCandidateIndex = candidates.length;
-          candidates.add(
-            PlaybackCandidate(
-              track: sourceTrack.copyWith(
-                playbackUrl: cached,
-                lyric: lyric.lyric,
-                yrc: lyric.yrc,
-                tlyric: lyric.tlyric,
-                ytlrc: lyric.ytlrc,
-              ),
-              sourceId: '${config.id}:cache',
-            ),
-          );
-        }
-
         try {
           final resolved = await _sourceClient.resolveUrlFromSource(
             sourceTrack,
@@ -79,58 +60,84 @@ class ConfiguredAudioSourceResolver implements AudioSourceResolver {
           );
           final lyric =
               resolved.lyrics ??
-              prefetchedLyric ??
               await _sourceClient.fetchLyrics(sourceTrack) ??
               const LyricData();
-          // resolveUrlFromSource 有可能直接返回歌词。即使前面的独立
-          // fetchLyrics 没有结果，也要回填到排在第一位的缓存候选中。
-          if (cached != null && cachedCandidateIndex != null) {
-            candidates[cachedCandidateIndex] = PlaybackCandidate(
+          // 主候选为当前平台；若命中缓存则缓存文件优先（同样回填歌词）。
+          final candidates = <PlaybackCandidate>[];
+          if (cached != null) {
+            candidates.add(
+              PlaybackCandidate(
+                track: sourceTrack.copyWith(
+                  playbackUrl: cached,
+                  lyric: lyric.lyric,
+                  yrc: lyric.yrc,
+                  tlyric: lyric.tlyric,
+                  ytlrc: lyric.ytlrc,
+                ),
+                sourceId: '${config.id}:cache',
+              ),
+            );
+          }
+          candidates.add(
+            PlaybackCandidate(
               track: sourceTrack.copyWith(
-                playbackUrl: cached,
+                playbackUrl: _parsePlaybackUri(resolved.url),
                 lyric: lyric.lyric,
                 yrc: lyric.yrc,
                 tlyric: lyric.tlyric,
                 ytlrc: lyric.ytlrc,
               ),
-              sourceId: '${config.id}:cache',
-            );
-          }
-          final playable = sourceTrack.copyWith(
-            playbackUrl: _parsePlaybackUri(resolved.url),
-            lyric: lyric.lyric,
-            yrc: lyric.yrc,
-            tlyric: lyric.tlyric,
-            ytlrc: lyric.ytlrc,
+              sourceId: config.id,
+            ),
           );
-          candidates.add(
-            PlaybackCandidate(track: playable, sourceId: config.id),
-          );
-
           final fallback = resolved.fallbackUrl;
           if (fallback != null && fallback.isNotEmpty) {
             candidates.add(
               PlaybackCandidate(
-                track: playable.copyWith(
+                track: sourceTrack.copyWith(
                   playbackUrl: _parsePlaybackUri(fallback),
+                  lyric: lyric.lyric,
+                  yrc: lyric.yrc,
+                  tlyric: lyric.tlyric,
+                  ytlrc: lyric.ytlrc,
                 ),
                 sourceId: '${config.id}:fallback',
               ),
             );
           }
+          // 短路：首个能解析出可播放候选的「配置 × 平台」一到手即返回，不把
+          // 全部平台都请求一遍（例如晴天：网易云无版权跳过、酷狗可播，不应再
+          // 请求 QQ/酷我/Apple）。调用方（playTrack）加载失败后会用 exclude
+          // 排除该平台再次调用，从而逐平台惰性回退。
+          return ResolvedAudioSources(candidates);
         } catch (error) {
           failures.add('${config.name}/${sourceRef.source.wireName}: $error');
+          // 当前平台 URL 解析失败（如版权失效）但本地已有缓存：仍用缓存兜底
+          // 并尽量补一次歌词。若缓存加载也失败，调用方会排除该平台继续回退。
+          if (cached != null) {
+            final lyric =
+                await _sourceClient.fetchLyrics(sourceTrack) ?? const LyricData();
+            return ResolvedAudioSources([
+              PlaybackCandidate(
+                track: sourceTrack.copyWith(
+                  playbackUrl: cached,
+                  lyric: lyric.lyric,
+                  yrc: lyric.yrc,
+                  tlyric: lyric.tlyric,
+                  ytlrc: lyric.ytlrc,
+                ),
+                sourceId: '${config.id}:cache',
+              ),
+            ]);
+          }
         }
       }
     }
 
-    if (candidates.isEmpty) {
-      throw AudioSourceResolutionFailure(
-        enabledSources.isEmpty ? '尚未启用可用音源。' : '所有音源解析均失败。',
-        causes: failures,
-      );
-    }
-    return ResolvedAudioSources(List.unmodifiable(candidates));
+    throw AudioSourceResolutionFailure(
+      enabledSources.isEmpty ? '尚未启用可用音源。' : '所有音源解析均失败。',
+      causes: failures,
+    );
   }
 
   bool _supports(AudioSourceConfig config, MusicSource source) {

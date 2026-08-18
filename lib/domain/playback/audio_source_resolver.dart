@@ -16,7 +16,12 @@ class ResolvedAudioSources {
 }
 
 abstract interface class AudioSourceResolver {
-  Future<ResolvedAudioSources> resolve(Track track);
+  /// 解析 [track] 的可播放候选。
+  ///
+  /// [exclude] 为已被排除的平台 wireName（加载失败欲回退到更低优先级平台时
+  /// 由调用方传入），实现应跳过这些平台。实现只对该次调用命中（所有未排除
+  /// 平台里按优先级**第一个**可解析）的平台产出候选。
+  Future<ResolvedAudioSources> resolve(Track track, {Set<String>? exclude});
 }
 
 class AudioSourceResolutionFailure implements Exception {

@@ -2,7 +2,7 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "Cyrene Music"
-#define MyAppVersion "2.0.0"
+#define MyAppVersion "2.0.1"
 #define MyAppPublisher "morax"
 #define MyAppURL "https://music.cyrele.ltd"
 #define MyAppExeName "cyrene_music_reborn.exe"

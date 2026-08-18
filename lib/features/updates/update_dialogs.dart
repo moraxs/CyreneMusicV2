@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -103,6 +104,7 @@ Future<void> showUpdateDialog(
 }
 
 /// 平台支持应用内更新就走下载安装流程，否则把下载地址交给系统浏览器。
+/// iOS（自签名分发）额外弹出「重新签名覆盖安装」引导，而非直接跳浏览器。
 void _startUpdate(
   BuildContext context,
   UpdateInfo info,
@@ -112,6 +114,10 @@ void _startUpdate(
     final url = info.resolveDownloadUrl();
     if (url == null || url.isEmpty) {
       CyreneToast.show('该版本没有提供当前平台的下载地址');
+      return;
+    }
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      _showIosSideloadGuide(context, url);
       return;
     }
     launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
@@ -125,6 +131,104 @@ void _startUpdate(
     retry: () => update.startUpdate(info),
   );
   update.startUpdate(info);
+}
+
+/// iOS 自签名分发的更新引导。
+///
+/// iOS 不允许应用自行替换/安装自己（非 App Store 安装的应用，更新 = 用户用
+/// AltStore / Sideloadly 重新签名覆盖安装）。因此这里先讲清步骤，再让用户
+/// 决定是否跳去浏览器下载新版 .ipa，而不是把链接静默丢给系统浏览器。
+Future<void> _showIosSideloadGuide(BuildContext context, String url) async {
+  final proceed = await showCyreneDialog<bool>(
+    context: context,
+    title: '更新需重新安装',
+    summary: 'iOS 自签名安装的应用无法在应用内自动更新',
+    builder: (dialogContext, dismiss) {
+      final theme = MiuixTheme.of(dialogContext);
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const _GuideStep(
+            step: 1,
+            text: '点击「去下载」，在浏览器打开新版安装包（.ipa）的下载页面。',
+          ),
+          const SizedBox(height: 10),
+          const _GuideStep(
+            step: 2,
+            text: '下载后用 AltStore / Sideloadly 等工具为该安装包重新签名。',
+          ),
+          const SizedBox(height: 10),
+          const _GuideStep(
+            step: 3,
+            text: '以相同的 Bundle ID 覆盖安装即可完成更新，歌单、设置等本地数据会保留。',
+          ),
+          const SizedBox(height: 16),
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 12,
+            runSpacing: 8,
+            children: [
+              MiuixTextButton('取消', onPressed: () => dismiss(false)),
+              MiuixButton(
+                onPressed: () => dismiss(true),
+                colors: MiuixButtonDefaults.buttonColorsPrimary(dialogContext),
+                child: MiuixText('去下载', style: theme.textStyles.button),
+              ),
+            ],
+          ),
+        ],
+      );
+    },
+  );
+
+  if (proceed == true && context.mounted) {
+    launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  }
+}
+
+/// 引导弹窗里的编号步骤行。
+class _GuideStep extends StatelessWidget {
+  const _GuideStep({required this.step, required this.text});
+
+  final int step;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = MiuixTheme.of(context);
+    final colors = theme.colors;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 20,
+          height: 20,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: colors.primary.withValues(alpha: 0.12),
+            shape: BoxShape.circle,
+          ),
+          child: Text(
+            '$step',
+            style: theme.textStyles.body2.copyWith(
+              color: colors.primary,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            text,
+            style: theme.textStyles.body2.copyWith(
+              color: colors.onSurfaceContainer,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 /// 下载进度弹窗。

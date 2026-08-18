@@ -172,6 +172,8 @@ class _SearchPageState extends State<SearchPage> {
                 selected: _tab,
                 result: state.result,
                 onSelected: (tab) => setState(() => _tab = tab),
+                onPlayAll: () => _playAllFor(state.result),
+                canPlayAll: _tracksFor(state.result, _tab).isNotEmpty,
               ),
             const SizedBox(height: 6),
             Expanded(
@@ -412,6 +414,14 @@ class _SearchPageState extends State<SearchPage> {
         ),
       ),
     );
+  }
+
+  /// 「播放全部」：用当前分类 Tab 下的整组歌曲替换临时播放列表并立即播放
+  /// 第一首（与专辑/歌单详情页的「播放全部」语义一致）。
+  void _playAllFor(SearchResult result) {
+    final tracks = _tracksFor(result, _tab);
+    if (tracks.isEmpty) return;
+    widget.playback.playTrack(tracks.first, queue: tracks);
   }
 
   List<Track> _tracksFor(SearchResult result, _SearchTab tab) => switch (tab) {
@@ -714,6 +724,8 @@ class _PlatformTabs extends StatelessWidget {
     required this.selected,
     required this.result,
     required this.onSelected,
+    this.onPlayAll,
+    this.canPlayAll = false,
   });
 
   final List<_SearchTab> tabs;
@@ -721,36 +733,84 @@ class _PlatformTabs extends StatelessWidget {
   final SearchResult result;
   final ValueChanged<_SearchTab> onSelected;
 
+  /// 「播放全部」回调。为 null 或 [canPlayAll] 为 false 时不渲染按钮。
+  final VoidCallback? onPlayAll;
+
+  /// 当前分类是否有可入队的歌曲（歌手/歌单 Tab 无歌曲时隐藏按钮）。
+  final bool canPlayAll;
+
   @override
-  Widget build(BuildContext context) => SizedBox(
-    height: 42,
-    child: ListView.separated(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      scrollDirection: Axis.horizontal,
-      physics: const BouncingScrollPhysics(),
-      itemCount: tabs.length,
-      separatorBuilder: (_, _) => const SizedBox(width: 8),
-      itemBuilder: (context, index) {
-        final theme = MiuixTheme.of(context);
-        final tab = tabs[index];
-        final label = '${tab.label} ${_count(tab)}';
-        // insideMargin 收窄以适配 42 高的横向标签条（默认竖向 13 会溢出）。
-        const tabMargin = EdgeInsets.symmetric(horizontal: 16, vertical: 9);
-        return tab == selected
-            ? MiuixButton(
-                onPressed: () => onSelected(tab),
+  Widget build(BuildContext context) {
+    final theme = MiuixTheme.of(context);
+    final showPlayAll = onPlayAll != null && canPlayAll;
+    return SizedBox(
+      height: 42,
+      child: Row(
+        children: [
+          Expanded(
+            child: ListView.separated(
+              padding: EdgeInsets.only(
+                left: 16,
+                right: showPlayAll ? 8 : 16,
+              ),
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              itemCount: tabs.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 8),
+              itemBuilder: (context, index) {
+                final tab = tabs[index];
+                final label = '${tab.label} ${_count(tab)}';
+                // insideMargin 收窄以适配 42 高的横向标签条（默认竖向 13 会溢出）。
+                const tabMargin = EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 9,
+                );
+                return tab == selected
+                    ? MiuixButton(
+                        onPressed: () => onSelected(tab),
+                        colors: MiuixButtonDefaults.buttonColorsPrimary(
+                          context,
+                        ),
+                        insideMargin: tabMargin,
+                        child: MiuixText(label, style: theme.textStyles.button),
+                      )
+                    : MiuixButton(
+                        onPressed: () => onSelected(tab),
+                        insideMargin: tabMargin,
+                        child: MiuixText(label, style: theme.textStyles.button),
+                      );
+              },
+            ),
+          ),
+          if (showPlayAll) ...[
+            const SizedBox(width: 8),
+            Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: MiuixButton(
+                onPressed: onPlayAll,
                 colors: MiuixButtonDefaults.buttonColorsPrimary(context),
-                insideMargin: tabMargin,
-                child: MiuixText(label, style: theme.textStyles.button),
-              )
-            : MiuixButton(
-                onPressed: () => onSelected(tab),
-                insideMargin: tabMargin,
-                child: MiuixText(label, style: theme.textStyles.button),
-              );
-      },
-    ),
-  );
+                insideMargin: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 9,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    MiuixIcon(
+                      vector: MiuixIcons.extended.byName('play')!,
+                      size: 16,
+                    ),
+                    const SizedBox(width: 6),
+                    MiuixText('播放全部', style: theme.textStyles.button),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 
   int _count(_SearchTab tab) => switch (tab) {
     _SearchTab.aggregate => result.aggregatedTracks.length,

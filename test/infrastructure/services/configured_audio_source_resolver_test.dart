@@ -40,6 +40,33 @@ void main() {
     );
   });
 
+  test('中途平台命中后短路，不再请求更低优先级平台', () async {
+    final sourceClient = _FakePlaybackSourceClient()
+      ..failures.add('omni:netease');
+    final resolver = ConfiguredAudioSourceResolver(
+      preferences: _FakePreferencesStore([_config('omni', [])]),
+      sourceClient: sourceClient,
+      cache: const _EmptyAudioCache(),
+    );
+    // 聚合曲目：网易云为主源，酷狗/QQ/酷我为 alternatives（无版权场景）。
+    final track = _track().copyWith(
+      alternatives: const [
+        TrackSourceRef(id: 'kugou-id', source: MusicSource.kugou),
+        TrackSourceRef(id: 'qq-id', source: MusicSource.qq),
+        TrackSourceRef(id: 'kuwo-id', source: MusicSource.kuwo),
+      ],
+    );
+
+    final resolved = await resolver.resolve(track);
+    final candidate = resolved.candidates.single;
+
+    // 网易云无版权失败 → 酷狗命中即停，QQ/酷我不再被请求。
+    expect(sourceClient.calls, ['omni:netease', 'omni:kugou']);
+    expect(candidate.sourceId, 'omni');
+    expect(candidate.track.source, MusicSource.kugou);
+    expect(candidate.track.id, 'kugou-id');
+  });
+
   test('所有解析失败时返回包含原因的领域错误', () async {
     final sourceClient = _FakePlaybackSourceClient()
       ..failures.add('first:netease');

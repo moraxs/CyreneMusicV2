@@ -141,52 +141,85 @@ class PlaybackController extends ChangeNotifier {
     );
 
     try {
-      final resolved = await _resolveTrack(track);
-      if (_isStale(request)) return;
-
+      // 逐平台惰性回退：解析出某个平台后先加载，成功即播放返回（不再请求
+      // 更低优先级平台）；当前平台解析或加载失败才排除它、继续试下一平台。
+      // 既避免聚合曲目（携带全部平台 alternatives）把每平台都请求一遍，又
+      // 保留「某个平台播不了就回退到下一个」的兜底能力——这才是用户期望的
+      // 优先平台选择（酷狗可播就播酷狗，酷狗加载失败才轮到 QQ/酷我）。
       final failures = <String>[];
-      for (final candidate in resolved.candidates) {
-        final playableTrack = candidate.track;
-        final source = playableTrack.playbackUrl;
-        if (source == null) {
-          failures.add('${candidate.sourceId}: 未返回播放地址');
-          continue;
-        }
-
+      final excluded = <String>{};
+      while (true) {
+        final ResolvedAudioSources resolved;
         try {
-          final duration = await _audio.load(source);
-          if (_isStale(request)) return;
-
-          final resolvedQueue = _normalizedQueue(
-            queue ?? [..._state.queue, playableTrack],
-          );
-          final activeQueue = resolvedQueue.any((item) => item == playableTrack)
-              ? resolvedQueue
-              : _normalizedQueue([...resolvedQueue, playableTrack]);
-          _loadedTrackKey = playableTrack.key;
-          _publish(
-            _state
-                .resetForTrack(playableTrack)
-                .copyWith(
-                  queue: activeQueue,
-                  duration:
-                      duration ??
-                      playableTrack.duration ??
-                      restoredDuration,
-                  position: resumeFrom,
-                  isLoading: false,
-                  clearError: true,
-                ),
-          );
-          if (resumeFrom != null) {
-            _pendingResume = resumeFrom;
-            await _audio.seek(resumeFrom);
-          }
-          await _audio.play();
-          return;
-        } catch (error) {
-          failures.add('${candidate.sourceId}: $error');
+          resolved = await _resolveTrack(track, exclude: excluded);
+        } on AudioSourceResolutionFailure {
+          break; // 未排除的平台已全部解析失败
         }
+        if (_isStale(request)) return;
+        // 解析结果只剩已排除平台（如嵌入式单候选首次加载失败后的重试），
+        // 无需无效重载，直接结束。
+        if (resolved.isEmpty ||
+            resolved.candidates.every(
+              (candidate) => excluded.contains(candidate.track.source.wireName),
+            )) {
+          break;
+        }
+
+        var played = false;
+        for (final candidate in resolved.candidates) {
+          final playableTrack = candidate.track;
+          final source = playableTrack.playbackUrl;
+          if (source == null) {
+            failures.add('${candidate.sourceId}: 未返回播放地址');
+            continue;
+          }
+
+          try {
+            final duration = await _audio.load(source);
+            if (_isStale(request)) return;
+
+            final resolvedQueue = _normalizedQueue(
+              queue ?? [..._state.queue, playableTrack],
+            );
+            final activeQueue = resolvedQueue.any(
+              (item) => item == playableTrack,
+            )
+                ? resolvedQueue
+                : _normalizedQueue([...resolvedQueue, playableTrack]);
+            _loadedTrackKey = playableTrack.key;
+            _publish(
+              _state
+                  .resetForTrack(playableTrack)
+                  .copyWith(
+                    queue: activeQueue,
+                    duration:
+                        duration ??
+                        playableTrack.duration ??
+                        restoredDuration,
+                    position: resumeFrom,
+                    isLoading: false,
+                    clearError: true,
+                  ),
+            );
+            if (resumeFrom != null) {
+              _pendingResume = resumeFrom;
+              await _audio.seek(resumeFrom);
+            }
+            await _audio.play();
+            played = true;
+            break;
+          } catch (error) {
+            failures.add('${candidate.sourceId}: $error');
+          }
+        }
+        if (played) return;
+
+        // 当前平台的全部候选都加载失败：排除该平台，下一轮解析更低优先级平台。
+        var progressed = false;
+        for (final candidate in resolved.candidates) {
+          if (excluded.add(candidate.track.source.wireName)) progressed = true;
+        }
+        if (!progressed) break; // 无可排除的新平台，确实全部失败
       }
 
       throw AudioSourceResolutionFailure('所有音源均无法加载。', causes: failures);
@@ -445,19 +478,51 @@ class PlaybackController extends ChangeNotifier {
         // 暂停是「用户可能就此离开」的信号：补一次精确进度，绕过节流。
         unawaited(_persistSnapshot());
       case PlaybackStatus.completed:
-        unawaited(_playAdjacent(isNext: true));
+        // 单曲循环：seek 回 0 直接续播当前媒体（media_kit 官方推荐做法），
+        // 不重开媒体——同一 URL 在 EOS 后立刻 open 有竞态，会停在末尾不再播
+        // （原版 player_service 用 500ms 延迟规避，这里用回绕替代），且重载会
+        // 重新解析/缓冲，循环有明显断音。其余模式走队列导航（可能换曲 → 重载）。
+        if (_state.repeatMode == RepeatMode.one && _loadedTrackKey != null) {
+          unawaited(_restartCurrentTrack());
+        } else {
+          unawaited(_playAdjacent(isNext: true));
+        }
       case PlaybackStatus.idle:
         break;
     }
   }
 
-  Future<ResolvedAudioSources> _resolveTrack(Track track) async {
+  /// 单曲循环：把当前曲目 seek 回起点并继续播放。
+  ///
+  /// 相比走 [playTrack] 重开同一 URL：不重新解析音源、不重新缓冲，循环无缝；
+  /// 同时规避 libmpv 在 EOS 后立刻 `open` 同一媒体的竞态（原版用 500ms 延迟
+  /// 规避，这里用回绕替代，无断音）。[completed] 仅在媒体已装载且正播放时
+  /// 触发，故此时 [_loadedTrackKey] 必然非空（[PlaybackController._onStatus]
+  /// 调用方已校验）。
+  Future<void> _restartCurrentTrack() async {
+    _pendingResume = null;
+    await _audio.seek(Duration.zero);
+    await _audio.play();
+    _publish(
+      _state.copyWith(
+        position: Duration.zero,
+        isPlaying: true,
+        isLoading: false,
+      ),
+      persist: false,
+    );
+  }
+
+  Future<ResolvedAudioSources> _resolveTrack(
+    Track track, {
+    Set<String>? exclude,
+  }) async {
     if (track.playbackUrl != null || _sourceResolver == null) {
       return ResolvedAudioSources([
         PlaybackCandidate(track: track, sourceId: 'embedded'),
       ]);
     }
-    return _sourceResolver.resolve(track);
+    return _sourceResolver.resolve(track, exclude: exclude);
   }
 
   bool _isStale(int request) => _disposed || request != _playRequest;

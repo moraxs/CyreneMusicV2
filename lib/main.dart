@@ -31,6 +31,7 @@ import 'features/player/mobile/compat/lyric_style_service.dart';
 import 'features/player/mobile/compat/player_background_service.dart';
 import 'infrastructure/core/url_service.dart';
 import 'infrastructure/media_notification/media_notification_service.dart';
+import 'infrastructure/media_notification/ios_now_playing_service.dart';
 import 'infrastructure/media_notification/smtc_service.dart';
 import 'infrastructure/services/developer_mode_service.dart';
 import 'infrastructure/services/listening_card_sync.dart';
@@ -291,6 +292,7 @@ class _MyAppState extends State<MyApp>
       widget.dependencies ?? AppDependencies.preview();
   late final PlaybackHistoryRecorder _historyRecorder;
   late final MediaNotificationService _mediaNotification;
+  late final IosNowPlayingService _iosNowPlaying;
   late final SmtcService _smtc;
   ListeningCardSync? _listeningCardSync;
 
@@ -320,6 +322,9 @@ class _MyAppState extends State<MyApp>
     // 安卓系统通知栏媒体控制器：监听播放状态，同步到通知栏 + MediaSession。
     _mediaNotification = MediaNotificationService(_dependencies.playback)
       ..start();
+    // iOS 锁屏/控制中心媒体卡片：后台播放 + Now Playing（原生端见
+    // ios/Runner/NowPlayingBridge.swift）。服务内部自检平台，非 iOS 为空操作。
+    _iosNowPlaying = IosNowPlayingService(_dependencies.playback)..start();
     // Windows 系统媒体传输控件（SMTC）：任务栏媒体浮层 / 键盘多媒体键。
     // 服务内部自检平台，非 Windows 上为空操作。
     _smtc = SmtcService(_dependencies.playback)..start();
@@ -387,6 +392,7 @@ class _MyAppState extends State<MyApp>
     if (Platform.isWindows) windowManager.removeListener(this);
     _historyRecorder.dispose();
     _mediaNotification.dispose();
+    _iosNowPlaying.dispose();
     _smtc.dispose();
     _listeningCardSync?.dispose();
     _dependencies.dispose();
