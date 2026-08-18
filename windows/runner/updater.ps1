@@ -203,6 +203,10 @@ if (Test-Path $ExePath) {
 Write-Log "Updater task completed"
 Write-Log "========================================="
 
+# Delete this updater script itself after completion. It now lives in the user-writable
+# staging dir (not the install dir), and leaves nothing to accumulate across updates.
+Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
+
 # Exit immediately - no need to delay since the app is now independent
 exit 0
 

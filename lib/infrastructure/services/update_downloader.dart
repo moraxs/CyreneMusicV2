@@ -122,19 +122,15 @@ class UpdateDownloader {
     }
   }
 
-  /// 更新包的落地目录。
+  /// 更新包的落地目录（用户可写）。
   ///
-  /// 桌面端放在**安装目录**下，因为 Windows 的更新器要就地解压并覆盖同目录的
-  /// 文件；安卓放应用私有目录（因而不需要任何外部存储权限）。
-  @visibleForTesting
+  /// 桌面端同样放在应用数据目录而非安装目录：更新包、解压暂存都不再写入安装
+  /// 目录（Program Files 下非管理员运行会直接写失败，旧实现因此必须"以管理员
+  /// 运行主程序"才能更新）。安装目录的最终覆盖交给提权后的更新器完成
+  /// （见 WindowsUpdateInstaller）。
   Future<Directory> resolveDownloadDirectory() async {
-    final Directory base;
-    if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
-      base = Directory(p.join(resolveInstallDirectory(), 'updates'));
-    } else {
-      final support = await getApplicationSupportDirectory();
-      base = Directory(p.join(support.path, 'updates'));
-    }
+    final support = await getApplicationSupportDirectory();
+    final base = Directory(p.join(support.path, 'updates'));
     if (!base.existsSync()) base.createSync(recursive: true);
     return base;
   }

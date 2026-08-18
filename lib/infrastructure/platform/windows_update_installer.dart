@@ -35,10 +35,13 @@ class WindowsUpdateInstaller implements UpdateInstaller {
     }
 
     final installDir = Directory(UpdateDownloader.resolveInstallDirectory());
+    // 解压、写更新器脚本/启动 bat 等前置写操作放在**用户可写**的 AppData 目录，
+    // 而不是安装目录：安装在 Program Files 时，非管理员运行的应用没有写入权限，
+    // 提前写进去会直接失败（旧实现因此必须"以管理员运行主程序"才能更新）。
+    // 只有覆盖安装目录的最终一步交给提权脚本（见 updater.ps1）。
+    final staging = await UpdateDownloader().resolveDownloadDirectory();
     final stamp = DateTime.now().millisecondsSinceEpoch;
-    final tempDir = Directory(
-      p.join(installDir.path, 'updates', 'temp_$stamp'),
-    );
+    final tempDir = Directory(p.join(staging.path, 'temp_$stamp'));
     tempDir.createSync(recursive: true);
 
     try {
@@ -49,17 +52,13 @@ class WindowsUpdateInstaller implements UpdateInstaller {
     // 解压成功后压缩包就没用了，且它有几十 MB。
     package.delete().ignore();
 
-    final scriptFile = File(
-      p.join(installDir.path, 'updates', 'updater_$stamp.ps1'),
-    );
+    final scriptFile = File(p.join(staging.path, 'updater_$stamp.ps1'));
     await scriptFile.writeAsString(await _loadUpdaterScript(tempDir));
     if (!scriptFile.existsSync()) {
       throw const UpdateInstallFailure('更新器脚本写入失败');
     }
 
-    final batchFile = File(
-      p.join(installDir.path, 'updates', 'start_updater_$stamp.bat'),
-    );
+    final batchFile = File(p.join(staging.path, 'start_updater_$stamp.bat'));
     await batchFile.writeAsString(
       _buildBatchScript(
         scriptPath: _windowsPath(scriptFile.path),
@@ -209,6 +208,8 @@ powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -NoProfile -File "$sc
 echo.
 echo Update completed.
 timeout /t 2 /nobreak >nul
+:: 更新完成后再删掉自己（放在提权分支末尾，避免非提权实例先删导致提权实例失联）
+del /f /q "%~f0"
 exit
 ''';
 
