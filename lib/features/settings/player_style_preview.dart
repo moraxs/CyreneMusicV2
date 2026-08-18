@@ -38,6 +38,7 @@ import '../player/classic_record_stage.dart';
 import '../player/super_cyrene/super_cyrene_chat_lyrics.dart';
 import '../player/super_cyrene/super_cyrene_classic_lyrics.dart';
 import '../player/super_cyrene/super_cyrene_pixel_lyrics.dart';
+import '../player/super_cyrene/super_cyrene_sonnet_lyrics.dart';
 
 /// 预览定格的播放进度。
 ///
@@ -364,6 +365,11 @@ class SuperCyrenePreview extends StatelessWidget {
             track: previewTrack,
             cover: null,
           ),
+          'sonnet' => SuperCyreneSonnetLyrics(
+            playback: playback,
+            track: previewTrack,
+            onTranslationChanged: _ignoreTranslation,
+          ),
           _ => SuperCyreneClassicLyrics(
             playback: playback,
             track: previewTrack,
@@ -524,5 +530,6 @@ String superCyreneSubtitle(FullscreenSettingsStore store) =>
     switch (store.superCyreneLyricsTheme) {
       'pixel' => '沉浸式背景 · 像素歌词',
       'chat' => '沉浸式背景 · 聊天歌词',
+      'sonnet' => '沉浸式背景 · 构象 MG 视觉',
       _ => '沉浸式背景 · 逐行逐字歌词',
     };

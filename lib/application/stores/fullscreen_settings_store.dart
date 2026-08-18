@@ -142,7 +142,8 @@ class FullscreenSettingsStore extends ChangeNotifier {
     final storedSuperCyreneTheme = prefs.getString(_kSuperCyreneLyricsTheme);
     _superCyreneLyricsTheme =
         (storedSuperCyreneTheme == 'chat' ||
-            storedSuperCyreneTheme == 'pixel')
+            storedSuperCyreneTheme == 'pixel' ||
+            storedSuperCyreneTheme == 'sonnet')
         ? storedSuperCyreneTheme!
         : 'default';
     _wallpaperPlayerEnabled =
@@ -246,7 +247,9 @@ class FullscreenSettingsStore extends ChangeNotifier {
 
   void setSuperCyreneLyricsTheme(String value) {
     final normalized =
-        (value == 'chat' || value == 'pixel') ? value : 'default';
+        (value == 'chat' || value == 'pixel' || value == 'sonnet')
+            ? value
+            : 'default';
     if (_superCyreneLyricsTheme == normalized) return;
     _superCyreneLyricsTheme = normalized;
     _prefs?.setString(_kSuperCyreneLyricsTheme, normalized);

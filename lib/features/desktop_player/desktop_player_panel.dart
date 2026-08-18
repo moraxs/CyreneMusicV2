@@ -767,6 +767,7 @@ class _LyricsStyleRowState extends State<_LyricsStyleRow> {
     (id: 'default', label: '默认'),
     (id: 'chat', label: '对话'),
     (id: 'pixel', label: '像素'),
+    (id: 'sonnet', label: '构象'),
   ];
 
   bool _expanded = false;

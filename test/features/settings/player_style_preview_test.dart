@@ -67,12 +67,12 @@ void main() {
     expect(PlayerService().isPlaying, isFalse);
   });
 
-  testWidgets('SuperCyrene 预览按歌词主题分派，三种主题都能渲染', (tester) async {
+  testWidgets('SuperCyrene 预览按歌词主题分派，四种主题都能渲染', (tester) async {
     final preview = PreviewPlayback();
     addTearDown(preview.dispose);
     await preview.seed();
 
-    for (final theme in ['default', 'pixel', 'chat']) {
+    for (final theme in ['default', 'pixel', 'chat', 'sonnet']) {
       await tester.pumpWidget(
         _testApp(
           Center(

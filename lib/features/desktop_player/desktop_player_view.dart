@@ -6,6 +6,7 @@ import '../../application/stores/fullscreen_settings_store.dart';
 import '../player/super_cyrene/super_cyrene_chat_lyrics.dart';
 import '../player/super_cyrene/super_cyrene_classic_lyrics.dart';
 import '../player/super_cyrene/super_cyrene_pixel_lyrics.dart';
+import '../player/super_cyrene/super_cyrene_sonnet_lyrics.dart';
 import 'desktop_classic_lyrics.dart';
 import 'desktop_player_panel.dart';
 import 'desktop_player_playback.dart';
@@ -107,6 +108,11 @@ class _DesktopPlayerViewState extends State<DesktopPlayerView> {
               // 覆盖层不加载封面/头像：它们会带来不透明色块，
               // 且桌面歌词不需要聊天气泡的身份标识。
               cover: null,
+            ),
+            'sonnet' => SuperCyreneSonnetLyrics(
+              playback: controller,
+              track: track,
+              onTranslationChanged: (_) {},
             ),
             // 'default' 与 SuperCyrene 的默认逐行逐字主题对应。
             _ => SuperCyreneClassicLyrics(

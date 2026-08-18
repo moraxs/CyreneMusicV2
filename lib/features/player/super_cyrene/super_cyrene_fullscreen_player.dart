@@ -19,6 +19,7 @@ import 'super_cyrene_chat_lyrics.dart';
 import 'super_cyrene_classic_lyrics.dart';
 import 'super_cyrene_control_panel.dart';
 import 'super_cyrene_pixel_lyrics.dart';
+import 'super_cyrene_sonnet_lyrics.dart';
 
 /// SuperCyrene lives in its own feature subtree so every lyric theme can be
 /// added without increasing the classic desktop player's file size.
@@ -179,6 +180,16 @@ class _SuperCyreneFullscreenPlayerState
                         'pixel' => SuperCyrenePixelLyrics(
                           playback: widget.playback,
                           track: track,
+                          onTranslationChanged: (value) {
+                            if (mounted && value != _translation) {
+                              setState(() => _translation = value);
+                            }
+                          },
+                        ),
+                        'sonnet' => SuperCyreneSonnetLyrics(
+                          playback: widget.playback,
+                          track: track,
+                          cover: PlayerService().currentCoverImageProvider,
                           onTranslationChanged: (value) {
                             if (mounted && value != _translation) {
                               setState(() => _translation = value);

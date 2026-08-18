@@ -443,6 +443,7 @@ class _LyricsThemeRow extends StatelessWidget {
   String get _label => switch (lyricsTheme) {
     'chat' => '对话',
     'pixel' => '像素',
+    'sonnet' => '构象',
     _ => '默认',
   };
 
@@ -500,6 +501,14 @@ class _LyricsThemeRow extends StatelessWidget {
               height: 34,
               child: Text(
                 '像素',
+                style: TextStyle(color: Colors.white, fontSize: 13),
+              ),
+            ),
+            PopupMenuItem(
+              value: 'sonnet',
+              height: 34,
+              child: Text(
+                '构象',
                 style: TextStyle(color: Colors.white, fontSize: 13),
               ),
             ),
