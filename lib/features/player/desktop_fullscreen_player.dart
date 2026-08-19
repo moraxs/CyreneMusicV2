@@ -129,6 +129,7 @@ class _DesktopFullscreenPlayerState extends State<DesktopFullscreenPlayer>
       translation: track.tlyric,
       yrcLyric: track.yrc,
       yrcTranslation: track.ytlrc,
+      romaji: track.romaji,
     );
     if (!mounted) return;
     setState(() {
@@ -246,6 +247,7 @@ class _DesktopFullscreenPlayerState extends State<DesktopFullscreenPlayer>
                                               currentLyricIndex:
                                                   _currentLyricIndex,
                                               showTranslation: true,
+                                              showRomaji: true,
                                               visibleLineCount: 7,
                                             ),
                                     ),

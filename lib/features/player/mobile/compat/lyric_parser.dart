@@ -10,6 +10,7 @@ class LyricParser {
   static List<LyricLine> parseNeteaseYrcLyric(
     String yrcLyric, {
     String? translation,
+    String? romaji,
   }) {
     if (yrcLyric.isEmpty) return [];
 
@@ -30,6 +31,25 @@ class LyricParser {
               .trim();
           if (text.isNotEmpty) {
             translationMap[time] = text;
+          }
+        }
+      }
+    }
+
+    // 解析罗马音歌词（如果有，与翻译同构按时间戳匹配）
+    final Map<Duration, String> romajiMap = {};
+    if (romaji != null && romaji.isNotEmpty) {
+      final romajiLines = romaji.split('\n');
+      for (final line in romajiLines) {
+        final time = LyricLine.parseTime(line);
+        if (time != null) {
+          final text = line
+              .replaceAll(RegExp(r'\[\d+:\d+\.\d+\]'), '')
+              .replaceAll(RegExp(r'\[\d+:\d+:\d+\]'), '')
+              .replaceAll(RegExp(r'\[\d+:\d+\]'), '')
+              .trim();
+          if (text.isNotEmpty) {
+            romajiMap[time] = text;
           }
         }
       }
@@ -89,6 +109,7 @@ class LyricParser {
               translation: translationMap[lineStartTime],
               words: words.isNotEmpty ? words : null,
               lineDuration: lineDuration,
+              romanization: romajiMap[lineStartTime],
             ),
           );
         }
@@ -113,11 +134,13 @@ class LyricParser {
   /// [translation] - 普通翻译歌词 (tlyric)
   /// [yrcLyric] - YRC 逐字歌词
   /// [yrcTranslation] - YRC 对应的翻译歌词 (ytlrc)，时间戳与 YRC 匹配
+  /// [romaji] - 行级罗马音歌词 (romalrc)
   static List<LyricLine> parseNeteaseLyric(
     String lyric, {
     String? translation,
     String? yrcLyric,
     String? yrcTranslation,
+    String? romaji,
   }) {
     // 如果有YRC逐字歌词，优先使用
     if (yrcLyric != null && yrcLyric.isNotEmpty) {
@@ -129,6 +152,7 @@ class LyricParser {
       final yrcLines = parseNeteaseYrcLyric(
         yrcLyric,
         translation: effectiveTranslation,
+        romaji: romaji,
       );
       if (yrcLines.isNotEmpty) {
         return yrcLines;
@@ -161,6 +185,25 @@ class LyricParser {
       }
     }
 
+    // 解析罗马音歌词（如果有，与翻译同构按时间戳匹配）
+    final Map<Duration, String> romajiMap = {};
+    if (romaji != null && romaji.isNotEmpty) {
+      final romajiLines = romaji.split('\n');
+      for (final line in romajiLines) {
+        final time = LyricLine.parseTime(line);
+        if (time != null) {
+          final text = line
+              .replaceAll(RegExp(r'\[\d+:\d+\.\d+\]'), '')
+              .replaceAll(RegExp(r'\[\d+:\d+:\d+\]'), '')
+              .replaceAll(RegExp(r'\[\d+:\d+\]'), '')
+              .trim();
+          if (text.isNotEmpty) {
+            romajiMap[time] = text;
+          }
+        }
+      }
+    }
+
     // 解析原歌词
     for (final line in lyricLines) {
       final time = LyricLine.parseTime(line);
@@ -177,6 +220,7 @@ class LyricParser {
               startTime: time,
               text: text,
               translation: translationMap[time],
+              romanization: romajiMap[time],
             ),
           );
         }
@@ -195,6 +239,7 @@ class LyricParser {
   static List<LyricLine> parseQQQrcLyric(
     String qrcLyric, {
     String? translation,
+    String? romaji,
   }) {
     if (qrcLyric.isEmpty) return [];
 
@@ -215,6 +260,25 @@ class LyricParser {
               .trim();
           if (text.isNotEmpty) {
             translationMap[time] = text;
+          }
+        }
+      }
+    }
+
+    // 解析罗马音歌词（如果有，与翻译同构按时间戳匹配）
+    final Map<Duration, String> romajiMap = {};
+    if (romaji != null && romaji.isNotEmpty) {
+      final romajiLines = romaji.split('\n');
+      for (final line in romajiLines) {
+        final time = LyricLine.parseTime(line);
+        if (time != null) {
+          final text = line
+              .replaceAll(RegExp(r'\[\d+:\d+\.\d+\]'), '')
+              .replaceAll(RegExp(r'\[\d+:\d+:\d+\]'), '')
+              .replaceAll(RegExp(r'\[\d+:\d+\]'), '')
+              .trim();
+          if (text.isNotEmpty) {
+            romajiMap[time] = text;
           }
         }
       }
@@ -298,6 +362,7 @@ class LyricParser {
               translation: translationMap[lineStartTime],
               words: words.isNotEmpty ? words : null,
               lineDuration: lineDuration,
+              romanization: romajiMap[lineStartTime],
             ),
           );
         }
@@ -322,11 +387,13 @@ class LyricParser {
   /// [translation] - 普通翻译歌词
   /// [qrcLyric] - QRC 逐字歌词
   /// [qrcTranslation] - QRC 对应的翻译歌词
+  /// [romaji] - 行级罗马音歌词（由后端从 qrcRoma 降级而来）
   static List<LyricLine> parseQQLyric(
     String lyric, {
     String? translation,
     String? qrcLyric,
     String? qrcTranslation,
+    String? romaji,
   }) {
     // 如果有 QRC 逐字歌词，优先使用
     if (qrcLyric != null && qrcLyric.isNotEmpty) {
@@ -338,6 +405,7 @@ class LyricParser {
       final qrcLines = parseQQQrcLyric(
         qrcLyric,
         translation: effectiveTranslation,
+        romaji: romaji,
       );
       if (qrcLines.isNotEmpty) {
         return qrcLines;
@@ -345,14 +413,14 @@ class LyricParser {
     }
 
     // 否则使用普通 LRC 格式
-    return parseNeteaseLyric(lyric, translation: translation);
+    return parseNeteaseLyric(lyric, translation: translation, romaji: romaji);
   }
 
   /// 解析酷狗音乐歌词（可能需要特殊处理）
-  static List<LyricLine> parseKugouLyric(String lyric, {String? translation}) {
+  static List<LyricLine> parseKugouLyric(String lyric, {String? translation, String? romaji}) {
     // 酷狗音乐格式可能有所不同，预留接口
     // 暂时使用相同解析方式
-    return parseNeteaseLyric(lyric, translation: translation);
+    return parseNeteaseLyric(lyric, translation: translation, romaji: romaji);
   }
 
   /// 根据当前播放时间查找当前歌词行索引

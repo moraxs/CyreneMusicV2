@@ -104,6 +104,7 @@ class _PlayerStyleSettingsBodyState extends State<PlayerStyleSettingsBody> {
                     (playback) => SuperCyrenePreview(
                       playback: playback,
                       lyricsTheme: store.superCyreneLyricsTheme,
+                      backgroundStyle: store.superCyreneBackgroundStyle,
                     ),
                   ),
                 ),

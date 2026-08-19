@@ -339,48 +339,118 @@ class SuperCyrenePreview extends StatelessWidget {
     super.key,
     required this.playback,
     required this.lyricsTheme,
+    this.backgroundStyle = 'default',
   });
 
   final PlaybackController playback;
   final String lyricsTheme;
+  final String backgroundStyle;
 
   @override
-  Widget build(BuildContext context) => _PreviewCanvas(
-    width: 640,
-    height: 480,
-    backdrop: _kSuperCyreneBackdrop.colors.last,
-    child: DecoratedBox(
-      decoration: const BoxDecoration(gradient: _kSuperCyreneBackdrop),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
-        child: switch (lyricsTheme) {
-          'pixel' => SuperCyrenePixelLyrics(
-            playback: playback,
-            track: previewTrack,
-            onTranslationChanged: _ignoreTranslation,
+  Widget build(BuildContext context) {
+    final isTexturedGlass = backgroundStyle == 'textured_glass';
+    return _PreviewCanvas(
+      width: 640,
+      height: 480,
+      backdrop: _kSuperCyreneBackdrop.colors.last,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (isTexturedGlass)
+            const _PreviewTexturedGlassBackdrop()
+          else
+            const DecoratedBox(
+              decoration: BoxDecoration(gradient: _kSuperCyreneBackdrop),
+            ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+            child: switch (lyricsTheme) {
+              'pixel' => SuperCyrenePixelLyrics(
+                playback: playback,
+                track: previewTrack,
+                onTranslationChanged: _ignoreTranslation,
+              ),
+              // cover: null —— 聊天主题的头像/封面会发网络请求，预览一律不联网。
+              'chat' => SuperCyreneChatLyrics(
+                playback: playback,
+                track: previewTrack,
+                cover: null,
+              ),
+              'sonnet' => SuperCyreneSonnetLyrics(
+                playback: playback,
+                track: previewTrack,
+                onTranslationChanged: _ignoreTranslation,
+              ),
+              _ => SuperCyreneClassicLyrics(
+                playback: playback,
+                track: previewTrack,
+                onTranslationChanged: _ignoreTranslation,
+              ),
+            },
           ),
-          // cover: null —— 聊天主题的头像/封面会发网络请求，预览一律不联网。
-          'chat' => SuperCyreneChatLyrics(
-            playback: playback,
-            track: previewTrack,
-            cover: null,
-          ),
-          'sonnet' => SuperCyreneSonnetLyrics(
-            playback: playback,
-            track: previewTrack,
-            onTranslationChanged: _ignoreTranslation,
-          ),
-          _ => SuperCyreneClassicLyrics(
-            playback: playback,
-            track: previewTrack,
-            onTranslationChanged: _ignoreTranslation,
-          ),
-        },
+        ],
       ),
-    ),
-  );
+    );
+  }
 
   static void _ignoreTranslation(String? _) {}
+}
+
+class _PreviewTexturedGlassBackdrop extends StatelessWidget {
+  const _PreviewTexturedGlassBackdrop();
+
+  @override
+  Widget build(BuildContext context) => const CustomPaint(
+        painter: _PreviewTexturedGlassPainter(),
+        child: SizedBox.expand(),
+      );
+}
+
+class _PreviewTexturedGlassPainter extends CustomPainter {
+  const _PreviewTexturedGlassPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final bgPaint = Paint()
+      ..shader = const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [Color(0xFF4B3E7A), Color(0xFF241F45), Color(0xFF14172E)],
+      ).createShader(rect);
+    canvas.drawRect(rect, bgPaint);
+
+    const fluteWidth = 18.0;
+    final fluteCount = (size.width / fluteWidth).round();
+    final realWidth = size.width / fluteCount;
+
+    final highlightPaint = Paint()..color = const Color(0x38FFFFFF);
+    final shadowPaint = Paint()..color = const Color(0x55000000);
+    final sheenPaint = Paint();
+
+    for (var i = 0; i < fluteCount; i++) {
+      final x = i * realWidth;
+      final fluteRect = Rect.fromLTWH(x, 0, realWidth, size.height);
+      sheenPaint.shader = const LinearGradient(
+        begin: Alignment.centerLeft,
+        end: Alignment.centerRight,
+        colors: [
+          Color(0x18FFFFFF),
+          Color(0x04FFFFFF),
+          Color(0x18000000),
+          Color(0x38000000),
+        ],
+        stops: [0.0, 0.35, 0.82, 1.0],
+      ).createShader(fluteRect);
+      canvas.drawRect(fluteRect, sheenPaint);
+      canvas.drawRect(Rect.fromLTWH(x, 0, 1.2, size.height), highlightPaint);
+      canvas.drawRect(
+          Rect.fromLTWH(x + realWidth - 1.2, 0, 1.2, size.height), shadowPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 /// 移动「经典」预览：竖屏大封面 + 曲目信息 + 进度与控制键。
@@ -525,11 +595,15 @@ class _PreviewTransportRow extends StatelessWidget {
   );
 }
 
-/// 按当前歌词主题挑一句副标题，让卡片文案与真实渲染对得上。
-String superCyreneSubtitle(FullscreenSettingsStore store) =>
-    switch (store.superCyreneLyricsTheme) {
-      'pixel' => '沉浸式背景 · 像素歌词',
-      'chat' => '沉浸式背景 · 聊天歌词',
-      'sonnet' => '沉浸式背景 · 构象 MG 视觉',
-      _ => '沉浸式背景 · 逐行逐字歌词',
-    };
+/// 按当前歌词主题与背景挑一句副标题，让卡片文案与真实渲染对得上。
+String superCyreneSubtitle(FullscreenSettingsStore store) {
+  final bgName = store.superCyreneBackgroundStyle == 'textured_glass'
+      ? '纹理玻璃'
+      : '沉浸式背景';
+  return switch (store.superCyreneLyricsTheme) {
+    'pixel' => '$bgName · 像素歌词',
+    'chat' => '$bgName · 聊天歌词',
+    'sonnet' => '$bgName · 构象 MG 视觉',
+    _ => '$bgName · 逐行逐字歌词',
+  };
+}

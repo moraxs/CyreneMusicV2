@@ -35,6 +35,8 @@ class FullscreenSettingsStore extends ChangeNotifier {
   static const _kSuperCyrenePlayerEnabled =
       'fullscreen.superCyrenePlayerEnabled';
   static const _kSuperCyreneLyricsTheme = 'fullscreen.superCyreneLyricsTheme';
+  static const _kSuperCyreneBackgroundStyle =
+      'fullscreen.superCyreneBackgroundStyle';
   static const _kWallpaperPlayerEnabled = 'fullscreen.wallpaperPlayerEnabled';
   static const _kTaskbarPlayerEnabled = 'fullscreen.taskbarPlayerEnabled';
   static const _kTaskbarPlayerAlignment = 'fullscreen.taskbarPlayerAlignment';
@@ -50,6 +52,20 @@ class FullscreenSettingsStore extends ChangeNotifier {
   static const _kDesktopLyricRotX = 'fullscreen.desktopLyricRotX';
   static const _kDesktopLyricRotY = 'fullscreen.desktopLyricRotY';
   static const _kDesktopLyricRotZ = 'fullscreen.desktopLyricRotZ';
+  static const _kTexturedGlassFluteWidth = 'fullscreen.texturedGlassFluteWidth';
+  static const _kTexturedGlassRefractionStrength =
+      'fullscreen.texturedGlassRefractionStrength';
+  static const _kTexturedGlassLightingIntensity =
+      'fullscreen.texturedGlassLightingIntensity';
+  static const _kTexturedGlassGrooveDepth =
+      'fullscreen.texturedGlassGrooveDepth';
+  static const _kTexturedGlassDispersion = 'fullscreen.texturedGlassDispersion';
+
+  static const double defaultTexturedGlassFluteWidth = 16.0;
+  static const double defaultTexturedGlassRefractionStrength = 1.0;
+  static const double defaultTexturedGlassLightingIntensity = 1.0;
+  static const double defaultTexturedGlassGrooveDepth = 1.0;
+  static const double defaultTexturedGlassDispersion = 1.0;
 
   SharedPreferences? _prefs;
 
@@ -64,6 +80,14 @@ class FullscreenSettingsStore extends ChangeNotifier {
   double _lyricBlurStrength = 10;
   bool _superCyrenePlayerEnabled = false;
   String _superCyreneLyricsTheme = 'default';
+  String _superCyreneBackgroundStyle = 'default';
+  double _texturedGlassFluteWidth = defaultTexturedGlassFluteWidth;
+  double _texturedGlassRefractionStrength =
+      defaultTexturedGlassRefractionStrength;
+  double _texturedGlassLightingIntensity =
+      defaultTexturedGlassLightingIntensity;
+  double _texturedGlassGrooveDepth = defaultTexturedGlassGrooveDepth;
+  double _texturedGlassDispersion = defaultTexturedGlassDispersion;
   bool _wallpaperPlayerEnabled = false;
   bool _taskbarPlayerEnabled = false;
   TaskbarPlayerAlignment _taskbarPlayerAlignment =
@@ -98,6 +122,24 @@ class FullscreenSettingsStore extends ChangeNotifier {
   double get lyricBlurStrength => _lyricBlurStrength;
   bool get superCyrenePlayerEnabled => _superCyrenePlayerEnabled;
   String get superCyreneLyricsTheme => _superCyreneLyricsTheme;
+  String get superCyreneBackgroundStyle => _superCyreneBackgroundStyle;
+  double get texturedGlassFluteWidth => _texturedGlassFluteWidth;
+  double get texturedGlassRefractionStrength =>
+      _texturedGlassRefractionStrength;
+  double get texturedGlassLightingIntensity =>
+      _texturedGlassLightingIntensity;
+  double get texturedGlassGrooveDepth => _texturedGlassGrooveDepth;
+  double get texturedGlassDispersion => _texturedGlassDispersion;
+
+  bool get texturedGlassParamsIsDefault =>
+      _texturedGlassFluteWidth == defaultTexturedGlassFluteWidth &&
+      _texturedGlassRefractionStrength ==
+          defaultTexturedGlassRefractionStrength &&
+      _texturedGlassLightingIntensity ==
+          defaultTexturedGlassLightingIntensity &&
+      _texturedGlassGrooveDepth == defaultTexturedGlassGrooveDepth &&
+      _texturedGlassDispersion == defaultTexturedGlassDispersion;
+
   bool get wallpaperPlayerEnabled => _wallpaperPlayerEnabled;
   bool get taskbarPlayerEnabled => _taskbarPlayerEnabled;
   TaskbarPlayerAlignment get taskbarPlayerAlignment => _taskbarPlayerAlignment;
@@ -146,6 +188,31 @@ class FullscreenSettingsStore extends ChangeNotifier {
             storedSuperCyreneTheme == 'sonnet')
         ? storedSuperCyreneTheme!
         : 'default';
+    final storedSuperCyreneBackground =
+        prefs.getString(_kSuperCyreneBackgroundStyle);
+    _superCyreneBackgroundStyle =
+        (storedSuperCyreneBackground == 'textured_glass')
+            ? storedSuperCyreneBackground!
+            : 'default';
+    _texturedGlassFluteWidth = (prefs.getDouble(_kTexturedGlassFluteWidth) ??
+            defaultTexturedGlassFluteWidth)
+        .clamp(8.0, 32.0);
+    _texturedGlassRefractionStrength =
+        (prefs.getDouble(_kTexturedGlassRefractionStrength) ??
+                defaultTexturedGlassRefractionStrength)
+            .clamp(0.0, 2.0);
+    _texturedGlassLightingIntensity =
+        (prefs.getDouble(_kTexturedGlassLightingIntensity) ??
+                defaultTexturedGlassLightingIntensity)
+            .clamp(0.0, 2.0);
+    _texturedGlassGrooveDepth =
+        (prefs.getDouble(_kTexturedGlassGrooveDepth) ??
+                defaultTexturedGlassGrooveDepth)
+            .clamp(0.0, 2.0);
+    _texturedGlassDispersion =
+        (prefs.getDouble(_kTexturedGlassDispersion) ??
+                defaultTexturedGlassDispersion)
+            .clamp(0.0, 2.0);
     _wallpaperPlayerEnabled =
         prefs.getBool(_kWallpaperPlayerEnabled) ?? _wallpaperPlayerEnabled;
     _taskbarPlayerEnabled =
@@ -253,6 +320,68 @@ class FullscreenSettingsStore extends ChangeNotifier {
     if (_superCyreneLyricsTheme == normalized) return;
     _superCyreneLyricsTheme = normalized;
     _prefs?.setString(_kSuperCyreneLyricsTheme, normalized);
+    notifyListeners();
+  }
+
+  void setSuperCyreneBackgroundStyle(String value) {
+    final normalized = (value == 'textured_glass') ? value : 'default';
+    if (_superCyreneBackgroundStyle == normalized) return;
+    _superCyreneBackgroundStyle = normalized;
+    _prefs?.setString(_kSuperCyreneBackgroundStyle, normalized);
+    notifyListeners();
+  }
+
+  void setTexturedGlassFluteWidth(double value) {
+    final clamped = value.clamp(8.0, 32.0);
+    if (_texturedGlassFluteWidth == clamped) return;
+    _texturedGlassFluteWidth = clamped;
+    _prefs?.setDouble(_kTexturedGlassFluteWidth, clamped);
+    notifyListeners();
+  }
+
+  void setTexturedGlassRefractionStrength(double value) {
+    final clamped = value.clamp(0.0, 2.0);
+    if (_texturedGlassRefractionStrength == clamped) return;
+    _texturedGlassRefractionStrength = clamped;
+    _prefs?.setDouble(_kTexturedGlassRefractionStrength, clamped);
+    notifyListeners();
+  }
+
+  void setTexturedGlassLightingIntensity(double value) {
+    final clamped = value.clamp(0.0, 2.0);
+    if (_texturedGlassLightingIntensity == clamped) return;
+    _texturedGlassLightingIntensity = clamped;
+    _prefs?.setDouble(_kTexturedGlassLightingIntensity, clamped);
+    notifyListeners();
+  }
+
+  void setTexturedGlassGrooveDepth(double value) {
+    final clamped = value.clamp(0.0, 2.0);
+    if (_texturedGlassGrooveDepth == clamped) return;
+    _texturedGlassGrooveDepth = clamped;
+    _prefs?.setDouble(_kTexturedGlassGrooveDepth, clamped);
+    notifyListeners();
+  }
+
+  void setTexturedGlassDispersion(double value) {
+    final clamped = value.clamp(0.0, 2.0);
+    if (_texturedGlassDispersion == clamped) return;
+    _texturedGlassDispersion = clamped;
+    _prefs?.setDouble(_kTexturedGlassDispersion, clamped);
+    notifyListeners();
+  }
+
+  void resetTexturedGlassParams() {
+    _texturedGlassFluteWidth = defaultTexturedGlassFluteWidth;
+    _texturedGlassRefractionStrength = defaultTexturedGlassRefractionStrength;
+    _texturedGlassLightingIntensity = defaultTexturedGlassLightingIntensity;
+    _texturedGlassGrooveDepth = defaultTexturedGlassGrooveDepth;
+    _texturedGlassDispersion = defaultTexturedGlassDispersion;
+    _prefs?.remove(_kTexturedGlassFluteWidth);
+    _prefs?.remove(_kTexturedGlassRefractionStrength);
+    _prefs?.remove(_kTexturedGlassLightingIntensity);
+    _prefs?.remove(_kTexturedGlassGrooveDepth);
+    _prefs?.remove(_kTexturedGlassDispersion);
     notifyListeners();
   }
 

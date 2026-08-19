@@ -19,11 +19,13 @@ class SuperCyreneClassicLyrics extends StatefulWidget {
     required this.playback,
     required this.track,
     required this.onTranslationChanged,
+    this.onRomajiChanged,
   });
 
   final PlaybackController playback;
   final Track track;
   final ValueChanged<String?> onTranslationChanged;
+  final ValueChanged<String?>? onRomajiChanged;
 
   @override
   State<SuperCyreneClassicLyrics> createState() =>
@@ -54,7 +56,7 @@ class _SuperCyreneClassicLyricsState extends State<SuperCyreneClassicLyrics> {
   }
 
   int _lyricSignature(Track track) =>
-      Object.hash(track.key, track.lyric, track.yrc, track.tlyric, track.ytlrc);
+      Object.hash(track.key, track.lyric, track.yrc, track.tlyric, track.ytlrc, track.romaji);
 
   @override
   void dispose() {
@@ -72,16 +74,19 @@ class _SuperCyreneClassicLyricsState extends State<SuperCyreneClassicLyrics> {
               translation: widget.track.tlyric,
               qrcLyric: widget.track.yrc,
               qrcTranslation: widget.track.ytlrc,
+              romaji: widget.track.romaji,
             ),
             MusicSource.kugou => LyricParser.parseKugouLyric(
               lyric,
               translation: widget.track.tlyric,
+              romaji: widget.track.romaji,
             ),
             _ => LyricParser.parseNeteaseLyric(
               lyric,
               translation: widget.track.tlyric,
               yrcLyric: widget.track.yrc,
               yrcTranslation: widget.track.ytlrc,
+              romaji: widget.track.romaji,
             ),
           };
     _lines = parsed.indexed
@@ -105,6 +110,7 @@ class _SuperCyreneClassicLyricsState extends State<SuperCyreneClassicLyrics> {
       startTime: line.startTime.inMicroseconds / 1000000,
       endTime: lineEnd.inMicroseconds / 1000000,
       translation: line.translation,
+      romaji: line.romanization,
       words: words,
     );
   }
@@ -121,6 +127,9 @@ class _SuperCyreneClassicLyricsState extends State<SuperCyreneClassicLyrics> {
     _lastLineIndex = index;
     widget.onTranslationChanged(
       index >= 0 ? _lines[index].translation?.trim() : null,
+    );
+    widget.onRomajiChanged?.call(
+      index >= 0 ? _lines[index].romaji?.trim() : null,
     );
   }
 

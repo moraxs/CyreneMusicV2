@@ -20,6 +20,7 @@ import 'super_cyrene_classic_lyrics.dart';
 import 'super_cyrene_control_panel.dart';
 import 'super_cyrene_pixel_lyrics.dart';
 import 'super_cyrene_sonnet_lyrics.dart';
+import 'super_cyrene_textured_glass_background.dart';
 
 /// SuperCyrene lives in its own feature subtree so every lyric theme can be
 /// added without increasing the classic desktop player's file size.
@@ -49,7 +50,9 @@ class _SuperCyreneFullscreenPlayerState
   bool _titleBarVisible = false;
   bool _isMaximized = false;
   String? _translation;
+  String? _romaji;
   String _lyricsTheme = 'default';
+  String _backgroundStyle = 'default';
 
   /// 桌面端才有窗口概念（windowManager / 标题栏 / 最大化）。移动端走横屏
   /// 全屏，这些桌面专属逻辑全部跳过。
@@ -60,6 +63,8 @@ class _SuperCyreneFullscreenPlayerState
     super.initState();
     _lyricsTheme =
         FullscreenSettingsStore.instance.superCyreneLyricsTheme;
+    _backgroundStyle =
+        FullscreenSettingsStore.instance.superCyreneBackgroundStyle;
     PlayerService().bind(
       widget.playback,
       accountController: widget.account,
@@ -134,6 +139,24 @@ class _SuperCyreneFullscreenPlayerState
     });
   }
 
+  void _handleTranslationChanged(String? value) {
+    if (!mounted || value == _translation) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && value != _translation) {
+        setState(() => _translation = value);
+      }
+    });
+  }
+
+  void _handleRomajiChanged(String? value) {
+    if (!mounted || value == _romaji) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && value != _romaji) {
+        setState(() => _romaji = value);
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final isPortrait =
@@ -158,11 +181,32 @@ class _SuperCyreneFullscreenPlayerState
               return Stack(
                 fit: StackFit.expand,
                 children: [
-                  SuperCyreneAmllBackground(
-                    imageProvider: PlayerService().currentCoverImageProvider,
-                    isPlaying: widget.playback.state.isPlaying,
-                  ),
-                  const ColoredBox(color: Color(0x26000000)),
+                  if (_backgroundStyle == 'textured_glass')
+                    ListenableBuilder(
+                      listenable: FullscreenSettingsStore.instance,
+                      builder: (context, _) {
+                        final store = FullscreenSettingsStore.instance;
+                        return SuperCyreneTexturedGlassBackground(
+                          imageProvider:
+                              PlayerService().currentCoverImageProvider,
+                          isPlaying: widget.playback.state.isPlaying,
+                          fluteWidth: store.texturedGlassFluteWidth,
+                          refractionStrength:
+                              store.texturedGlassRefractionStrength,
+                          lightingIntensity:
+                              store.texturedGlassLightingIntensity,
+                          grooveDepth: store.texturedGlassGrooveDepth,
+                          dispersion: store.texturedGlassDispersion,
+                        );
+                      },
+                    )
+                  else ...[
+                    SuperCyreneAmllBackground(
+                      imageProvider: PlayerService().currentCoverImageProvider,
+                      isPlaying: widget.playback.state.isPlaying,
+                    ),
+                    const ColoredBox(color: Color(0x26000000)),
+                  ],
                   if (track != null)
                     Positioned(
                       top: 0,
@@ -180,30 +224,21 @@ class _SuperCyreneFullscreenPlayerState
                         'pixel' => SuperCyrenePixelLyrics(
                           playback: widget.playback,
                           track: track,
-                          onTranslationChanged: (value) {
-                            if (mounted && value != _translation) {
-                              setState(() => _translation = value);
-                            }
-                          },
+                          onTranslationChanged: _handleTranslationChanged,
+                          onRomajiChanged: _handleRomajiChanged,
                         ),
                         'sonnet' => SuperCyreneSonnetLyrics(
                           playback: widget.playback,
                           track: track,
                           cover: PlayerService().currentCoverImageProvider,
-                          onTranslationChanged: (value) {
-                            if (mounted && value != _translation) {
-                              setState(() => _translation = value);
-                            }
-                          },
+                          onTranslationChanged: _handleTranslationChanged,
+                          onRomajiChanged: _handleRomajiChanged,
                         ),
                         _ => SuperCyreneClassicLyrics(
                           playback: widget.playback,
                           track: track,
-                          onTranslationChanged: (value) {
-                            if (mounted && value != _translation) {
-                              setState(() => _translation = value);
-                            }
-                          },
+                          onTranslationChanged: _handleTranslationChanged,
+                          onRomajiChanged: _handleRomajiChanged,
                         ),
                       },
                     )
@@ -285,34 +320,59 @@ class _SuperCyreneFullscreenPlayerState
                     ),
                   ],
                   if (isPortrait) ...[
-                    // 移动端竖屏：歌词翻译浮层
-                    if (_translation?.isNotEmpty == true)
+                    // 移动端竖屏：歌词翻译 + 罗马音浮层
+                    if (_translation?.isNotEmpty == true ||
+                        _romaji?.isNotEmpty == true)
                       Positioned(
                         left: 24,
                         right: 24,
                         bottom: padding.bottom + 88,
                         child: AnimatedSwitcher(
                           duration: const Duration(milliseconds: 180),
-                          child: Padding(
+                          child: Column(
                             key: ValueKey(_translation),
-                            padding: const EdgeInsets.only(bottom: 4),
-                            child: Text(
-                              _translation!,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: Colors.white.withValues(alpha: .75),
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                                letterSpacing: .5,
-                                shadows: const [
-                                  Shadow(
-                                    color: Colors.black87,
-                                    blurRadius: 16,
-                                    offset: Offset(0, 2),
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (_translation?.isNotEmpty == true)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 4),
+                                  child: Text(
+                                    _translation!,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      color: Colors.white.withValues(alpha: .75),
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500,
+                                      letterSpacing: .5,
+                                      shadows: const [
+                                        Shadow(
+                                          color: Colors.black87,
+                                          blurRadius: 16,
+                                          offset: Offset(0, 2),
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                ],
-                              ),
-                            ),
+                                ),
+                              if (_romaji?.isNotEmpty == true)
+                                Text(
+                                  _romaji!,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: Colors.white.withValues(alpha: .5),
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                    letterSpacing: .5,
+                                    shadows: const [
+                                      Shadow(
+                                        color: Colors.black87,
+                                        blurRadius: 16,
+                                        offset: Offset(0, 2),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
                       ),
@@ -334,6 +394,13 @@ class _SuperCyreneFullscreenPlayerState
                           });
                           FullscreenSettingsStore.instance
                               .setSuperCyreneLyricsTheme(value);
+                        },
+                        backgroundStyle: _backgroundStyle,
+                        onBackgroundStyleChanged: (value) {
+                          if (_backgroundStyle == value) return;
+                          setState(() => _backgroundStyle = value);
+                          FullscreenSettingsStore.instance
+                              .setSuperCyreneBackgroundStyle(value);
                         },
                       ),
                     ),
@@ -357,27 +424,56 @@ class _SuperCyreneFullscreenPlayerState
                         children: [
                           AnimatedSwitcher(
                             duration: const Duration(milliseconds: 180),
-                            child: _translation?.isNotEmpty == true
+                            child: (_translation?.isNotEmpty == true ||
+                                    _romaji?.isNotEmpty == true)
                                 ? Padding(
                                     key: ValueKey(_translation),
                                     padding: const EdgeInsets.only(bottom: 12),
-                                    child: Text(
-                                      _translation!,
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(
-                                        color:
-                                            Colors.white.withValues(alpha: .75),
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w500,
-                                        letterSpacing: .5,
-                                        shadows: const [
-                                          Shadow(
-                                            color: Colors.black87,
-                                            blurRadius: 16,
-                                            offset: Offset(0, 2),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        if (_translation?.isNotEmpty == true)
+                                          Text(
+                                            _translation!,
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                              color:
+                                                  Colors.white.withValues(alpha: .75),
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w500,
+                                              letterSpacing: .5,
+                                              shadows: const [
+                                                Shadow(
+                                                  color: Colors.black87,
+                                                  blurRadius: 16,
+                                                  offset: Offset(0, 2),
+                                                ),
+                                              ],
+                                            ),
                                           ),
-                                        ],
-                                      ),
+                                        if (_translation?.isNotEmpty == true &&
+                                            _romaji?.isNotEmpty == true)
+                                          const SizedBox(height: 4),
+                                        if (_romaji?.isNotEmpty == true)
+                                          Text(
+                                            _romaji!,
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                              color:
+                                                  Colors.white.withValues(alpha: .5),
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w500,
+                                              letterSpacing: .5,
+                                              shadows: const [
+                                                Shadow(
+                                                  color: Colors.black87,
+                                                  blurRadius: 16,
+                                                  offset: Offset(0, 2),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                      ],
                                     ),
                                   )
                                 : const SizedBox.shrink(),
@@ -411,6 +507,13 @@ class _SuperCyreneFullscreenPlayerState
                           });
                           FullscreenSettingsStore.instance
                               .setSuperCyreneLyricsTheme(value);
+                        },
+                        backgroundStyle: _backgroundStyle,
+                        onBackgroundStyleChanged: (value) {
+                          if (_backgroundStyle == value) return;
+                          setState(() => _backgroundStyle = value);
+                          FullscreenSettingsStore.instance
+                              .setSuperCyreneBackgroundStyle(value);
                         },
                       ),
                     ),

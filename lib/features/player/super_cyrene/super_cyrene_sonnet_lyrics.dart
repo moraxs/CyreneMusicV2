@@ -20,6 +20,7 @@ class SuperCyreneSonnetLyrics extends StatefulWidget {
     required this.playback,
     required this.track,
     required this.onTranslationChanged,
+    this.onRomajiChanged,
     this.cover,
     this.tuning,
     this.lyricsFontScale = 1.0,
@@ -28,6 +29,7 @@ class SuperCyreneSonnetLyrics extends StatefulWidget {
   final PlaybackController playback;
   final Track track;
   final ValueChanged<String?> onTranslationChanged;
+  final ValueChanged<String?>? onRomajiChanged;
   final ImageProvider? cover;
   final SonnetTuning? tuning;
   final double lyricsFontScale;
@@ -117,11 +119,9 @@ class _SuperCyreneSonnetLyricsState extends State<SuperCyreneSonnetLyrics>
   void _extractThemeColors() async {
     final picUrl = widget.track.picUrl;
     if (picUrl.isEmpty) {
-      setState(() {
-        _primaryColor = const Color(0xFFFFFFFF);
-        _secondaryColor = const Color(0xFFC4B5FD);
-        _accentColor = const Color(0xFFDDD6FE);
-      });
+      _primaryColor = const Color(0xFFFFFFFF);
+      _secondaryColor = const Color(0xFFC4B5FD);
+      _accentColor = const Color(0xFFDDD6FE);
       return;
     }
 
@@ -155,16 +155,19 @@ class _SuperCyreneSonnetLyricsState extends State<SuperCyreneSonnetLyrics>
                 translation: widget.track.tlyric,
                 qrcLyric: widget.track.yrc,
                 qrcTranslation: widget.track.ytlrc,
+                romaji: widget.track.romaji,
               ),
             MusicSource.kugou => LyricParser.parseKugouLyric(
                 lyric,
                 translation: widget.track.tlyric,
+                romaji: widget.track.romaji,
               ),
             _ => LyricParser.parseNeteaseLyric(
                 lyric,
                 translation: widget.track.tlyric,
                 yrcLyric: widget.track.yrc,
                 yrcTranslation: widget.track.ytlrc,
+                romaji: widget.track.romaji,
               ),
           };
 
@@ -178,10 +181,12 @@ class _SuperCyreneSonnetLyricsState extends State<SuperCyreneSonnetLyrics>
   }
 
   void _updateTranslation() {
+    if (!mounted) return;
     if (_rawLines.isEmpty) {
       if (_lastTranslationIdx != -1) {
         _lastTranslationIdx = -1;
-        widget.onTranslationChanged(null);
+        _notifyTranslation(null);
+        _notifyRomaji(null);
       }
       return;
     }
@@ -203,12 +208,32 @@ class _SuperCyreneSonnetLyricsState extends State<SuperCyreneSonnetLyrics>
 
     if (activeIdx != _lastTranslationIdx) {
       _lastTranslationIdx = activeIdx;
-      final trans = activeIdx >= 0 && activeIdx < _rawLines.length
-          ? _rawLines[activeIdx].translation
+      final active = activeIdx >= 0 && activeIdx < _rawLines.length
+          ? _rawLines[activeIdx]
           : null;
-      widget.onTranslationChanged(
-          trans?.trim().isNotEmpty == true ? trans : null);
+      final trans = active?.translation;
+      _notifyTranslation(trans?.trim().isNotEmpty == true ? trans : null);
+      final roma = active?.romanization;
+      _notifyRomaji(roma?.trim().isNotEmpty == true ? roma : null);
     }
+  }
+
+  void _notifyTranslation(String? translation) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        widget.onTranslationChanged(translation);
+      }
+    });
+  }
+
+  void _notifyRomaji(String? romaji) {
+    final cb = widget.onRomajiChanged;
+    if (cb == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        cb(romaji);
+      }
+    });
   }
 
   @override

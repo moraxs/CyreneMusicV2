@@ -22,6 +22,7 @@ class DefaultLine {
     required this.endTime,
     required this.words,
     this.translation,
+    this.romaji,
     this.isChorus = false,
   });
 
@@ -31,6 +32,7 @@ class DefaultLine {
   final double endTime;
   final List<DefaultWord> words;
   final String? translation;
+  final String? romaji;
   final bool isChorus;
 }
 

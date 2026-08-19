@@ -7,6 +7,7 @@ import 'package:cyrene_music_reborn/domain/playback/audio_cache.dart';
 import 'package:cyrene_music_reborn/domain/playback/audio_source_preferences_store.dart';
 import 'package:cyrene_music_reborn/domain/playback/audio_source_resolver.dart';
 import 'package:cyrene_music_reborn/infrastructure/services/configured_audio_source_resolver.dart';
+import 'package:cyrene_music_reborn/infrastructure/services/cross_platform_fallback_service.dart';
 import 'package:cyrene_music_reborn/infrastructure/services/playback_url_resolver_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -149,6 +150,68 @@ void main() {
       ),
     );
   });
+
+  test('原平台无法取流时触发跨平台兜底并命中网易云候选', () async {
+    final sourceClient = _FakePlaybackSourceClient()
+      // 原曲目（QQ 平台）取流失败 → 触发兜底；兜底候选为网易云新 id，
+      // 取流成功。Fake 对 netease 来源一律成功。
+      ..failures.add('omni:qq');
+    final resolver = ConfiguredAudioSourceResolver(
+      preferences: _FakePreferencesStore([_config('omni', [])]),
+      sourceClient: sourceClient,
+      cache: const _EmptyAudioCache(),
+      crossPlatformFallback: _FakeFallbackFinder(),
+    );
+    // 模拟导入的 QQ 歌单曲目：无 alternatives（非聚合），QQ 普通账号无法取直链。
+    final track = Track(
+      id: 'qq-original-id',
+      name: _track().name,
+      artists: _track().artists,
+      album: _track().album,
+      picUrl: _track().picUrl,
+      source: MusicSource.qq,
+    );
+
+    final resolved = await resolver.resolve(track);
+    final candidate = resolved.candidates.single;
+
+    expect(candidate.sourceId, 'omni:cross-fallback');
+    expect(candidate.fallbackFrom, isNotNull);
+    expect(candidate.fallbackFrom!.id, 'qq-original-id');
+    expect(candidate.fallbackFrom!.source, MusicSource.qq);
+    // 兜底后换到网易云新 id 继续取流成功。
+    expect(candidate.track.source, MusicSource.netease);
+    expect(candidate.track.id, 'net-fallback-id');
+    expect(
+      candidate.track.playbackUrl,
+      Uri.parse('https://cdn.test/net-fallback-id.mp3'),
+    );
+  });
+
+  test('已有 alternatives 的聚合曲目不触发跨平台兜底', () async {
+    final sourceClient = _FakePlaybackSourceClient()
+      ..failures.add('omni:netease');
+    final resolver = ConfiguredAudioSourceResolver(
+      preferences: _FakePreferencesStore([_config('omni', [])]),
+      sourceClient: sourceClient,
+      cache: const _EmptyAudioCache(),
+      crossPlatformFallback: _FakeFallbackFinder(),
+    );
+    // 聚合曲目（搜索结果）：带 alternatives，应走原有 alternatives 回退而非搜索。
+    final track = _track().copyWith(
+      alternatives: const [TrackSourceRef(id: 'qq-id', source: MusicSource.qq)],
+    );
+
+    final resolved = await resolver.resolve(track);
+
+    // 网易云失败 → 命中 QQ alternatives，不经过 fallback 搜索。
+    expect(sourceClient.calls, ['omni:netease', 'omni:qq']);
+    expect(resolved.candidates.single.track.source, MusicSource.qq);
+    expect(
+      (resolved.candidates.single as dynamic).fallbackFrom,
+      isNull,
+    );
+  });
 }
 
 Track _track() => const Track(
@@ -232,4 +295,28 @@ class _FakePlaybackSourceClient implements PlaybackSourceClient {
 
   @override
   Future<LyricData?> fetchLyrics(Track track) async => fetchedLyrics;
+}
+
+/// 假跨平台兜底查找：固定返回网易云新 id 的命中。
+class _FakeFallbackFinder implements CrossPlatformFallbackFinder {
+  @override
+  Future<List<CrossPlatformFallbackMatch>> findFallbackFor(
+    Track track, {
+    int limit = 12,
+  }) async => [
+    CrossPlatformFallbackMatch(
+      source: MusicSource.netease,
+      id: 'net-fallback-id',
+      score: 0.9,
+      track: Track(
+        id: 'net-fallback-id',
+        name: track.name,
+        artists: track.artists,
+        album: track.album,
+        picUrl: track.picUrl,
+        source: MusicSource.netease,
+        duration: track.duration,
+      ),
+    ),
+  ];
 }

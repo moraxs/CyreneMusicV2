@@ -23,11 +23,13 @@ class SuperCyrenePixelLyrics extends StatefulWidget {
     required this.playback,
     required this.track,
     required this.onTranslationChanged,
+    this.onRomajiChanged,
   });
 
   final PlaybackController playback;
   final Track track;
   final ValueChanged<String?> onTranslationChanged;
+  final ValueChanged<String?>? onRomajiChanged;
 
   @override
   State<SuperCyrenePixelLyrics> createState() => _SuperCyrenePixelLyricsState();
@@ -112,7 +114,7 @@ class _SuperCyrenePixelLyricsState extends State<SuperCyrenePixelLyrics>
   }
 
   int _lyricSignature(Track track) =>
-      Object.hash(track.key, track.lyric, track.yrc, track.tlyric, track.ytlrc);
+      Object.hash(track.key, track.lyric, track.yrc, track.tlyric, track.ytlrc, track.romaji);
 
   Duration get _now => widget.playback.positionListenable.value;
 
@@ -128,16 +130,19 @@ class _SuperCyrenePixelLyricsState extends State<SuperCyrenePixelLyrics>
               translation: widget.track.tlyric,
               qrcLyric: widget.track.yrc,
               qrcTranslation: widget.track.ytlrc,
+              romaji: widget.track.romaji,
             ),
             MusicSource.kugou => LyricParser.parseKugouLyric(
               lyric,
               translation: widget.track.tlyric,
+              romaji: widget.track.romaji,
             ),
             _ => LyricParser.parseNeteaseLyric(
               lyric,
               translation: widget.track.tlyric,
               yrcLyric: widget.track.yrc,
               yrcTranslation: widget.track.ytlrc,
+              romaji: widget.track.romaji,
             ),
           };
     _lines = parsed.indexed
@@ -162,6 +167,7 @@ class _SuperCyrenePixelLyricsState extends State<SuperCyrenePixelLyrics>
       startTime: line.startTime.inMicroseconds / 1000000,
       endTime: lineEnd.inMicroseconds / 1000000,
       translation: line.translation,
+      romaji: line.romanization,
       words: words,
     );
   }
@@ -173,6 +179,9 @@ class _SuperCyrenePixelLyricsState extends State<SuperCyrenePixelLyrics>
     _lastTranslationIdx = idx;
     widget.onTranslationChanged(
       idx >= 0 ? _lines[idx].translation?.trim() : null,
+    );
+    widget.onRomajiChanged?.call(
+      idx >= 0 ? _lines[idx].romaji?.trim() : null,
     );
   }
 

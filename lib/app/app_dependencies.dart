@@ -17,6 +17,7 @@ import '../infrastructure/core/url_service.dart';
 import '../infrastructure/services/auth_service.dart';
 import '../infrastructure/services/configured_audio_source_importer.dart';
 import '../infrastructure/services/configured_audio_source_resolver.dart';
+import '../infrastructure/services/cross_platform_fallback_service.dart';
 import '../infrastructure/services/discovery_service.dart';
 import '../infrastructure/services/home_service.dart';
 import '../infrastructure/services/playback_url_resolver_service.dart';
@@ -76,6 +77,10 @@ class AppDependencies {
       preferences: preferences,
       sourceClient: sourceClient,
       cache: const NoOpAudioCache(),
+      crossPlatformFallback: CrossPlatformFallbackService(
+        apiClient: apiClient,
+        urls: urls,
+      ),
     );
 
     final account = AccountSessionController(

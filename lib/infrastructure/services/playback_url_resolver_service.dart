@@ -165,6 +165,7 @@ class PlaybackUrlResolverService implements PlaybackSourceClient {
             tlyric: result['tlyric']?.toString() ?? '',
             yrc: result['yrc']?.toString() ?? '',
             ytlrc: result['ytlrc']?.toString() ?? '',
+            romaji: result['romalrc']?.toString() ?? '',
           );
         }
         return ResolvedPlayback(
@@ -461,6 +462,7 @@ class PlaybackUrlResolverService implements PlaybackSourceClient {
             tlyric: data['tlyric']?.toString() ?? '',
             yrc: data['qrc']?.toString() ?? '',
             ytlrc: data['qrcTrans']?.toString() ?? '',
+            romaji: data['romalrc']?.toString() ?? '',
           );
         case MusicSource.kugou:
           final hash = track.id.split(':').first;
@@ -524,6 +526,7 @@ class PlaybackUrlResolverService implements PlaybackSourceClient {
       tlyric: data['tlyric']?.toString() ?? '',
       yrc: data['yrc']?.toString() ?? '',
       ytlrc: data['ytlrc']?.toString() ?? '',
+      romaji: data['romalrc']?.toString() ?? '',
     );
   }
 }

@@ -13,6 +13,7 @@ import '../../../presentation/cyrene/cyrene_toast.dart';
 import '../desktop_fullscreen_player_route.dart';
 import '../fullscreen/add_to_playlist_sheet.dart';
 import 'super_cyrene_song_gallery.dart';
+import 'super_cyrene_textured_glass_params_sheet.dart';
 
 class SuperCyreneControlPanel extends StatefulWidget {
   const SuperCyreneControlPanel({
@@ -23,6 +24,8 @@ class SuperCyreneControlPanel extends StatefulWidget {
     required this.cover,
     required this.lyricsTheme,
     required this.onLyricsThemeChanged,
+    required this.backgroundStyle,
+    required this.onBackgroundStyleChanged,
   });
 
   final PlaybackController playback;
@@ -31,6 +34,8 @@ class SuperCyreneControlPanel extends StatefulWidget {
   final ImageProvider? cover;
   final String lyricsTheme;
   final ValueChanged<String> onLyricsThemeChanged;
+  final String backgroundStyle;
+  final ValueChanged<String> onBackgroundStyleChanged;
 
   @override
   State<SuperCyreneControlPanel> createState() =>
@@ -117,7 +122,7 @@ class _SuperCyreneControlPanelState extends State<SuperCyreneControlPanel> {
     final scale = _panelScale(context);
     return SizedBox(
       width: 256,
-      height: 560 * scale,
+      height: 604 * scale,
       child: Transform.scale(
         scale: scale,
         alignment: Alignment.bottomLeft,
@@ -149,6 +154,9 @@ class _SuperCyreneControlPanelState extends State<SuperCyreneControlPanel> {
                         favorite: _playlistIds.isNotEmpty,
                         lyricsTheme: widget.lyricsTheme,
                         onLyricsThemeChanged: widget.onLyricsThemeChanged,
+                        backgroundStyle: widget.backgroundStyle,
+                        onBackgroundStyleChanged:
+                            widget.onBackgroundStyleChanged,
                         onClose: () => setState(() => _open = false),
                         onFavorite: _toggleFavorite,
                         onQueue: () =>
@@ -229,7 +237,7 @@ class _SuperCyreneControlPanelState extends State<SuperCyreneControlPanel> {
   double _panelScale(BuildContext context) {
     if (defaultTargetPlatform == TargetPlatform.windows) return 1;
     final screenH = MediaQuery.sizeOf(context).height;
-    const fullHeight = 560.0;
+    const fullHeight = 604.0;
     const launcherSpace = 64.0;
     const safetyMargin = 16.0;
     final available = screenH - launcherSpace - safetyMargin;
@@ -246,6 +254,8 @@ class _Panel extends StatelessWidget {
     required this.favorite,
     required this.lyricsTheme,
     required this.onLyricsThemeChanged,
+    required this.backgroundStyle,
+    required this.onBackgroundStyleChanged,
     required this.onClose,
     required this.onFavorite,
     required this.onQueue,
@@ -258,6 +268,8 @@ class _Panel extends StatelessWidget {
   final bool favorite;
   final String lyricsTheme;
   final ValueChanged<String> onLyricsThemeChanged;
+  final String backgroundStyle;
+  final ValueChanged<String> onBackgroundStyleChanged;
   final VoidCallback onClose;
   final VoidCallback onFavorite;
   final VoidCallback onQueue;
@@ -292,6 +304,10 @@ class _Panel extends StatelessWidget {
             _LyricsThemeRow(
               lyricsTheme: lyricsTheme,
               onChanged: onLyricsThemeChanged,
+            ),
+            _BackgroundStyleRow(
+              backgroundStyle: backgroundStyle,
+              onChanged: onBackgroundStyleChanged,
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
@@ -540,6 +556,124 @@ class _LyricsThemeRow extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _BackgroundStyleRow extends StatelessWidget {
+  const _BackgroundStyleRow({
+    required this.backgroundStyle,
+    required this.onChanged,
+  });
+
+  final String backgroundStyle;
+  final ValueChanged<String> onChanged;
+
+  String get _label => switch (backgroundStyle) {
+    'textured_glass' => '纹理玻璃',
+    _ => '默认',
+  };
+
+  @override
+  Widget build(BuildContext context) => Container(
+    height: 36,
+    margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+    padding: const EdgeInsets.only(left: 8, right: 4),
+    decoration: BoxDecoration(
+      color: Colors.white.withValues(alpha: .035),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: Colors.white.withValues(alpha: .08)),
+    ),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          '背景',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: .35),
+            fontSize: 10,
+            fontWeight: FontWeight.w500,
+            letterSpacing: 1.4,
+          ),
+        ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (backgroundStyle == 'textured_glass') ...[
+              IconButton(
+                icon: Icon(
+                  Icons.tune_rounded,
+                  size: 16,
+                  color: Colors.white.withValues(alpha: .75),
+                ),
+                tooltip: '纹理玻璃参数',
+                splashRadius: 16,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                onPressed: () =>
+                    showSuperCyreneTexturedGlassParamsSheet(context),
+              ),
+              const SizedBox(width: 4),
+            ],
+            PopupMenuButton<String>(
+              initialValue: backgroundStyle,
+              onSelected: onChanged,
+              color: const Color(0xE6141418),
+              elevation: 16,
+              position: PopupMenuPosition.under,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(9),
+                side: BorderSide(color: Colors.white.withValues(alpha: .10)),
+              ),
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: 'default',
+                  height: 34,
+                  child: Text(
+                    '默认',
+                    style: TextStyle(color: Colors.white, fontSize: 13),
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'textured_glass',
+                  height: 34,
+                  child: Text(
+                    '纹理玻璃',
+                    style: TextStyle(color: Colors.white, fontSize: 13),
+                  ),
+                ),
+              ],
+              child: Container(
+                width: 100,
+                height: 28,
+                padding: const EdgeInsets.symmetric(horizontal: 9),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: .20),
+                  borderRadius: BorderRadius.circular(7),
+                  border: Border.all(color: Colors.white.withValues(alpha: .10)),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      _label,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: .80),
+                        fontSize: 11,
+                      ),
+                    ),
+                    Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      size: 14,
+                      color: Colors.white.withValues(alpha: .45),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
       ],
     ),

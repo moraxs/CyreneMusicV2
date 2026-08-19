@@ -444,10 +444,12 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
         CyreneToast.show('同步失败，请稍后重试');
         return;
       }
+      final added = result.insertedCount;
+      final removed = result.removedCount;
       CyreneToast.show(
-        result.insertedCount > 0
-            ? '已同步到「${target.name}」，新增 ${result.insertedCount} 首'
-            : '已同步到「${target.name}」，暂无新增歌曲',
+        (added > 0 || removed > 0)
+            ? '已同步到「${target.name}」，新增 $added 首${removed > 0 ? '、移除 $removed 首' : ''}'
+            : '已同步到「${target.name}」，暂无变化',
       );
     } finally {
       if (mounted) setState(() => _isSyncing = false);
@@ -801,7 +803,47 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   }
 
   void _play(Track track, List<Track> queue) {
-    widget.playback.playTrack(track, queue: queue);
+    // 个人歌单：跨平台兜底命中后把新平台/id 写回歌单，下次播放直接请求新平台。
+    // 非个人歌单（在线浏览）无本地歌单可写，跳过。
+    final token = widget.token;
+    final isPersonal = widget.isPersonal;
+    widget.playback.playTrack(
+      track,
+      queue: queue,
+      onFallbackRemap: isPersonal && token != null && token.isNotEmpty
+          ? (original, remapped) => _persistFallbackRemap(
+              token,
+              original,
+              remapped,
+            )
+          : null,
+    );
+  }
+
+  /// 把跨平台兜底命中的新平台/id 写回歌单。
+  Future<void> _persistFallbackRemap(
+    String token,
+    Track original,
+    Track remapped,
+  ) async {
+    final ok = await PlaylistService.instance.remapTrackSource(
+      token,
+      widget.playlistId,
+      original.id,
+      original.source.wireName,
+      remapped.id,
+      remapped.source.wireName,
+    );
+    // 写回成功后刷新本地曲目，让列表与后续播放直接使用新平台。
+    if (ok && mounted) {
+      await _reloadIfPersonal();
+    }
+  }
+
+  /// 个人歌单重载：重新拉取曲目（用于兜底写回后刷新）。
+  Future<void> _reloadIfPersonal() async {
+    if (!widget.isPersonal || widget.token == null) return;
+    await _load();
   }
 }
 

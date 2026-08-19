@@ -7,12 +7,16 @@ class LyricData {
     this.tlyric = '',
     this.yrc = '',
     this.ytlrc = '',
+    this.romaji = '',
   });
 
   final String lyric;
   final String tlyric;
   final String yrc;
   final String ytlrc;
+
+  /// 行级罗马音歌词（网易云 `romalrc`；QQ 由 `qrcRoma` 经 `qrcToLrc` 降级）。
+  final String romaji;
 
   bool get isEmpty => lyric.isEmpty && yrc.isEmpty;
   bool get isNotEmpty => !isEmpty;

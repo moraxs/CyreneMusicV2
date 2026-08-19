@@ -57,6 +57,7 @@ class MobilePlayerFluidCloudLyricsPanel extends StatefulWidget {
   final List<LyricLine> lyrics;
   final int currentLyricIndex;
   final bool showTranslation;
+  final bool showRomaji;
   final int visibleLineCount;
 
   const MobilePlayerFluidCloudLyricsPanel({
@@ -64,6 +65,7 @@ class MobilePlayerFluidCloudLyricsPanel extends StatefulWidget {
     required this.lyrics,
     required this.currentLyricIndex,
     required this.showTranslation,
+    this.showRomaji = true,
     this.visibleLineCount = 7,
   });
 
@@ -85,6 +87,7 @@ class _MobilePlayerFluidCloudLyricsPanelState extends State<MobilePlayerFluidClo
   double? _lastViewportWidth;
   String? _lastFontFamily;
   bool? _lastShowTranslation;
+  bool? _lastShowRomaji;
 
   // Ticker Removed
 
@@ -428,9 +431,10 @@ class _MobilePlayerFluidCloudLyricsPanelState extends State<MobilePlayerFluidClo
       key: ValueKey(item.key),
       text: widget.lyrics[item.lyricIndex!].text,
       translation: widget.lyrics[item.lyricIndex!].translation,
+      romaji: widget.lyrics[item.lyricIndex!].romanization,
       lyric: widget.lyrics[item.lyricIndex!],
-      lyrics: widget.lyrics,     
-      index: index,             
+      lyrics: widget.lyrics,
+      index: index,
       lineHeight: baseHeight,
       targetY: targetY,
       targetScale: targetScale,
@@ -440,6 +444,7 @@ class _MobilePlayerFluidCloudLyricsPanelState extends State<MobilePlayerFluidClo
       delay: Duration(milliseconds: delayMs),
       isDragging: _isDragging,
       showTranslation: widget.showTranslation,
+      showRomaji: widget.showRomaji,
       layoutWidth: layoutWidth,
     );
   }
@@ -456,6 +461,7 @@ class _MobilePlayerFluidCloudLyricsPanelState extends State<MobilePlayerFluidClo
         (_lastViewportWidth! - maxWidth).abs() < 0.1 &&
         _lastFontFamily == fontFamily &&
         _lastShowTranslation == widget.showTranslation &&
+        _lastShowRomaji == widget.showRomaji &&
         _heightCache.containsKey(cacheKey)) {
       return _heightCache[cacheKey]!;
     }
@@ -489,15 +495,35 @@ class _MobilePlayerFluidCloudLyricsPanelState extends State<MobilePlayerFluidClo
       h += 8.0 * (fontSize / 32.0); // 比例间距
       h += transPainter.height * 1.4;
     }
-    
+
+    // 测量罗马音高度（与翻译同构，只是更暗；字号/行高与翻译一致保证视觉对齐）
+    if (widget.showRomaji && lyric.romanization != null && lyric.romanization!.isNotEmpty) {
+      final romaPainter = TextPainter(
+        text: TextSpan(
+          text: lyric.romanization,
+          style: TextStyle(
+            fontFamily: fontFamily,
+            fontSize: fontSize * 0.56,
+            fontWeight: FontWeight.w600,
+            height: 1.0,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      );
+      romaPainter.layout(maxWidth: maxWidth);
+      h += 6.0 * (fontSize / 32.0); // 比例间距（比翻译略小）
+      h += romaPainter.height * 1.4;
+    }
+
     h += 24.0 * (fontSize / 32.0); // 比例底部间距
     final result = max(h, baseHeight);
-    
+
     _lastViewportWidth = maxWidth;
     _lastFontFamily = fontFamily;
     _lastShowTranslation = widget.showTranslation;
+    _lastShowRomaji = widget.showRomaji;
     _heightCache[cacheKey] = result;
-    
+
     return result;
   }
 
@@ -514,11 +540,12 @@ class _MobilePlayerFluidCloudLyricsPanelState extends State<MobilePlayerFluidClo
 class _ElasticLyricLine extends StatefulWidget {
   final String text;
   final String? translation;
+  final String? romaji;
   final LyricLine lyric;
   final List<LyricLine> lyrics;
   final int index;
   final double lineHeight;
-  
+
   final double targetY;
   final double targetScale;
   final double targetOpacity;
@@ -527,12 +554,14 @@ class _ElasticLyricLine extends StatefulWidget {
   final Duration delay;
   final bool isDragging;
   final bool showTranslation;
+  final bool showRomaji;
   final double layoutWidth;
 
   const _ElasticLyricLine({
     super.key,
     required this.text,
     this.translation,
+    this.romaji,
     required this.lyric,
     required this.lyrics,
     required this.index,
@@ -545,6 +574,7 @@ class _ElasticLyricLine extends StatefulWidget {
     required this.delay,
     required this.isDragging,
     required this.showTranslation,
+    required this.showRomaji,
     required this.layoutWidth,
   });
 
@@ -799,13 +829,26 @@ class _ElasticLyricLineState extends State<_ElasticLyricLine> with TickerProvide
       fallbackMaxWidth: widget.layoutWidth,
     );
 
-    if (widget.showTranslation && widget.translation != null && widget.translation!.isNotEmpty) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          textWidget,
+    // 翻译 / 罗马音：均为「主歌词下方一行」，罗马音再压在翻译下方一行。
+    // 三者各自独立判空，缺哪条都不留空行。
+    final bool hasTranslation = widget.showTranslation &&
+        widget.translation != null &&
+        widget.translation!.isNotEmpty;
+    final bool hasRomaji = widget.showRomaji &&
+        widget.romaji != null &&
+        widget.romaji!.isNotEmpty;
+
+    if (!hasTranslation && !hasRomaji) {
+      return textWidget;
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        textWidget,
+        if (hasTranslation)
           Padding(
             padding: const EdgeInsets.only(top: 8.0),
             child: Text(
@@ -818,12 +861,23 @@ class _ElasticLyricLineState extends State<_ElasticLyricLine> with TickerProvide
                 height: 1.4,
               ),
             ),
-          )
-        ],
-      );
-    }
-    
-    return textWidget;
+          ),
+        if (hasRomaji)
+          Padding(
+            padding: const EdgeInsets.only(top: 6.0),
+            child: Text(
+              widget.romaji!,
+              style: TextStyle(
+                fontFamily: fontFamily,
+                fontSize: textFontSize * 0.56,
+                fontWeight: FontWeight.w600,
+                color: Colors.white.withValues(alpha: 0.22),
+                height: 1.4,
+              ),
+            ),
+          ),
+      ],
+    );
   }
 }
 

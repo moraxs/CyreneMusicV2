@@ -39,6 +39,7 @@ class MobilePlayerFluidCloudLyric extends StatefulWidget {
   final List<LyricLine> lyrics;
   final int currentLyricIndex;
   final bool showTranslation;
+  final bool showRomaji;
   final VoidCallback? onTap;
 
   /// 播放进度时钟。非空时，行内渐变进度的位置读取改用它而非 PlayerService。
@@ -55,6 +56,7 @@ class MobilePlayerFluidCloudLyric extends StatefulWidget {
     required this.lyrics,
     required this.currentLyricIndex,
     this.showTranslation = true,
+    this.showRomaji = true,
     this.onTap,
     this.positionListenable,
     this.onSeek,
@@ -84,6 +86,7 @@ class _MobilePlayerFluidCloudLyricState extends State<MobilePlayerFluidCloudLyri
   double? _lastViewportWidth;
   String? _lastFontFamily;
   bool? _lastShowTranslation;
+  bool? _lastShowRomaji;
 
   @override
   void initState() {
@@ -272,6 +275,7 @@ class _MobilePlayerFluidCloudLyricState extends State<MobilePlayerFluidCloudLyri
     if (_lastViewportWidth == maxWidth &&
         _lastFontFamily == fontFamily &&
         _lastShowTranslation == widget.showTranslation &&
+        _lastShowRomaji == widget.showRomaji &&
         _heightCache.containsKey(cacheKey)) {
       return _heightCache[cacheKey]!;
     }
@@ -304,6 +308,25 @@ class _MobilePlayerFluidCloudLyricState extends State<MobilePlayerFluidCloudLyri
       h += transPainter.height * 1.1;
     }
 
+    // 测量罗马音高度（与翻译同构，只是更暗；行高参数与渲染端一致）
+    if (widget.showRomaji && lyric.romanization != null && lyric.romanization!.isNotEmpty) {
+      final romaPainter = TextPainter(
+        text: TextSpan(
+          text: lyric.romanization,
+          style: TextStyle(
+            fontFamily: fontFamily,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            height: 1.1,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      );
+      romaPainter.layout(maxWidth: maxWidth);
+      h += 3.0;
+      h += romaPainter.height * 1.1;
+    }
+
     h += 8.0; // 基础 Padding
 
     final result = math.max(h, _lineHeight);
@@ -312,6 +335,7 @@ class _MobilePlayerFluidCloudLyricState extends State<MobilePlayerFluidCloudLyri
     _lastViewportWidth = maxWidth;
     _lastFontFamily = fontFamily;
     _lastShowTranslation = widget.showTranslation;
+    _lastShowRomaji = widget.showRomaji;
     _heightCache[cacheKey] = result;
 
     return result;
@@ -371,6 +395,7 @@ class _MobilePlayerFluidCloudLyricState extends State<MobilePlayerFluidCloudLyri
       key: ValueKey(index),
       text: widget.lyrics[index].text,
       translation: widget.lyrics[index].translation,
+      romaji: widget.lyrics[index].romanization,
       lyric: widget.lyrics[index],
       lyrics: widget.lyrics,
       index: index,
@@ -383,6 +408,7 @@ class _MobilePlayerFluidCloudLyricState extends State<MobilePlayerFluidCloudLyri
       delay: Duration(milliseconds: delayMs),
       isDragging: _isDragging,
       showTranslation: widget.showTranslation,
+      showRomaji: widget.showRomaji,
       positionListenable: widget.positionListenable,
     );
   }
@@ -456,6 +482,7 @@ class _MobilePlayerFluidCloudLyricState extends State<MobilePlayerFluidCloudLyri
 class _MobileElasticLyricLine extends StatefulWidget {
   final String text;
   final String? translation;
+  final String? romaji;
   final LyricLine lyric;
   final List<LyricLine> lyrics;
   final int index;
@@ -469,12 +496,14 @@ class _MobileElasticLyricLine extends StatefulWidget {
   final Duration delay;
   final bool isDragging;
   final bool showTranslation;
+  final bool showRomaji;
   final ValueListenable<Duration>? positionListenable;
 
   const _MobileElasticLyricLine({
     super.key,
     required this.text,
     this.translation,
+    this.romaji,
     required this.lyric,
     required this.lyrics,
     required this.index,
@@ -487,6 +516,7 @@ class _MobileElasticLyricLine extends StatefulWidget {
     required this.delay,
     required this.isDragging,
     required this.showTranslation,
+    required this.showRomaji,
     this.positionListenable,
   });
 
@@ -652,14 +682,26 @@ class _MobileElasticLyricLineState extends State<_MobileElasticLyricLine> with T
       );
     }
 
-    // 翻译
-    if (widget.showTranslation && widget.translation != null && widget.translation!.isNotEmpty) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          textWidget,
+    // 翻译 / 罗马音：均为「主歌词下方一行」，罗马音再压在翻译下方一行。
+    // 三者各自独立判空，缺哪条都不留空行。
+    final bool hasTranslation = widget.showTranslation &&
+        widget.translation != null &&
+        widget.translation!.isNotEmpty;
+    final bool hasRomaji = widget.showRomaji &&
+        widget.romaji != null &&
+        widget.romaji!.isNotEmpty;
+
+    if (!hasTranslation && !hasRomaji) {
+      return textWidget;
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        textWidget,
+        if (hasTranslation)
           Padding(
             padding: const EdgeInsets.only(top: 6.0),
             child: Text(
@@ -673,12 +715,24 @@ class _MobileElasticLyricLineState extends State<_MobileElasticLyricLine> with T
                 height: 1.2,
               ),
             ),
-          )
-        ],
-      );
-    }
-
-    return textWidget;
+          ),
+        if (hasRomaji)
+          Padding(
+            padding: const EdgeInsets.only(top: 4.0),
+            child: Text(
+              widget.romaji!,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontFamily: fontFamily,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: Colors.white.withValues(alpha: 0.25),
+                height: 1.2,
+              ),
+            ),
+          ),
+      ],
+    );
   }
 }
 

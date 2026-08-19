@@ -265,6 +265,37 @@ class PlaylistService {
     }
   }
 
+  /// 更新歌单内单曲的来源（跨平台播放兜底后写回）。
+  ///
+  /// 把歌单中以 [oldTrackId]/[oldSource] 标识的曲目改为以 [newTrackId]/
+  /// [newSource] 取流。保留歌单曲目名称/歌手等展示字段不变。
+  Future<bool> remapTrackSource(
+    String token,
+    Object playlistId,
+    Object oldTrackId,
+    String oldSource,
+    Object newTrackId,
+    String newSource,
+  ) async {
+    try {
+      final response = await ApiClient.instance.apiFetch(
+        '${UrlService.instance.baseUrl}/playlists/$playlistId/tracks/remap',
+        method: 'POST',
+        headers: _headers(token),
+        body: jsonEncode({
+          'oldTrackId': oldTrackId.toString(),
+          'oldSource': oldSource,
+          'newTrackId': newTrackId.toString(),
+          'newSource': newSource,
+        }),
+      );
+      return _ok(response);
+    } catch (e) {
+      debugPrint('[PlaylistService] remapTrackSource failed: $e');
+      return false;
+    }
+  }
+
   /// 同步第三方歌单：重新拉取远端歌单数据，增量更新本地歌单。
   /// 绑定歌单的外部来源（如网易云歌单），之后可反复 [syncPlaylist] 增量同步。
   Future<bool> bindImportConfig(
@@ -304,6 +335,7 @@ class PlaylistService {
         final result = _decode(response);
         return PlaylistSyncResult(
           insertedCount: (result['insertedCount'] as num?)?.toInt() ?? 0,
+          removedCount: (result['removedCount'] as num?)?.toInt() ?? 0,
           newTracks:
               (result['newTracks'] as List?)
                   ?.whereType<Map>()

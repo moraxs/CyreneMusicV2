@@ -287,9 +287,11 @@ class _ProfilePageState extends State<ProfilePage> {
       if (result == null) {
         CyreneToast.show('同步失败，请稍后重试');
       } else {
+        final added = result.insertedCount;
+        final removed = result.removedCount;
         CyreneToast.show(
-          result.insertedCount > 0
-              ? '「${playlist.name}」已同步，新增 ${result.insertedCount} 首'
+          (added > 0 || removed > 0)
+              ? '「${playlist.name}」已同步：新增 $added 首${removed > 0 ? '、移除 $removed 首' : ''}'
               : '「${playlist.name}」已是最新',
         );
         widget.playlists.load(token);

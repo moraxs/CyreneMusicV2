@@ -65,7 +65,8 @@ class _DesktopClassicLyricsState extends State<DesktopClassicLyrics> {
 
   String _signature(Track track) =>
       '${track.key}|${track.lyric?.length}|${track.yrc?.length}'
-      '|${track.tlyric?.length}|${track.ytlrc?.length}';
+      '|${track.tlyric?.length}|${track.ytlrc?.length}'
+      '|${track.romaji?.length}';
 
   void _adaptTrack() {
     final lyric = widget.track.lyric;
@@ -77,16 +78,19 @@ class _DesktopClassicLyricsState extends State<DesktopClassicLyrics> {
                 translation: widget.track.tlyric,
                 qrcLyric: widget.track.yrc,
                 qrcTranslation: widget.track.ytlrc,
+                romaji: widget.track.romaji,
               ),
             MusicSource.kugou => LyricParser.parseKugouLyric(
                 lyric,
                 translation: widget.track.tlyric,
+                romaji: widget.track.romaji,
               ),
             _ => LyricParser.parseNeteaseLyric(
                 lyric,
                 translation: widget.track.tlyric,
                 yrcLyric: widget.track.yrc,
                 yrcTranslation: widget.track.ytlrc,
+                romaji: widget.track.romaji,
               ),
           };
     _currentIndex = -1;
@@ -120,6 +124,7 @@ class _DesktopClassicLyricsState extends State<DesktopClassicLyrics> {
       lyrics: _lyrics,
       currentLyricIndex: _currentIndex,
       showTranslation: true,
+      showRomaji: true,
       positionListenable: widget.playback.positionListenable,
       // 桌面覆盖层不开放拖拽 seek；占位空回调即可（组件仅在拖拽定位时调用）。
       onSeek: (_) {},

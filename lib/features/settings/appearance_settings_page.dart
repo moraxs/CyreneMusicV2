@@ -14,6 +14,7 @@ import '../../features/taskbar_player/taskbar_player_controller.dart';
 import '../../features/player/mobile/compat/lyric_font_service.dart';
 import '../../features/player/mobile/compat/lyric_style_service.dart';
 import '../../features/player/mobile/compat/player_background_service.dart';
+import '../../features/player/super_cyrene/super_cyrene_textured_glass_params_sheet.dart';
 import '../../presentation/cyrene/breakpoints.dart' show isDesktopLayout;
 import '../../presentation/cyrene/cyrene_overlays.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
@@ -113,6 +114,65 @@ class AppearanceSettingsPage extends StatelessWidget {
                         : const SizedBox(width: 20),
                     onTap: () {
                       store.setSuperCyrenePlayerEnabled(enabled);
+                      dismiss();
+                    },
+                  ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  static String _superCyreneBackgroundName(String style) => switch (style) {
+    'textured_glass' => '纹理玻璃',
+    _ => '默认',
+  };
+
+  /// SuperCyrene 背景样式选择。
+  Future<void> _chooseSuperCyreneBackground(BuildContext context) async {
+    final store = FullscreenSettingsStore.instance;
+    await showCyreneSheet<void>(
+      context: context,
+      title: 'SuperCyrene 背景',
+      builder: (context, dismiss) => ListenableBuilder(
+        listenable: store,
+        builder: (context, _) {
+          final current = store.superCyreneBackgroundStyle;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final (style, iconName, name, desc) in const [
+                  (
+                    'default',
+                    'layers',
+                    '默认',
+                    'AMLL 动态多层旋转流动背景',
+                  ),
+                  (
+                    'textured_glass',
+                    'image',
+                    '纹理玻璃',
+                    '长虹/瓦楞玻璃柱面折射与晶莹立体光泽',
+                  ),
+                ])
+                  CyreneMenuRow(
+                    vector: MiuixIcons.extended.byName(iconName)!,
+                    title: name,
+                    subtitle: desc,
+                    trailing: current == style
+                        ? MiuixIcon(
+                            vector: MiuixIcons.basic.check,
+                            size: 20,
+                            tint: MiuixTheme.of(context).colors.primary,
+                          )
+                        : const SizedBox(width: 20),
+                    onTap: () {
+                      store.setSuperCyreneBackgroundStyle(style);
                       dismiss();
                     },
                   ),
@@ -338,6 +398,26 @@ class AppearanceSettingsPage extends StatelessWidget {
                   value: _playerStyleName(store.superCyrenePlayerEnabled),
                   onTap: () => _choosePlayerStyle(context),
                 ),
+                if (store.superCyrenePlayerEnabled)
+                  CyreneMenuRow(
+                    vector: MiuixIcons.extended.byName('layers')!,
+                    iconBackground: _iconTeal,
+                    title: 'SuperCyrene 背景',
+                    subtitle: '全屏播放器背景样式',
+                    value: _superCyreneBackgroundName(
+                        store.superCyreneBackgroundStyle),
+                    onTap: () => _chooseSuperCyreneBackground(context),
+                  ),
+                if (store.superCyrenePlayerEnabled &&
+                    store.superCyreneBackgroundStyle == 'textured_glass')
+                  CyreneMenuRow(
+                    vector: MiuixIcons.extended.byName('filter')!,
+                    iconBackground: _iconOrange,
+                    title: '纹理玻璃参数',
+                    subtitle: '条纹宽度、折射、光泽与色散',
+                    onTap: () =>
+                        showSuperCyreneTexturedGlassParamsSheet(context),
+                  ),
                 // 歌词字体
                 ListenableBuilder(
                   listenable: LyricFontService(),

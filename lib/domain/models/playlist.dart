@@ -94,11 +94,13 @@ class PlaylistTrack {
 class PlaylistSyncResult {
   const PlaylistSyncResult({
     required this.insertedCount,
+    required this.removedCount,
     required this.newTracks,
     required this.message,
   });
 
   final int insertedCount;
+  final int removedCount;
   final List<PlaylistTrack> newTracks;
   final String message;
 }

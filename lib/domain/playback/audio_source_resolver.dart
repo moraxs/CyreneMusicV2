@@ -1,10 +1,19 @@
 import '../models/track.dart';
 
 class PlaybackCandidate {
-  const PlaybackCandidate({required this.track, required this.sourceId});
+  const PlaybackCandidate({
+    required this.track,
+    required this.sourceId,
+    this.fallbackFrom,
+  });
 
   final Track track;
   final String sourceId;
+
+  /// 该候选是否来自跨平台兜底：非空时表示这是把原曲目（原平台/原id）换成
+  /// 其它平台后解析出的候选，值为原始曲目的 [TrackSourceRef]。调用方（播放
+  /// 控制器）可据此把新平台持久化回歌单。
+  final TrackSourceRef? fallbackFrom;
 }
 
 class ResolvedAudioSources {

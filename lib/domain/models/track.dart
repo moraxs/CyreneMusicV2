@@ -51,6 +51,7 @@ class Track {
     this.yrc,
     this.tlyric,
     this.ytlrc,
+    this.romaji,
     this.chorus,
     this.duration,
     this.filePath,
@@ -69,6 +70,9 @@ class Track {
   final String? yrc;
   final String? tlyric;
   final String? ytlrc;
+
+  /// 行级罗马音歌词原始串（后端 `romalrc` 字段）。
+  final String? romaji;
 
   /// 副歌时间区间。
   final List<ChorusRange>? chorus;
@@ -101,6 +105,7 @@ class Track {
     yrc: yrc,
     tlyric: tlyric,
     ytlrc: ytlrc,
+    romaji: romaji,
     chorus: chorus,
     duration: duration,
     filePath: filePath,
@@ -112,6 +117,7 @@ class Track {
     String? yrc,
     String? tlyric,
     String? ytlrc,
+    String? romaji,
     List<ChorusRange>? chorus,
     Duration? duration,
     String? filePath,
@@ -128,6 +134,7 @@ class Track {
     yrc: yrc ?? this.yrc,
     tlyric: tlyric ?? this.tlyric,
     ytlrc: ytlrc ?? this.ytlrc,
+    romaji: romaji ?? this.romaji,
     chorus: chorus ?? this.chorus,
     duration: duration ?? this.duration,
     filePath: filePath ?? this.filePath,
@@ -146,6 +153,7 @@ class Track {
     'yrc': yrc,
     'tlyric': tlyric,
     'ytlrc': ytlrc,
+    'romaji': romaji,
     'chorus': chorus?.map((c) => c.toJson()).toList(),
     'durationMs': duration?.inMilliseconds,
     'filePath': filePath,
@@ -164,6 +172,7 @@ class Track {
     yrc: json['yrc'] as String?,
     tlyric: json['tlyric'] as String?,
     ytlrc: json['ytlrc'] as String?,
+    romaji: json['romaji'] as String?,
     chorus: (json['chorus'] as List?)
         ?.whereType<Map>()
         .map((e) => ChorusRange.fromJson(Map<String, Object?>.from(e)))

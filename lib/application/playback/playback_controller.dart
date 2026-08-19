@@ -119,10 +119,15 @@ class PlaybackController extends ChangeNotifier {
   /// - 传入 [queue]（歌单/专辑等合集入口）→ 临时列表整体替换为该 [queue]；
   /// - 不传 [queue]（单曲入口）→ 临时列表追加该曲（见 [playNextToQueue]），
   ///   只有当前无曲可播时才回退为单曲列表。
+  ///
+  /// [onFallbackRemap]：跨平台兜底命中（原平台无法取流、换网易云/酷狗后成功）
+  /// 时回调，携带原始曲目与新曲目。歌单详情页用它把新平台/id 写回歌单，
+  /// 下次播放直接请求新平台。
   Future<void> playTrack(
     Track track, {
     List<Track>? queue,
     Duration? startAt,
+    Future<void> Function(Track original, Track remapped)? onFallbackRemap,
   }) async {
     final request = ++_playRequest;
     final resumeFrom = startAt != null && startAt > Duration.zero
@@ -207,6 +212,17 @@ class PlaybackController extends ChangeNotifier {
             }
             await _audio.play();
             played = true;
+            // 跨平台兜底命中：把新平台/id 写回歌单（由调用方注入回调，如歌单
+            // 详情页）。这里只做触发，不阻塞播放流程。
+            final fallbackFrom = candidate.fallbackFrom;
+            if (fallbackFrom != null && onFallbackRemap != null) {
+              unawaited(
+                onFallbackRemap(
+                  track.withSource(fallbackFrom),
+                  playableTrack,
+                ),
+              );
+            }
             break;
           } catch (error) {
             failures.add('${candidate.sourceId}: $error');

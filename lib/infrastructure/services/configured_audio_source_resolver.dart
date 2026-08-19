@@ -5,6 +5,7 @@ import '../../domain/models/track.dart';
 import '../../domain/playback/audio_cache.dart';
 import '../../domain/playback/audio_source_preferences_store.dart';
 import '../../domain/playback/audio_source_resolver.dart';
+import 'cross_platform_fallback_service.dart';
 import 'playback_url_resolver_service.dart';
 
 class ConfiguredAudioSourceResolver implements AudioSourceResolver {
@@ -12,17 +13,28 @@ class ConfiguredAudioSourceResolver implements AudioSourceResolver {
     required AudioSourcePreferencesStore preferences,
     required PlaybackSourceClient sourceClient,
     required AudioCache cache,
-  }) => ConfiguredAudioSourceResolver._(preferences, sourceClient, cache);
+    CrossPlatformFallbackFinder? crossPlatformFallback,
+  }) => ConfiguredAudioSourceResolver._(
+    preferences,
+    sourceClient,
+    cache,
+    crossPlatformFallback,
+  );
 
   ConfiguredAudioSourceResolver._(
     this._preferences,
     this._sourceClient,
     this._cache,
+    this._crossPlatformFallback,
   );
 
   final AudioSourcePreferencesStore _preferences;
   final PlaybackSourceClient _sourceClient;
   final AudioCache _cache;
+  final CrossPlatformFallbackFinder? _crossPlatformFallback;
+
+  /// 已尝试过跨平台兜底的曲目 key（会话级），避免对同一曲目反复搜索。
+  final Set<String> _crossPlatformTried = {};
 
   @override
   Future<ResolvedAudioSources> resolve(
@@ -73,6 +85,7 @@ class ConfiguredAudioSourceResolver implements AudioSourceResolver {
                   yrc: lyric.yrc,
                   tlyric: lyric.tlyric,
                   ytlrc: lyric.ytlrc,
+                  romaji: lyric.romaji,
                 ),
                 sourceId: '${config.id}:cache',
               ),
@@ -86,6 +99,7 @@ class ConfiguredAudioSourceResolver implements AudioSourceResolver {
                 yrc: lyric.yrc,
                 tlyric: lyric.tlyric,
                 ytlrc: lyric.ytlrc,
+                romaji: lyric.romaji,
               ),
               sourceId: config.id,
             ),
@@ -100,6 +114,7 @@ class ConfiguredAudioSourceResolver implements AudioSourceResolver {
                   yrc: lyric.yrc,
                   tlyric: lyric.tlyric,
                   ytlrc: lyric.ytlrc,
+                  romaji: lyric.romaji,
                 ),
                 sourceId: '${config.id}:fallback',
               ),
@@ -125,6 +140,7 @@ class ConfiguredAudioSourceResolver implements AudioSourceResolver {
                   yrc: lyric.yrc,
                   tlyric: lyric.tlyric,
                   ytlrc: lyric.ytlrc,
+                  romaji: lyric.romaji,
                 ),
                 sourceId: '${config.id}:cache',
               ),
@@ -134,10 +150,91 @@ class ConfiguredAudioSourceResolver implements AudioSourceResolver {
       }
     }
 
+    // 原平台（及 alternatives）全部解析失败。对无 alternatives 的曲目
+    // （即导入歌单的曲目）做跨平台兜底：并行搜网易云+酷狗，换平台取流。
+    final fallbackResolved = await _resolveCrossPlatformFallback(
+      track,
+      enabledSources,
+      preferences,
+      excluded,
+      failures,
+    );
+    if (fallbackResolved != null) return fallbackResolved;
+
     throw AudioSourceResolutionFailure(
       enabledSources.isEmpty ? '尚未启用可用音源。' : '所有音源解析均失败。',
       causes: failures,
     );
+  }
+
+  /// 跨平台兜底：仅对无 alternatives 的曲目（导入歌单曲目）触发一次。
+  ///
+  /// 并行搜索网易云与酷狗，把每个命中（网易云优先排序）用现有音源配置重新
+  /// 解析出可播放候选一并返回，调用方（playTrack）会逐候选加载，任一成功
+  /// 即播放。候选携带 [PlaybackCandidate.fallbackFrom]，供上层写回歌单。
+  Future<ResolvedAudioSources?> _resolveCrossPlatformFallback(
+    Track track,
+    List<AudioSourceConfig> enabledSources,
+    AudioSourcePreferences preferences,
+    Set<String> excluded,
+    List<String> failures,
+  ) async {
+    final fallbackService = _crossPlatformFallback;
+    // 已有 alternatives 的曲目在上一阶段已遍历过可行平台，无需再搜；
+    // 本地文件也不参与搜索。
+    if (fallbackService == null ||
+        track.alternatives.isNotEmpty ||
+        track.source == MusicSource.local ||
+        track.source == MusicSource.apple ||
+        track.source == MusicSource.spotify) {
+      return null;
+    }
+    if (!_crossPlatformTried.add(track.key)) return null;
+
+    final matches = await fallbackService.findFallbackFor(track);
+    final candidates = <PlaybackCandidate>[];
+    for (final match in matches) {
+      if (excluded.contains(match.source.wireName)) continue;
+      for (final config in enabledSources) {
+        if (!_supports(config, match.source)) continue;
+        final quality = preferences.quality.effectiveFor(match.source);
+        try {
+          final resolved = await _sourceClient.resolveUrlFromSource(
+            match.track,
+            config,
+            quality,
+          );
+          final lyric =
+              resolved.lyrics ??
+              await _sourceClient.fetchLyrics(match.track) ??
+              const LyricData();
+          candidates.add(
+            PlaybackCandidate(
+              track: match.track.copyWith(
+                playbackUrl: _parsePlaybackUri(resolved.url),
+                lyric: lyric.lyric,
+                yrc: lyric.yrc,
+                tlyric: lyric.tlyric,
+                ytlrc: lyric.ytlrc,
+                romaji: lyric.romaji,
+              ),
+              sourceId: '${config.id}:cross-fallback',
+              fallbackFrom: TrackSourceRef(
+                id: track.id,
+                source: track.source,
+              ),
+            ),
+          );
+          // 该配置与平台能取出直链即记一个候选；每个命中记一个足矣
+          // （后续更近的命中会排在前面被优先加载）。不短路，收集全部
+          // 命中候选，让 playTrack 依序尝试。
+          break;
+        } catch (error) {
+          failures.add('兜底 ${match.source.wireName}/${config.name}: $error');
+        }
+      }
+    }
+    return candidates.isEmpty ? null : ResolvedAudioSources(candidates);
   }
 
   bool _supports(AudioSourceConfig config, MusicSource source) {
