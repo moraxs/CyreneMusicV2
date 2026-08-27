@@ -36,6 +36,8 @@ class DonationItem {
     required this.amount,
     required this.paymentType,
     required this.status,
+    required this.outTradeNo,
+    required this.tradeNo,
     this.paidAt,
     this.createdAt,
   });
@@ -44,19 +46,31 @@ class DonationItem {
   final double amount;
   final String paymentType;
   final int status;
+
+  /// 商户订单号（本地生成，创建订单时即确定）。
+  final String outTradeNo;
+
+  /// 支付平台账单号/流水号（支付成功后由网关回写，可能为空）。
+  final String tradeNo;
+
   final String? paidAt;
   final String? createdAt;
 
   bool get paid => status == 1;
 
-  factory DonationItem.fromJson(Map<String, Object?> json) => DonationItem(
-    id: (json['id'] as num?)?.toInt() ?? 0,
-    amount: (json['amount'] as num?)?.toDouble() ?? 0,
-    paymentType: json['paymentType']?.toString() ?? '',
-    status: (json['status'] as num?)?.toInt() ?? 0,
-    paidAt: json['paidAt']?.toString(),
-    createdAt: json['createdAt']?.toString(),
-  );
+  factory DonationItem.fromJson(Map<String, Object?> json) {
+    String asString(Object? v) => v?.toString() ?? '';
+    return DonationItem(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      amount: (json['amount'] as num?)?.toDouble() ?? 0,
+      paymentType: json['paymentType']?.toString() ?? '',
+      status: (json['status'] as num?)?.toInt() ?? 0,
+      outTradeNo: asString(json['outTradeNo']),
+      tradeNo: asString(json['tradeNo']),
+      paidAt: json['paidAt']?.toString(),
+      createdAt: json['createdAt']?.toString(),
+    );
+  }
 }
 
 /// 用户订阅/赞助详情。

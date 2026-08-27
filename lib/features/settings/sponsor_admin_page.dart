@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_miuix/miuix.dart';
 
 import '../../infrastructure/services/sponsor_admin_service.dart';
@@ -419,22 +420,60 @@ class _UserSponsorDetailPageState extends State<_UserSponsorDetailPage> {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  '¥${donation.amount.toStringAsFixed(2)}',
-                  style: theme.textStyles.body2.copyWith(fontWeight: FontWeight.w600),
+                // 第一行：金额 + 类型标签 + 支付状态
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      '¥${donation.amount.toStringAsFixed(2)}',
+                      style: theme.textStyles.body2.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(width: 8),
+                    _paymentTypeChip(donation.paymentType, theme, colors),
+                    const Spacer(),
+                    Text(
+                      donation.paid ? '已支付' : '待支付',
+                      style: theme.textStyles.footnote1.copyWith(
+                        color: donation.paid
+                            ? const Color(0xFF3CC756)
+                            : colors.onSurfaceVariantSummary,
+                      ),
+                    ),
+                  ],
                 ),
-                Text(
-                  donation.paid ? '已支付' : '待支付',
-                  style: theme.textStyles.footnote1.copyWith(
-                    color: donation.paid
-                        ? const Color(0xFF3CC756)
-                        : colors.onSurfaceVariantSummary,
-                  ),
+                const SizedBox(height: 8),
+                // 账单号（支付平台流水）
+                _metaLine(
+                  label: '账单号',
+                  value: donation.tradeNo,
+                  fallback: '—',
+                  theme: theme,
+                  colors: colors,
+                ),
+                // 商户订单号
+                _metaLine(
+                  label: '订单号',
+                  value: donation.outTradeNo,
+                  fallback: '—',
+                  theme: theme,
+                  colors: colors,
+                ),
+                // 支付时间 / 创建时间
+                _metaLine(
+                  label: donation.paid ? '支付时间' : '创建时间',
+                  value: donation.paid
+                      ? _formatDateTime(donation.paidAt)
+                      : _formatDateTime(donation.createdAt),
+                  fallback: '—',
+                  theme: theme,
+                  colors: colors,
+                  copyable: false,
                 ),
               ],
             ),
@@ -450,6 +489,88 @@ class _UserSponsorDetailPageState extends State<_UserSponsorDetailPage> {
         ],
       ),
     );
+  }
+
+  /// 单条元信息行：label + value，默认长按复制 value。
+  Widget _metaLine({
+    required String label,
+    required String? value,
+    required String fallback,
+    required MiuixThemeData theme,
+    required MiuixColors colors,
+    bool copyable = true,
+  }) {
+    final text = (value == null || value.isEmpty) ? fallback : value;
+    final isPlaceholder = text == fallback;
+    return Padding(
+      padding: const EdgeInsets.only(top: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '$label  ',
+            style: theme.textStyles.footnote2.copyWith(
+              color: colors.onSurfaceVariantSummary,
+            ),
+          ),
+          Expanded(
+            child: GestureDetector(
+              onLongPress: copyable && !isPlaceholder
+                  ? () async {
+                      await Clipboard.setData(ClipboardData(text: value!));
+                      if (mounted) CyreneToast.show('$label已复制');
+                    }
+                  : null,
+              child: Text(
+                text,
+                style: theme.textStyles.footnote2.copyWith(
+                  color: colors.onSurface,
+                  decoration: copyable && !isPlaceholder ? TextDecoration.underline : null,
+                  decorationColor: colors.onSurfaceVariantSummary,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// payment_type → 中文标签。已知取值：card(Premium 买断)、manual(手动添加)、其余视为普通赞助。
+  Widget _paymentTypeChip(String type, MiuixThemeData theme, MiuixColors colors) {
+    final String label;
+    final Color fg;
+    switch (type) {
+      case 'card':
+        label = 'Premium';
+        fg = const Color(0xFF3482FF);
+      case 'manual':
+        label = '手动';
+        fg = colors.onSurfaceVariantSummary;
+      default:
+        label = type.isEmpty ? '赞助' : type;
+        fg = colors.onSurfaceVariantSummary;
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: fg.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        label,
+        style: theme.textStyles.footnote2.copyWith(color: fg),
+      ),
+    );
+  }
+
+  /// ISO 时间串 → "yyyy.MM.dd HH:mm"；解析失败回落到原值。
+  String _formatDateTime(String? raw) {
+    if (raw == null || raw.isEmpty) return '';
+    final dt = DateTime.tryParse(raw);
+    if (dt == null) return raw;
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${dt.year}.${two(dt.month)}.${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}';
   }
 }
 

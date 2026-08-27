@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'dart:ui' show PlatformDispatcher;
 
 import 'package:fluent_ui/fluent_ui.dart' show FluentLocalizations;
 import 'package:flutter/material.dart';
@@ -33,6 +34,7 @@ import 'infrastructure/core/url_service.dart';
 import 'infrastructure/media_notification/media_notification_service.dart';
 import 'infrastructure/media_notification/ios_now_playing_service.dart';
 import 'infrastructure/media_notification/smtc_service.dart';
+import 'infrastructure/services/crash_log_service.dart';
 import 'infrastructure/services/developer_mode_service.dart';
 import 'infrastructure/services/listening_card_sync.dart';
 import 'infrastructure/services/system_tray_service.dart';
@@ -68,6 +70,48 @@ Future<void> main(List<String> args) async {
     return;
   }
 
+  // ===== 主引擎：崩溃日志 + 全局异常捕获（启动期最先初始化）=====
+  // 即使后续初始化（media_kit / 窗口效果 / 偏好）崩了，也把异常写到文件。
+  await CrashLogService.instance.init(appVersion: appVersion);
+  _installGlobalCrashHandlers();
+
+  // runZonedGuarded 包裹主初始化与 runApp：捕获任意 async / 顶层未处理异常
+  // （FlutterError.onError 只管框架报告，管不了普通 async 冒泡错误）。
+  await runZonedGuarded(
+    () async => _bootstrap(args),
+    (error, stack) {
+      CrashLogService.instance.logException(error, stack, context: 'zone');
+    },
+  );
+}
+
+/// 全局异常处理器：把 Flutter 框架错误与平台通道错误都落到崩溃日志。
+void _installGlobalCrashHandlers() {
+  final previousOnError = FlutterError.onError;
+  FlutterError.onError = (details) {
+    CrashLogService.instance.logException(
+      details.exception,
+      details.stack,
+      context: 'flutter_error',
+    );
+    // 保留 Flutter 默认行为（debug 下打控制台 / 红屏）。
+    previousOnError?.call(details);
+  };
+  if (PlatformDispatcher.instance.onError != null) {
+    PlatformDispatcher.instance.onError = (error, stack) {
+      CrashLogService.instance.logException(error, stack, context: 'platform');
+      return true; // 已处理，不终止顶层主 isolate。
+    };
+  } else {
+    PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
+      CrashLogService.instance.logException(error, stack, context: 'platform');
+      return true;
+    };
+  }
+}
+
+/// 主引擎初始化主体（原 main 的非分支部分），由 [main] 的 runZonedGuarded 包裹。
+Future<void> _bootstrap(List<String> args) async {
   // 捕获全应用 debugPrint 到开发者日志缓冲（开发者选项 → 运行日志）。
   final defaultDebugPrint = debugPrint;
   debugPrint = (String? message, {int? wrapWidth}) {

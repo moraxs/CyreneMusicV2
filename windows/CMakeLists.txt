@@ -106,3 +106,32 @@ install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
+
+# === App-local VC++ runtime ===
+# libmpv（media_kit）依赖 MSVC 运行库（msvcp140/vcruntime140/concrt140）。
+# release 构建默认不把 VC 运行库拷进产物目录，导致未装 VC++ Redistributable
+# 的机器（如精简版 Win10）启动即崩「找不到 msvcp140.dll」。
+# 这里从本机 System32 复制一份到产物目录做 app-local 部署（微软官方允许），
+# 这样安装包（Inno *.dll 通配符）会一并带上，目标机无需另装全局 redist。
+# 找不到时跳过（开发机若未装 redist，逻辑上本就不会有这些 DLL）。
+if(WIN32 AND MSVC)
+  if(WIN32)
+    set(VC_REDIST_CRT_FILES
+      msvcp140.dll
+      msvcp140_1.dll
+      msvcp140_2.dll
+      vcruntime140.dll
+      vcruntime140_1.dll
+      concrt140.dll
+    )
+    set(VC_REDIST_SRC_DIR "C:/Windows/System32")
+    foreach(VC_DLL IN LISTS VC_REDIST_CRT_FILES)
+      if(EXISTS "${VC_REDIST_SRC_DIR}/${VC_DLL}")
+        install(FILES "${VC_REDIST_SRC_DIR}/${VC_DLL}"
+          DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+          CONFIGURATIONS Profile;Release
+          COMPONENT Runtime)
+      endif()
+    endforeach()
+  endif()
+endif()

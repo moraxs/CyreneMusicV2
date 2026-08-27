@@ -10,6 +10,7 @@
   - SuperCyrene 全屏播放器（classic / pixel / sonnet 主题）在当前行翻译浮层下方增加罗马音浮层。
   - 后端新增罗马音数据链路：网易云取 `romalrc`（行级）/`yromalrc`（逐字），QQ 由 `qrcRoma` 逐字降级生成行级 `romalrc`。
   - 无罗马音的歌曲自动回退到「原文 + 翻译」，不留空行。
+- **启动期崩溃日志 + 全局异常捕获**：Dart 层未捕获异常（Flutter 框架 / 平台通道 / 异步 Zone）自动落盘到 `crash.log`，便于排查「点击没反应 / 启动即崩溃」。仅记录异常并自动轮转防文件膨胀（保留最近两份）。日志位于应用支持目录（Windows：`%APPDATA%\com.example\cyrene_music_reborn\crash.log`）。
 
 ### 其他
 - 版本号升至 **2.0.4**。
