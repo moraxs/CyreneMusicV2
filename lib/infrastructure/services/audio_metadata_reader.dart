@@ -49,26 +49,44 @@ class AudioMetadataReader {
     final ext = _extension(filePath);
     try {
       final bytes = await file.readAsBytes();
-      switch (ext) {
+      return readBytes(filePath, bytes, ext: ext);
+    } catch (e) {
+      return _fallback(filePath);
+    }
+  }
+
+  /// 从已读入内存的字节解析元数据。
+  ///
+  /// 用于无法通过 `dart:io` 直接访问的场景（如 Android SAF 的 `content://`
+  /// URI，由原生侧通过 ContentResolver 读出字节后传入）。[displayName] 仅用于
+  /// 解析失败时的兜底歌名与扩展名识别，可以是文件名或 `content://` URI。
+  static LocalTrackMetadata readBytes(
+    String displayName,
+    Uint8List bytes, {
+    String? ext,
+  }) {
+    final effectiveExt = ext ?? _extension(displayName);
+    try {
+      switch (effectiveExt) {
         case 'flac':
-          return _parseFlac(filePath, bytes);
+          return _parseFlac(displayName, bytes);
         case 'mp3':
-          return _parseMp3(filePath, bytes);
+          return _parseMp3(displayName, bytes);
         case 'm4a':
         case 'mp4':
         case 'aac':
-          return _parseMp4(filePath, bytes);
+          return _parseMp4(displayName, bytes);
         case 'wav':
-          return _parseWav(filePath, bytes);
+          return _parseWav(displayName, bytes);
         case 'ogg':
-          return _parseOgg(filePath, bytes);
+          return _parseOgg(displayName, bytes);
         case 'ape':
-          return _parseApe(filePath, bytes);
+          return _parseApe(displayName, bytes);
         default:
-          return _fallback(filePath);
+          return _fallback(displayName);
       }
     } catch (e) {
-      return _fallback(filePath);
+      return _fallback(displayName);
     }
   }
 

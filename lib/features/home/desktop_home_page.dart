@@ -105,6 +105,19 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
   int _spotifyLoadGeneration = 0;
   String? _loadedToken;
 
+  List<SpotifyAlbumPreview> _spotifyNewReleases = const [];
+  Map<String, List<SpotifyPlaylistPreview>> _spotifyCategoryGroups = const {};
+  int _spotifyDiscoveryGeneration = 0;
+
+  static const _spotifyCategoryIds = <String, String>{
+    'Hip Hop': 'hiphop',
+    '摇滚': 'rock',
+    '排行榜': 'toplists',
+    '心情': 'mood',
+    '流行': 'pop',
+    'R&B': 'rnb',
+  };
+
   // 派生数据缓存：仅当控制器发布新 RecommendData 对象时才重新解析原始 JSON。
   RecommendData? _recommendCacheSource;
   List<Track> _daily = const [];
@@ -136,6 +149,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     _loadHistory();
     // 榜单默认源是 Spotify（网易云作为可选项），首屏即需加载，不等用户切换。
     _loadSpotifyToplists();
+    _loadSpotifyDiscovery();
   }
 
   @override
@@ -193,6 +207,79 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
       // hasCache && toplists.isEmpty（后端整体失败）→ 保留缓存，不设错误，不闪。
       _spotifyToplistsLoading = false;
     });
+  }
+
+  Future<void> _loadSpotifyDiscovery() async {
+    final generation = ++_spotifyDiscoveryGeneration;
+    final newReleases = await DiscoveryService.instance.getSpotifyNewReleases(
+      limit: 20,
+      country: 'US',
+    );
+    final categoryFutures = _spotifyCategoryIds.entries.map(
+      (entry) => DiscoveryService.instance
+          .getSpotifyCategoryPlaylists(
+            entry.value,
+            limit: 20,
+            country: 'US',
+          )
+          .then((playlists) => (title: entry.key, items: playlists)),
+    );
+    final categoryGroups = await Future.wait(categoryFutures.toList());
+    if (!mounted || generation != _spotifyDiscoveryGeneration) return;
+    setState(() {
+      _spotifyNewReleases = newReleases;
+      _spotifyCategoryGroups = {
+        for (final group in categoryGroups) group.title: group.items,
+      };
+    });
+  }
+
+  Future<void> _openSpotifyAlbum(SpotifyAlbumPreview album) async {
+    final tracks = await DiscoveryService.instance.getSpotifyAlbumTracks(album.id);
+    if (tracks.isEmpty) return;
+    widget.onOpenSecondary(
+      PlaylistDetailPage(
+        playlistId: album.id,
+        title: album.name,
+        coverUrl: album.coverImgUrl,
+        playback: widget.playback,
+        token: widget.account.token,
+        desktopLayout: true,
+        source: MusicSource.spotify,
+        reloadable: false,
+        trackCount: tracks.length,
+        initialPlaylist: PlaylistDetail(
+          id: 0,
+          name: album.name,
+          coverImgUrl: album.coverImgUrl,
+          description: album.artists,
+          source: MusicSource.spotify,
+          tracks: tracks,
+          playCount: 0,
+          creator: album.artists,
+          trackCount: tracks.length,
+          createTime: 0,
+          updateTime: 0,
+          tags: const ['Spotify'],
+        ),
+      ),
+    );
+  }
+
+  void _openSpotifyPlaylist(SpotifyPlaylistPreview preview) {
+    widget.onOpenSecondary(
+      PlaylistDetailPage(
+        playlistId: preview.id,
+        title: preview.name,
+        coverUrl: preview.coverImgUrl,
+        playback: widget.playback,
+        token: widget.account.token,
+        desktopLayout: true,
+        source: MusicSource.spotify,
+        reloadable: true,
+        trackCount: preview.trackCount,
+      ),
+    );
   }
 
   void _onAccountChanged() {
@@ -606,6 +693,22 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
           widget.onOpenPlaylist(toplist.id, toplist.name, toplist.coverImgUrl);
         },
       ),
+      if (isSpotify) ...[
+        const SizedBox(height: 28),
+        _SpotifyAlbumSection(
+          title: '新碟上架',
+          items: _spotifyNewReleases,
+          onOpen: _openSpotifyAlbum,
+        ),
+        for (final entry in _spotifyCategoryGroups.entries) ...[
+          const SizedBox(height: 28),
+          _SpotifyDiscoverySection(
+            title: entry.key,
+            items: entry.value,
+            onOpen: _openSpotifyPlaylist,
+          ),
+        ],
+      ],
     ];
   }
 }
@@ -2185,5 +2288,213 @@ class _Cover extends StatelessWidget {
       cover = SizedBox.square(dimension: size, child: cover);
     }
     return cover;
+  }
+}
+
+/// Spotify 发现页的歌单分类区块。
+class _SpotifyDiscoverySection extends StatelessWidget {
+  const _SpotifyDiscoverySection({
+    required this.title,
+    required this.items,
+    required this.onOpen,
+  });
+
+  final String title;
+  final List<SpotifyPlaylistPreview> items;
+  final ValueChanged<SpotifyPlaylistPreview> onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = MiuixTheme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: theme.textStyles.headline1.copyWith(
+            color: theme.colors.onBackground,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 16),
+        if (items.isEmpty)
+          const SizedBox(
+            height: 120,
+            child: Center(child: MiuixCircularProgressIndicator()),
+          )
+        else
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = constraints.maxWidth >= 980 ? 4 : 2;
+              final gap = 16.0;
+              final cardWidth = (constraints.maxWidth - (columns - 1) * gap) / columns;
+              return Wrap(
+                spacing: gap,
+                runSpacing: gap,
+                children: [
+                  for (final item in items)
+                    SizedBox(
+                      width: cardWidth,
+                      child: _SpotifyPlaylistCard(
+                        preview: item,
+                        onOpen: onOpen,
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+      ],
+    );
+  }
+}
+
+/// Spotify 发现页的单张歌单卡片。
+class _SpotifyPlaylistCard extends StatelessWidget {
+  const _SpotifyPlaylistCard({
+    required this.preview,
+    required this.onOpen,
+  });
+
+  final SpotifyPlaylistPreview preview;
+  final ValueChanged<SpotifyPlaylistPreview> onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = MiuixTheme.of(context);
+    return MiuixCard(
+      cornerRadius: 18,
+      insideMargin: const EdgeInsets.all(12),
+      feedbackType: MiuixPressFeedbackType.sink,
+      onPressed: () => onOpen(preview),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _Cover(url: preview.coverImgUrl, size: 120, cornerRadius: 14),
+          const SizedBox(height: 10),
+          MiuixText(
+            preview.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textStyles.body1.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 4),
+          MiuixText(
+            preview.description,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textStyles.footnote2.copyWith(
+              color: theme.colors.onSurfaceVariantSummary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Spotify 发现页的专辑分类区块。
+class _SpotifyAlbumSection extends StatelessWidget {
+  const _SpotifyAlbumSection({
+    required this.title,
+    required this.items,
+    required this.onOpen,
+  });
+
+  final String title;
+  final List<SpotifyAlbumPreview> items;
+  final ValueChanged<SpotifyAlbumPreview> onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = MiuixTheme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: theme.textStyles.headline1.copyWith(
+            color: theme.colors.onBackground,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 16),
+        if (items.isEmpty)
+          const SizedBox(
+            height: 120,
+            child: Center(child: MiuixCircularProgressIndicator()),
+          )
+        else
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = constraints.maxWidth >= 980 ? 4 : 2;
+              final gap = 16.0;
+              final cardWidth = (constraints.maxWidth - (columns - 1) * gap) / columns;
+              return Wrap(
+                spacing: gap,
+                runSpacing: gap,
+                children: [
+                  for (final item in items)
+                    SizedBox(
+                      width: cardWidth,
+                      child: _SpotifyAlbumCard(
+                        preview: item,
+                        onOpen: onOpen,
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+      ],
+    );
+  }
+}
+
+/// Spotify 发现页的单张专辑卡片。
+class _SpotifyAlbumCard extends StatelessWidget {
+  const _SpotifyAlbumCard({
+    required this.preview,
+    required this.onOpen,
+  });
+
+  final SpotifyAlbumPreview preview;
+  final ValueChanged<SpotifyAlbumPreview> onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = MiuixTheme.of(context);
+    return MiuixCard(
+      cornerRadius: 18,
+      insideMargin: const EdgeInsets.all(12),
+      feedbackType: MiuixPressFeedbackType.sink,
+      onPressed: () => onOpen(preview),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _Cover(url: preview.coverImgUrl, size: 120, cornerRadius: 14),
+          const SizedBox(height: 10),
+          MiuixText(
+            preview.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textStyles.body1.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 4),
+          MiuixText(
+            preview.artists,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textStyles.footnote2.copyWith(
+              color: theme.colors.onSurfaceVariantSummary,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

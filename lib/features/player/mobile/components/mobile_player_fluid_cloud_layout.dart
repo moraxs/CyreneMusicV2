@@ -2,12 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 // 只取进度指示器：原版文件按逐行移植保留，避免 miuix 全量导入与原版符号撞名。
 // 额外取 MiuixIcon / MiuixIcons：底部工具栏的下载/信息/列表按钮改用 miuix 矢量图标。
-import 'package:flutter_miuix/miuix.dart'
-    show
-        MiuixCircularProgressIndicator,
-        MiuixProgressIndicatorColors,
-        MiuixIcon,
-        MiuixIcons;
+import 'package:flutter_miuix/miuix.dart';
+import '../../../../presentation/cyrene/cyrene_overlays.dart';
 import '../compat/player_service.dart';
 import '../compat/playlist_service.dart';
 import '../compat/download_service.dart';
@@ -1231,6 +1227,7 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
   }
 
   /// 显示音质选择底部菜单
+  /// 显示音质选择底部菜单（Miuix 风格）
   void _showQualitySelectionSheet(BuildContext context) {
     final qualityService = AudioQualityService();
     final sourceService = AudioSourceService();
@@ -1238,70 +1235,85 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
         ? qualityService.getSupportedQualities(sourceService.sourceType)
         : [AudioQuality.standard, AudioQuality.exhigh, AudioQuality.lossless];
 
-    showModalBottomSheet(
+    showCyreneSheet<void>(
       context: context,
-      backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        decoration: BoxDecoration(
-          color: Colors.grey[900]?.withValues(alpha: 0.95),
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        child: SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 12),
-              Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey[800],
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 20),
-                child: Text(
-                  '选择播放音质',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-              ...supportedQualities.map((quality) {
-                final isSelected = qualityService.currentQuality == quality;
-                return ListTile(
-                  title: Text(
-                    qualityService.getQualityName(quality),
-                    style: TextStyle(
-                      color: isSelected ? Colors.blueAccent : Colors.white,
-                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                    ),
-                  ),
-                  subtitle: Text(
-                    qualityService.getQualityDescription(quality),
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.5),
-                      fontSize: 12,
-                    ),
-                  ),
-                  trailing: isSelected 
-                      ? const Icon(Icons.check, color: Colors.blueAccent) 
-                      : null,
-                  onTap: () {
-                    qualityService.setQuality(quality);
-                    Navigator.pop(context);
-                    ToastUtils.success('音质已设置为 ${qualityService.getQualityName(quality)}，将在下次切换歌曲时生效');
-                  },
-                );
-              }),
-              const SizedBox(height: 20),
-            ],
+      title: '选择播放音质',
+      insideMargin: 16,
+      builder: (sheetContext, dismiss) {
+        final theme = MiuixTheme.of(sheetContext);
+        return ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.55,
           ),
-        ),
-      ),
+          child: ListView.separated(
+            shrinkWrap: true,
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            itemCount: supportedQualities.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 4),
+            itemBuilder: (context, index) {
+              final quality = supportedQualities[index];
+              final isSelected = qualityService.currentQuality == quality;
+              return MiuixCard(
+                cornerRadius: 14,
+                insideMargin: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
+                colors: MiuixCardColors(
+                  color: isSelected
+                      ? theme.colors.secondaryContainer
+                      : theme.colors.surfaceContainer,
+                  contentColor: theme.colors.onSurface,
+                ),
+                feedbackType: MiuixPressFeedbackType.sink,
+                onPressed: () {
+                  qualityService.setQuality(quality);
+                  dismiss();
+                  ToastUtils.success(
+                    '音质已设置为 ${qualityService.getQualityName(quality)}，将在下次切换歌曲时生效',
+                  );
+                },
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          MiuixText(
+                            qualityService.getQualityName(quality),
+                            style: theme.textStyles.body1.copyWith(
+                              color: isSelected
+                                  ? theme.colors.primary
+                                  : theme.colors.onSurface,
+                              fontWeight: isSelected
+                                  ? FontWeight.w600
+                                  : FontWeight.w500,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          MiuixText(
+                            qualityService.getQualityDescription(quality),
+                            style: theme.textStyles.footnote2.copyWith(
+                              color: theme.colors.onSurfaceVariantSummary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (isSelected)
+                      Icon(
+                        Icons.check_rounded,
+                        color: theme.colors.primary,
+                        size: 20,
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+        );
+      },
     );
   }
 
@@ -1380,53 +1392,99 @@ class _FavoriteButtonState extends State<_FavoriteButton> {
   }
 
   void _showManageOptions(BuildContext context) {
-    showModalBottomSheet(
+    showCyreneSheet<void>(
       context: context,
-      backgroundColor: Colors.grey[900],
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              margin: const EdgeInsets.symmetric(vertical: 12),
-              width: 32,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey[700],
-                borderRadius: BorderRadius.circular(2),
+      title: '已收藏到歌单',
+      insideMargin: 16,
+      builder: (sheetContext, dismiss) {
+        final theme = MiuixTheme.of(sheetContext);
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_playlistNames.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: MiuixText(
+                    '当前收藏在: ${_playlistNames.join(", ")}',
+                    style: theme.textStyles.footnote2.copyWith(
+                      color: theme.colors.onSurfaceVariantSummary,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              MiuixCard(
+                cornerRadius: 14,
+                insideMargin: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                colors: MiuixCardColors(
+                  color: theme.colors.surfaceContainer,
+                  contentColor: theme.colors.onSurface,
+                ),
+                feedbackType: MiuixPressFeedbackType.sink,
+                onPressed: () async {
+                  dismiss();
+                  await _removeFromPlaylists();
+                },
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.remove_circle_outline_rounded,
+                      color: theme.colors.error,
+                      size: 22,
+                    ),
+                    const SizedBox(width: 12),
+                    MiuixText(
+                      '从所有歌单移除',
+                      style: theme.textStyles.body1.copyWith(
+                        color: theme.colors.error,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-              child: Text(
-                '已收藏到: ${_playlistNames.join(", ")}',
-                style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 14),
-                textAlign: TextAlign.center,
+              const SizedBox(height: 6),
+              MiuixCard(
+                cornerRadius: 14,
+                insideMargin: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                colors: MiuixCardColors(
+                  color: theme.colors.surfaceContainer,
+                  contentColor: theme.colors.onSurface,
+                ),
+                feedbackType: MiuixPressFeedbackType.sink,
+                onPressed: () {
+                  dismiss();
+                  MobilePlayerDialogs.showAddToPlaylist(context, widget.track);
+                },
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.playlist_add_rounded,
+                      color: theme.colors.primary,
+                      size: 22,
+                    ),
+                    const SizedBox(width: 12),
+                    MiuixText(
+                      '添加到其他歌单',
+                      style: theme.textStyles.body1.copyWith(
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            ListTile(
-              leading: const Icon(Icons.remove_circle_outline, color: Colors.redAccent),
-              title: const Text('从所有歌单移除', style: TextStyle(color: Colors.white)),
-              onTap: () async {
-                Navigator.pop(context);
-                await _removeFromPlaylists();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.playlist_add, color: Colors.white70),
-              title: const Text('添加到其他歌单', style: TextStyle(color: Colors.white)),
-              onTap: () {
-                Navigator.pop(context);
-                MobilePlayerDialogs.showAddToPlaylist(context, widget.track);
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
     );
   }
 

@@ -122,6 +122,12 @@ class UrlService extends ChangeNotifier {
   String get spotifySearchUrl => _path('/spotify/search');
   String spotifyPlaylistUrl(String playlistId, {int limit = 50}) =>
       _path('/spotify/playlist/$playlistId?limit=$limit');
+  String spotifyNewReleasesUrl({int limit = 20, int offset = 0, String country = 'US'}) =>
+      _path('/spotify/new-releases?country=$country&limit=$limit&offset=$offset');
+  String spotifyAlbumTracksUrl(String albumId, {int limit = 50, int offset = 0, String country = 'US'}) =>
+      _path('/spotify/album/$albumId/tracks?country=$country&limit=$limit&offset=$offset');
+  String spotifyCategoryPlaylistsUrl(String categoryId, {int limit = 20, int offset = 0, String country = 'US'}) =>
+      _path('/spotify/category/$categoryId/playlists?country=$country&limit=$limit&offset=$offset');
 
   // Update
   /// 应用更新检查端点：返回最新版本号、更新说明与各平台下载地址。

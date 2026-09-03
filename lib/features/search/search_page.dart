@@ -14,6 +14,7 @@ import '../../domain/models/track.dart';
 import '../../infrastructure/services/developer_mode_service.dart';
 import '../../infrastructure/services/search_suggestion_service.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
+import '../../presentation/cyrene/cyrene_page_routes.dart';
 import '../artist/artist_detail_page.dart';
 import '../player/cyrene_track_tile.dart';
 import '../player/track_action_menu.dart';
@@ -401,7 +402,7 @@ class _SearchPageState extends State<SearchPage> {
       return;
     }
     Navigator.of(context).push(
-      CupertinoPageRoute<void>(
+      CyreneHeroExpandPageRoute<void>(
         builder: (_) => PlaylistDetailPage(
           playlistId: playlist.id,
           title: playlist.name,

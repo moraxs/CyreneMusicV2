@@ -165,11 +165,12 @@ class LocalMusicService {
     return count;
   }
 
-  /// 导入 Android 原生通道返回的结果（复制后的真实文件）。
+  /// 导入 Android 原生通道返回的结果（`content://` URI，不复制文件）。
   ///
-  /// 原生侧已完成选文件/选文件夹与复制，这里按「真实路径 + 原始文件名」入库；
-  /// [LocalMusicNative.ImportedNativeFile.sidecarLrcPath] 非空时，歌词直接来自
-  /// 同批复制的 .lrc 内容。返回成功导入数量。
+  /// 原生侧已完成选文件/选文件夹与持久化 URI 权限，这里按「content:// URI +
+  /// 原始文件名」入库；元数据通过 [LocalMusicNative.readUriBytes] 读出字节后
+  /// 交 [AudioMetadataReader.readBytes] 解析；[ImportedNativeFile.sidecarLrc]
+  /// 非空时，歌词直接来自同批读取的 .lrc 内容。返回成功导入数量。
   Future<int> importNativeFiles(
     List<ImportedNativeFile> files,
   ) async {
@@ -179,10 +180,11 @@ class LocalMusicService {
 
     for (final file in files) {
       if (file.filePath.isEmpty) continue;
-      if (!await _importAudioFile(
+      if (!await _importNativeAudioFile(
         file.filePath,
-        addedAt: now,
         displayName: file.displayName,
+        sidecarLrc: file.sidecarLrc,
+        addedAt: now,
       )) {
         continue;
       }
@@ -207,7 +209,11 @@ class LocalMusicService {
     String? displayName,
   }) async {
     final resolvedPath = await _resolveImportPath(filePath);
-    if (resolvedPath == null || !AudioMetadataReader.isSupported(resolvedPath)) {
+    if (resolvedPath == null) {
+      debugPrint('[LocalMusicService] 无法解析路径 $filePath');
+      return false;
+    }
+    if (!AudioMetadataReader.isSupported(resolvedPath)) {
       debugPrint('[LocalMusicService] 跳过不支持的格式 $filePath');
       return false;
     }
@@ -260,17 +266,80 @@ class LocalMusicService {
     return true;
   }
 
+  /// 解析 Android 原生导入的 `content://` URI 并入库（不复制文件）。
+  ///
+  /// 元数据通过 [LocalMusicNative.readUriBytes] 用 ContentResolver 读出字节后
+  /// 交 [AudioMetadataReader.readBytes] 解析；[sidecarLrc] 为原生侧已读取的
+  /// 同名 .lrc 文本，无则 null。解析失败时仍以文件名兜底入库，返回 true；
+  /// 格式不支持或读取字节失败返回 false。
+  Future<bool> _importNativeAudioFile(
+    String uri, {
+    required int addedAt,
+    required String displayName,
+    String? sidecarLrc,
+  }) async {
+    if (!uri.startsWith('content://')) {
+      // 非 content:// 路径走通用文件导入。
+      return _importAudioFile(
+        uri,
+        addedAt: addedAt,
+        displayName: displayName,
+      );
+    }
+    if (!AudioMetadataReader.isSupported(displayName)) {
+      debugPrint('[LocalMusicService] 跳过不支持的格式 $displayName');
+      return false;
+    }
+
+    final bytes = await LocalMusicNative.instance.readUriBytes(uri);
+    if (bytes == null || bytes.isEmpty) {
+      debugPrint('[LocalMusicService] 读取 URI 字节失败 $uri');
+      return false;
+    }
+
+    var name = _baseName(displayName);
+    var artists = '';
+    var album = '';
+    var duration = 0.0;
+    String? coverDataUrl;
+    String? lyric = sidecarLrc;
+    try {
+      final metadata = AudioMetadataReader.readBytes(displayName, bytes);
+      name = metadata.name.isNotEmpty ? metadata.name : name;
+      artists = metadata.artists;
+      album = metadata.album;
+      duration = metadata.duration;
+      coverDataUrl = metadata.coverDataUrl;
+      if (metadata.lyric != null && metadata.lyric!.isNotEmpty) {
+        lyric = metadata.lyric;
+      }
+    } catch (e) {
+      debugPrint('[LocalMusicService] 解析失败 $uri: $e');
+    }
+
+    final hasLrcFile = sidecarLrc != null && sidecarLrc.isNotEmpty;
+    _tracks[uri] = LocalTrackEntry(
+      filePath: uri,
+      name: name,
+      artists: artists,
+      album: album,
+      duration: duration,
+      coverDataUrl: coverDataUrl,
+      lyric: lyric,
+      hasLrcFile: hasLrcFile,
+      addedAt: addedAt,
+    );
+    return true;
+  }
+
   /// 解析 `content://` 等非文件路径为可被 `dart:io` 读取的真实文件。
   ///
-  /// 原生通道返回的已是复制后的 `file://` 路径，这里只是兜底：若仍拿到
-  /// `content://`（例如 file_picker 的缓存路径意外透传），通过 [LocalMusicNative]
-  /// 无对应能力时返回 null。普通文件路径原样返回。
+  /// `content://` URI 由原生通道返回，已持有持久化读权限，由 media_kit 与
+  /// [LocalMusicNative.readUriBytes] 直接消费，无需转为 `file://`，原样返回。
+  /// 普通文件路径同样原样返回。
   Future<String?> _resolveImportPath(String filePath) async {
     if (filePath.startsWith('content://')) {
-      // 原生插件不提供 content:// → file:// 的单文件拷贝能力；此类路径
-      // 属于异常输入，直接拒绝，避免 `File(content://...)` 抛错。
-      debugPrint('[LocalMusicService] 不支持的 content:// 路径 $filePath');
-      return null;
+      return filePath;
     }
     return filePath;
   }
@@ -359,8 +428,14 @@ class LocalMusicService {
       return entry.lyric;
     }
 
-    // 尝试读取同名 .lrc 文件
+    // content:// URI 无法通过 dart:io 读取同名 .lrc 文件；歌词已在导入时
+    // 由原生侧读取并缓存到 entry.lyric，上面未命中则无歌词。
     final audioPath = track.filePath!;
+    if (audioPath.startsWith('content://')) {
+      return null;
+    }
+
+    // 尝试读取同名 .lrc 文件
     final dir = p.dirname(audioPath);
     final nameWithoutExt = p.basenameWithoutExtension(audioPath);
 

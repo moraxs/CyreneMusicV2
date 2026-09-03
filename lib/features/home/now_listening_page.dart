@@ -16,6 +16,7 @@ import '../../domain/models/track.dart';
 import '../../infrastructure/services/discovery_service.dart';
 import '../../infrastructure/storage/spotify_charts_cache.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
+import '../../presentation/cyrene/cyrene_page_routes.dart';
 import '../../presentation/cyrene/cyrene_toast.dart';
 import '../playlist/playlist_detail_page.dart';
 import '../settings/login_page.dart';
@@ -40,7 +41,13 @@ class NowListeningPage extends StatefulWidget {
   final HomeController home;
   final PlaybackController playback;
   final VoidCallback onOpenPlayer;
-  final void Function(int id, String title, String coverUrl) onOpenPlaylist;
+  final void Function(
+    int id,
+    String title,
+    String coverUrl, {
+    String? heroTag,
+    Alignment? originAlignment,
+  }) onOpenPlaylist;
 
   @override
   State<NowListeningPage> createState() => _NowListeningPageState();
@@ -156,7 +163,7 @@ class _NowListeningPageState extends State<NowListeningPage>
     if (toplist.source == MusicSource.spotify) {
       final tracks = toplist.tracks;
       Navigator.of(context).push(
-        CupertinoPageRoute<void>(
+        CyreneHeroExpandPageRoute<void>(
           builder: (_) => PlaylistDetailPage(
             playlistId: toplist.externalId ?? toplist.id,
             title: toplist.name,
@@ -518,9 +525,9 @@ class _NowListeningPageState extends State<NowListeningPage>
     _daily = widget.home.convertTracks(data.dailySongs);
     _fm = widget.home.convertTracks(data.fm);
     _newest = widget.home.convertTracks(data.personalizedNewsongs);
-    _dailyPlaylists = _playlistCards(data.dailyPlaylists);
-    _personalizedPlaylists = _playlistCards(data.personalizedPlaylists);
-    _radarPlaylists = _playlistCards(data.radarPlaylists);
+    _dailyPlaylists = _playlistCards(data.dailyPlaylists, 'daily');
+    _personalizedPlaylists = _playlistCards(data.personalizedPlaylists, 'personalized');
+    _radarPlaylists = _playlistCards(data.radarPlaylists, 'radar');
     if (kDebugMode) {
       debugPrint(
         '[ForYou] 封面抽样 daily=${_daily.firstOrNull?.picUrl} '
@@ -589,7 +596,7 @@ class _NowListeningPageState extends State<NowListeningPage>
 
   void _openDailyDetail(List<Track> daily) {
     Navigator.of(context).push(
-      CupertinoPageRoute<void>(
+      CyreneHeroExpandPageRoute<void>(
         builder: (_) =>
             DailyRecommendPage(tracks: daily, playback: widget.playback),
       ),
@@ -630,31 +637,55 @@ class _NowListeningPageState extends State<NowListeningPage>
         final playlist = playlists[index];
         return _PlaylistCard(
           data: playlist,
-          onTap: () => widget.onOpenPlaylist(
-            playlist.id,
-            playlist.name,
-            playlist.coverUrl,
-          ),
+          onTap: (cardContext) {
+            final box = cardContext.findRenderObject() as RenderBox?;
+            Alignment? alignment;
+            if (box != null && box.hasSize) {
+              final size = MediaQuery.sizeOf(cardContext);
+              final center = box.localToGlobal(box.size.center(Offset.zero));
+              alignment = Alignment(
+                ((center.dx / size.width) * 2.0 - 1.0).clamp(-1.0, 1.0),
+                ((center.dy / size.height) * 2.0 - 1.0).clamp(-1.0, 1.0),
+              );
+            }
+            widget.onOpenPlaylist(
+              playlist.id,
+              playlist.name,
+              playlist.coverUrl,
+              heroTag: playlist.heroTag,
+              originAlignment: alignment,
+            );
+          },
         );
       }, childCount: playlists.length),
     ),
   );
 
-  List<_HomePlaylistCardData> _playlistCards(Iterable<dynamic> items) => items
-      .whereType<Map>()
-      .map((raw) => Map<String, Object?>.from(raw))
-      .map(
-        (item) => _HomePlaylistCardData(
-          id:
-              (item['id'] as num?)?.toInt() ??
-              int.tryParse(item['id']?.toString() ?? '') ??
-              0,
-          name: item['name']?.toString() ?? '',
-          coverUrl: (item['picUrl'] ?? item['coverImgUrl'])?.toString() ?? '',
-        ),
-      )
-      .where((item) => item.id != 0 && item.name.isNotEmpty)
-      .toList(growable: false);
+  List<_HomePlaylistCardData> _playlistCards(
+    Iterable<dynamic> items,
+    String tagPrefix,
+  ) =>
+      items
+          .whereType<Map>()
+          .map((raw) => Map<String, Object?>.from(raw))
+          .map(
+            (item) => _HomePlaylistCardData(
+              id:
+                  (item['id'] as num?)?.toInt() ??
+                  int.tryParse(item['id']?.toString() ?? '') ??
+                  0,
+              name: item['name']?.toString() ?? '',
+              coverUrl: (item['picUrl'] ?? item['coverImgUrl'])?.toString() ??
+                  '',
+            ),
+          )
+          .where((item) => item.id != 0 && item.name.isNotEmpty)
+          .map(
+            (item) => item.copyWith(
+              heroTag: 'home-playlist-$tagPrefix-${item.id}',
+            ),
+          )
+          .toList(growable: false);
 }
 
 (String, String) _greetingOfNow() {
@@ -990,14 +1021,14 @@ class _PlaylistCard extends StatelessWidget {
   const _PlaylistCard({required this.data, required this.onTap});
 
   final _HomePlaylistCardData data;
-  final VoidCallback onTap;
+  final ValueChanged<BuildContext> onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = MiuixTheme.of(context);
     return MiuixCard(
       cornerRadius: 20,
-      onPressed: onTap,
+      onPressed: () => onTap(context),
       feedbackType: MiuixPressFeedbackType.sink,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1286,6 +1317,8 @@ class _HomeCover extends StatelessWidget {
       imageUrl: url,
       httpHeaders: imageHeaders(url),
       fit: BoxFit.cover,
+      fadeInDuration: Duration.zero,
+      fadeOutDuration: Duration.zero,
       // 按显示宽降采样解码,避免网格里全尺寸封面拖累滚动(见 coverDecodeWidth)。
       memCacheWidth: coverDecodeWidth(decodeWidth, dpr),
       errorWidget: (_, _, error) {
@@ -1325,9 +1358,18 @@ class _HomePlaylistCardData {
     required this.id,
     required this.name,
     required this.coverUrl,
+    this.heroTag = '',
   });
 
   final int id;
   final String name;
   final String coverUrl;
+  final String heroTag;
+
+  _HomePlaylistCardData copyWith({String? heroTag}) => _HomePlaylistCardData(
+    id: id,
+    name: name,
+    coverUrl: coverUrl,
+    heroTag: heroTag ?? this.heroTag,
+  );
 }

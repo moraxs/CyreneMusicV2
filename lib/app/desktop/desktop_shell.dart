@@ -428,8 +428,13 @@ class _DesktopShellState extends State<DesktopShell> {
     ),
     DiscoverPage(
       discover: widget.discover,
-      onOpenPlaylist:
-          widget.onOpenDiscoverPlaylist ?? _openDiscoverPlaylist,
+      onOpenPlaylist: (playlist, {originAlignment}) {
+        if (widget.onOpenDiscoverPlaylist != null) {
+          widget.onOpenDiscoverPlaylist!(playlist);
+        } else {
+          _openDiscoverPlaylist(playlist);
+        }
+      },
       body: _compactSecondary(_discoverStack.current),
     ),
     ProfilePage(

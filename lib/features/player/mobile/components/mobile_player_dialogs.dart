@@ -1,14 +1,14 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-// 只取进度指示器：原版文件按逐行移植保留，避免 miuix 全量导入与原版符号撞名。
-import 'package:flutter_miuix/miuix.dart'
-    show MiuixCircularProgressIndicator, MiuixProgressIndicatorColors;
+import 'package:flutter_miuix/miuix.dart';
+import '../../../../presentation/cyrene/cyrene_overlays.dart';
 import '../compat/sleep_timer_service.dart';
 import '../compat/playlist_service.dart';
 import '../compat/playlist_queue_service.dart';
 import '../compat/play_history_service.dart';
 import '../compat/player_service.dart';
+import '../compat/toast_utils.dart';
 import '../../../../domain/models/track.dart';
 import '../../../../domain/models/media_url.dart';
 
@@ -23,336 +23,314 @@ class MobilePlayerDialogs {
     );
   }
 
-  /// 显示添加到歌单对话框
+  /// 显示添加到歌单底部抽屉（Miuix 风格）
   static void showAddToPlaylist(BuildContext context, Track track) {
     final playlistService = PlaylistService();
-    
+
     // 确保已加载歌单列表
     if (playlistService.playlists.isEmpty) {
       playlistService.loadPlaylists();
     }
 
-    showModalBottomSheet(
+    showCyreneSheet<void>(
       context: context,
-      backgroundColor: Colors.grey[900],
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => AnimatedBuilder(
-        animation: playlistService,
-        builder: (context, child) {
-          final playlists = playlistService.playlists;
-          
-          if (playlists.isEmpty) {
-            return const Center(
-              child: Padding(
-                padding: EdgeInsets.all(32.0),
-                child: MiuixCircularProgressIndicator(
-                  size: 36,
-                  colors: MiuixProgressIndicatorColors(
-                    foregroundColor: Colors.white,
-                    disabledForegroundColor: Colors.white,
-                    backgroundColor: Colors.transparent,
-                  ),
-                ),
-              ),
-            );
-          }
+      title: '添加到歌单',
+      insideMargin: 16,
+      builder: (sheetContext, dismiss) {
+        final theme = MiuixTheme.of(sheetContext);
 
-          return Container(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Row(
-                    children: [
-                      const Text(
-                        '添加到歌单',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      ),
-                      const Spacer(),
-                      IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                    ],
-                  ),
+        return AnimatedBuilder(
+          animation: playlistService,
+          builder: (context, child) {
+            final playlists = playlistService.playlists;
+
+            if (playlists.isEmpty) {
+              return const SizedBox(
+                height: 180,
+                child: Center(
+                  child: MiuixCircularProgressIndicator(size: 36),
                 ),
-                const Divider(color: Colors.white24),
-                Flexible(
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: playlists.length,
-                    itemBuilder: (context, index) {
-                      final playlist = playlists[index];
-                      return ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: playlist.isDefault
-                              ? Colors.red.withValues(alpha: 0.2)
-                              : Colors.blue.withValues(alpha: 0.2),
+              );
+            }
+
+            return ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.65,
+              ),
+              child: ListView.separated(
+                shrinkWrap: true,
+                physics: const BouncingScrollPhysics(),
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                itemCount: playlists.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 4),
+                itemBuilder: (context, index) {
+                  final playlist = playlists[index];
+                  return MiuixCard(
+                    cornerRadius: 14,
+                    insideMargin: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    colors: MiuixCardColors(
+                      color: theme.colors.surfaceContainer,
+                      contentColor: theme.colors.onSurface,
+                    ),
+                    feedbackType: MiuixPressFeedbackType.sink,
+                    onPressed: () async {
+                      dismiss();
+                      final success =
+                          await playlistService.addTrackToPlaylist(
+                        playlist.id,
+                        track,
+                      );
+                      if (context.mounted) {
+                        ToastUtils.info(
+                          success
+                              ? '已添加到「${playlist.name}」'
+                              : '添加失败',
+                        );
+                      }
+                    },
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: ShapeDecoration(
+                            color: playlist.isDefault
+                                ? theme.colors.primary.withValues(alpha: 0.14)
+                                : theme.colors.surfaceContainer,
+                            shape: const MiuixSquircleBorder(cornerRadius: 10),
+                          ),
                           child: Icon(
                             playlist.isDefault
-                                ? Icons.favorite
-                                : Icons.queue_music,
-                            color: playlist.isDefault ? Colors.red : Colors.blue,
+                                ? Icons.favorite_rounded
+                                : Icons.queue_music_rounded,
+                            color: playlist.isDefault
+                                ? theme.colors.primary
+                                : theme.colors.onSurfaceVariantSummary,
                             size: 20,
                           ),
                         ),
-                        title: Text(
-                          playlist.name,
-                          style: const TextStyle(color: Colors.white),
-                        ),
-                        subtitle: Text(
-                          '${playlist.trackCount} 首歌曲',
-                          style: const TextStyle(color: Colors.white70),
-                        ),
-                        onTap: () async {
-                          Navigator.pop(context);
-                          final success = await playlistService.addTrackToPlaylist(
-                            playlist.id,
-                            track,
-                          );
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  success
-                                      ? '已添加到「${playlist.name}」'
-                                      : '添加失败',
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              MiuixText(
+                                playlist.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textStyles.body1.copyWith(
+                                  fontWeight: FontWeight.w500,
                                 ),
-                                duration: const Duration(seconds: 1),
                               ),
-                            );
-                          }
-                        },
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
+                              const SizedBox(height: 2),
+                              MiuixText(
+                                '${playlist.trackCount} 首歌曲',
+                                style: theme.textStyles.footnote2.copyWith(
+                                  color: theme.colors.onSurfaceVariantSummary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
-  /// 显示播放列表底部抽屉
+  /// 显示播放列表底部抽屉（Miuix 风格）
   static void showPlaylistBottomSheet(BuildContext context) {
     final queueService = PlaylistQueueService();
     final history = PlayHistoryService().history;
     final currentTrack = PlayerService().currentTrack;
-    
+
     // 优先使用播放队列，如果没有队列则使用播放历史
     final bool hasQueue = queueService.hasQueue;
-    final List<dynamic> displayList = hasQueue 
-        ? queueService.queue 
+    final List<dynamic> displayList = hasQueue
+        ? queueService.queue
         : history.map((h) => h.toTrack()).toList();
-    final String listTitle = hasQueue 
-        ? '播放队列 (${queueService.source.name})' 
+    final String listTitle = hasQueue
+        ? '播放队列 (${queueService.source.name})'
         : '播放历史';
 
-    showModalBottomSheet(
+    showCyreneSheet<void>(
       context: context,
-      backgroundColor: Colors.grey[900],
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => DraggableScrollableSheet(
-        initialChildSize: 0.7,
-        minChildSize: 0.5,
-        maxChildSize: 0.95,
-        expand: false,
-        builder: (context, scrollController) {
-          return Column(
-            children: [
-              // 标题栏
-              Container(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  children: [
-                    // 拖动指示器
-                    Container(
-                      width: 40,
-                      height: 4,
-                      margin: const EdgeInsets.only(bottom: 16),
-                      decoration: BoxDecoration(
-                        color: Colors.white30,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                    Row(
-                      children: [
-                        const Icon(
-                          Icons.queue_music,
-                          color: Colors.white,
-                          size: 24,
-                        ),
-                        const SizedBox(width: 12),
-                        Text(
-                          listTitle,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const Spacer(),
-                        Text(
-                          '${displayList.length} 首',
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 14,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        IconButton(
-                          icon: const Icon(Icons.close_rounded, color: Colors.white),
-                          onPressed: () => Navigator.pop(context),
-                          tooltip: '关闭',
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              
-              const Divider(color: Colors.white24, height: 1),
-              
-              // 播放列表
-              Expanded(
-                child: displayList.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.music_off,
-                              size: 64,
-                              color: Colors.white.withValues(alpha: 0.3),
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              '播放列表为空',
-                              style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.6),
-                                fontSize: 16,
-                              ),
-                            ),
-                          ],
-                        ),
-                      )
-                    : ListView.builder(
-                        controller: scrollController,
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        itemCount: displayList.length,
-                        itemBuilder: (context, index) {
-                          final item = displayList[index];
-                          // 转换为 Track
-                          final track = item is Track ? item : (item as PlayHistoryItem).toTrack();
-                          final isCurrentTrack = currentTrack != null &&
-                              track.id.toString() == currentTrack.id.toString() &&
-                              track.source == currentTrack.source;
-
-                          return _buildPlaylistItem(context, track, index, isCurrentTrack);
-                        },
-                      ),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  /// 构建播放列表项
-  static Widget _buildPlaylistItem(BuildContext context, Track track, int index, bool isCurrentTrack) {
-    return Material(
-      color: isCurrentTrack 
-          ? Colors.white.withValues(alpha: 0.1) 
-          : Colors.transparent,
-      child: InkWell(
-        onTap: () {
-          PlayerService().playTrack(track);
-          Navigator.pop(context);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('正在播放: ${track.name}'),
-              duration: const Duration(seconds: 1),
+      title: listTitle,
+      insideMargin: 16,
+      endAction: Builder(
+        builder: (context) {
+          final theme = MiuixTheme.of(context);
+          return MiuixText(
+            '${displayList.length} 首',
+            style: theme.textStyles.footnote2.copyWith(
+              color: theme.colors.onSurfaceVariantSummary,
             ),
           );
         },
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Row(
-            children: [
-              // 序号或正在播放图标
-              SizedBox(
-                width: 32,
-                child: isCurrentTrack
-                    ? const Icon(
-                        Icons.play_arrow_rounded,
-                        color: Colors.white,
-                        size: 20,
-                      )
-                    : Text(
-                        '${index + 1}',
-                        style: const TextStyle(
-                          color: Colors.white54,
-                          fontSize: 14,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-              ),
+      ),
+      builder: (sheetContext, dismiss) {
+        final theme = MiuixTheme.of(sheetContext);
 
-              const SizedBox(width: 8),
-
-              // 封面
-              ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: _buildCoverImage(track.picUrl),
-              ),
-
-              const SizedBox(width: 12),
-
-              // 歌曲信息
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      track.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: isCurrentTrack ? Colors.white : Colors.white.withValues(alpha: 0.87),
-                        fontSize: 15,
-                        fontWeight: isCurrentTrack ? FontWeight.bold : FontWeight.normal,
-                      ),
+        if (displayList.isEmpty) {
+          return SizedBox(
+            height: 220,
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.music_off_rounded,
+                    size: 48,
+                    color: theme.colors.onSurfaceVariantSummary,
+                  ),
+                  const SizedBox(height: 12),
+                  MiuixText(
+                    '播放列表为空',
+                    style: theme.textStyles.body2.copyWith(
+                      color: theme.colors.onSurfaceVariantSummary,
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      track.artists,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.6),
-                        fontSize: 13,
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
+            ),
+          );
+        }
+
+        return ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.72,
           ),
-        ),
+          child: ListView.separated(
+            shrinkWrap: true,
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            itemCount: displayList.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 4),
+            itemBuilder: (context, index) {
+              final item = displayList[index];
+              final track = item is Track
+                  ? item
+                  : (item as PlayHistoryItem).toTrack();
+              final isCurrentTrack = currentTrack != null &&
+                  track.id.toString() == currentTrack.id.toString() &&
+                  track.source == currentTrack.source;
+
+              return _buildPlaylistItem(
+                context,
+                track,
+                index,
+                isCurrentTrack,
+                dismiss,
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  /// 构建 Miuix 风格播放列表项
+  static Widget _buildPlaylistItem(
+    BuildContext context,
+    Track track,
+    int index,
+    bool isCurrentTrack,
+    void Function([dynamic result]) dismiss,
+  ) {
+    final theme = MiuixTheme.of(context);
+
+    return MiuixCard(
+      cornerRadius: 14,
+      insideMargin: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      colors: MiuixCardColors(
+        color: isCurrentTrack
+            ? theme.colors.secondaryContainer
+            : Colors.transparent,
+        contentColor: theme.colors.onSurface,
+      ),
+      feedbackType: MiuixPressFeedbackType.sink,
+      onPressed: () {
+        PlayerService().playTrack(track);
+        dismiss();
+        ToastUtils.info('正在播放: ${track.name}');
+      },
+      child: Row(
+        children: [
+          // 序号或正在播放指示
+          SizedBox(
+            width: 28,
+            child: Center(
+              child: isCurrentTrack
+                  ? Icon(
+                      Icons.volume_up_rounded,
+                      color: theme.colors.primary,
+                      size: 18,
+                    )
+                  : MiuixText(
+                      '${index + 1}',
+                      style: theme.textStyles.footnote1.copyWith(
+                        color: theme.colors.onSurfaceVariantSummary,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+            ),
+          ),
+
+          const SizedBox(width: 8),
+
+          // 封面图片（超椭圆圆角）
+          ClipPath.shape(
+            shape: const MiuixSquircleBorder(cornerRadius: 10),
+            child: SizedBox(
+              width: 44,
+              height: 44,
+              child: _buildCoverImage(track.picUrl),
+            ),
+          ),
+
+          const SizedBox(width: 12),
+
+          // 歌曲信息
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                MiuixText(
+                  track.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textStyles.body1.copyWith(
+                    color: isCurrentTrack
+                        ? theme.colors.primary
+                        : theme.colors.onSurface,
+                    fontWeight:
+                        isCurrentTrack ? FontWeight.w600 : FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                MiuixText(
+                  track.artists,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textStyles.footnote2.copyWith(
+                    color: theme.colors.onSurfaceVariantSummary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -360,23 +338,26 @@ class MobilePlayerDialogs {
   /// 构建封面图片（支持网络 URL 和本地文件路径）
   static Widget _buildCoverImage(String imageUrl) {
     // 判断是网络 URL 还是本地文件路径
-    final isNetwork = imageUrl.startsWith('http://') || imageUrl.startsWith('https://');
-    
+    final isNetwork =
+        imageUrl.startsWith('http://') || imageUrl.startsWith('https://');
+
     if (isNetwork) {
       return CachedNetworkImage(
         imageUrl: imageUrl,
         httpHeaders: imageHeaders(imageUrl),
-        width: 48,
-        height: 48,
+        width: 44,
+        height: 44,
         fit: BoxFit.cover,
+        fadeInDuration: Duration.zero,
+        fadeOutDuration: Duration.zero,
         placeholder: (context, url) => Container(
-          width: 48,
-          height: 48,
+          width: 44,
+          height: 44,
           color: Colors.white12,
         ),
         errorWidget: (context, url, error) => Container(
-          width: 48,
-          height: 48,
+          width: 44,
+          height: 44,
           color: Colors.white12,
           child: const Icon(
             Icons.music_note,
@@ -388,14 +369,14 @@ class MobilePlayerDialogs {
     } else {
       // 本地文件
       return SizedBox(
-        width: 48,
-        height: 48,
+        width: 44,
+        height: 44,
         child: Image.file(
           File(imageUrl),
           fit: BoxFit.cover,
           errorBuilder: (context, error, stackTrace) => Container(
-            width: 48,
-            height: 48,
+            width: 44,
+            height: 44,
             color: Colors.white12,
             child: const Icon(
               Icons.music_note,

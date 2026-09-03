@@ -25,6 +25,7 @@ import '../features/profile/profile_page.dart';
 import '../features/search/search_page.dart';
 import '../features/updates/update_dialogs.dart';
 import '../presentation/cyrene/breakpoints.dart';
+import '../presentation/cyrene/cyrene_page_routes.dart';
 import 'desktop/desktop_shell.dart';
 
 class MusicAppShell extends StatefulWidget {
@@ -221,23 +222,36 @@ class _MusicAppShellState extends State<MusicAppShell> {
     setState(() => _selectedIndex = index);
   }
 
-  void _openHomePlaylist(int id, String title, String coverUrl) {
+  void _openHomePlaylist(
+    int id,
+    String title,
+    String coverUrl, {
+    String? heroTag,
+    Alignment? originAlignment,
+  }) {
     Navigator.of(context).push(
-      CupertinoPageRoute<void>(
+      CyreneHeroExpandPageRoute<void>(
+        originAlignment: originAlignment ?? Alignment.center,
         builder: (_) => PlaylistDetailPage(
           playlistId: id,
           title: title,
           coverUrl: coverUrl,
           playback: widget.playback,
           token: widget.account.token,
+          heroTag: heroTag,
         ),
       ),
     );
   }
 
-  void _openDiscoverPlaylist(DiscoveryPlaylist playlist) {
+  void _openDiscoverPlaylist(
+    DiscoveryPlaylist playlist, {
+    String? heroTag,
+    Alignment? originAlignment,
+  }) {
     Navigator.of(context).push(
-      CupertinoPageRoute<void>(
+      CyreneHeroExpandPageRoute<void>(
+        originAlignment: originAlignment ?? Alignment.center,
         builder: (_) => PlaylistDetailPage(
           playlistId: playlist.id,
           title: playlist.name,
@@ -246,6 +260,7 @@ class _MusicAppShellState extends State<MusicAppShell> {
           trackCount: playlist.trackCount,
           playback: widget.playback,
           token: widget.account.token,
+          heroTag: heroTag,
         ),
       ),
     );

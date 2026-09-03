@@ -35,6 +35,7 @@ class PlaylistDetailPage extends StatefulWidget {
     this.trackCount = 0,
     this.initialPlaylist,
     this.reloadable = true,
+    this.heroTag,
   }) : isPersonal = false;
 
   /// 个人歌单模式：曲目走 Cyrene 后端 `/playlists/:id/tracks`（需 [token]）。
@@ -52,6 +53,7 @@ class PlaylistDetailPage extends StatefulWidget {
     this.source = MusicSource.netease,
     this.initialPlaylist,
     this.reloadable = true,
+    this.heroTag,
   }) : isPersonal = true;
 
   final Object playlistId;
@@ -65,6 +67,8 @@ class PlaylistDetailPage extends StatefulWidget {
   final MusicSource source;
   final PlaylistDetail? initialPlaylist;
   final bool reloadable;
+  /// 首页歌单卡共享元素过渡 tag；桌面端与个人歌单恒为 null（不参与动画）。
+  final String? heroTag;
 
   /// 桌面端使用居中限宽与紧凑顶栏；默认关闭以完整保留移动端布局。
   final bool desktopLayout;
@@ -376,8 +380,9 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
       );
     }
 
+    final theme = MiuixTheme.of(context);
     return MiuixScaffold(
-      containerColor: Colors.transparent,
+      containerColor: theme.colors.surface,
       content: (_) => Material(
         type: MaterialType.transparency,
         child: _buildBody(EdgeInsets.zero),
@@ -743,6 +748,7 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
                     topPadding: topSafeInset,
                     heroHeight: heroHeight,
                     extractedColor: _extractedThemeColor,
+                    heroTag: widget.heroTag,
                   ),
                 ),
               ),
@@ -1301,9 +1307,10 @@ class _FullScreenThemeBackground extends StatelessWidget {
     final themeSeed = extractedColor ?? colors.primary;
 
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 450),
+      duration: const Duration(milliseconds: 350),
       curve: Curves.easeOutCubic,
       decoration: BoxDecoration(
+        color: colors.surface,
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
@@ -1322,16 +1329,22 @@ class _FixedMobileHeroCover extends StatelessWidget {
     required this.topPadding,
     required this.heroHeight,
     this.extractedColor,
+    this.heroTag,
   });
 
   final String coverUrl;
   final double topPadding;
   final double heroHeight;
   final Color? extractedColor;
+  /// 非空时包上 Hero 共享元素：从首页歌单卡封面平滑放大到详情页头部。
+  final String? heroTag;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
+    final colors = MiuixTheme.of(context).colors;
+    final themeSeed = extractedColor ?? colors.primary;
+
+    final cover = SizedBox(
       width: double.infinity,
       height: heroHeight,
       child: Stack(
@@ -1360,6 +1373,8 @@ class _FixedMobileHeroCover extends StatelessWidget {
                 imageUrl: coverUrl,
                 httpHeaders: imageHeaders(coverUrl),
                 fit: BoxFit.cover,
+                fadeInDuration: Duration.zero,
+                fadeOutDuration: Duration.zero,
                 errorWidget: (_, _, _) => const _FallbackCoverBackground(),
               ),
             )
@@ -1388,6 +1403,7 @@ class _FixedMobileHeroCover extends StatelessWidget {
         ],
       ),
     );
+    return cover;
   }
 }
 

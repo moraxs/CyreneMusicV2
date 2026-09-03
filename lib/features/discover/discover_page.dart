@@ -18,7 +18,8 @@ class DiscoverPage extends StatefulWidget {
   });
 
   final DiscoverController discover;
-  final ValueChanged<DiscoveryPlaylist> onOpenPlaylist;
+  final void Function(DiscoveryPlaylist playlist, {Alignment? originAlignment})
+      onOpenPlaylist;
 
   /// 桌面端内容区二级页。非空时保留桌面外壳，仅用详情页替换发现页内容。
   final Widget? body;
@@ -131,7 +132,19 @@ class _DiscoverPageState extends State<DiscoverPage>
                       final playlist = state.playlists[index];
                       return _DiscoverPlaylistCard(
                         playlist: playlist,
-                        onTap: () => widget.onOpenPlaylist(playlist),
+                        onTap: (cardContext) {
+                          final box = cardContext.findRenderObject() as RenderBox?;
+                          Alignment? alignment;
+                          if (box != null && box.hasSize) {
+                            final size = MediaQuery.sizeOf(cardContext);
+                            final center = box.localToGlobal(box.size.center(Offset.zero));
+                            alignment = Alignment(
+                              ((center.dx / size.width) * 2.0 - 1.0).clamp(-1.0, 1.0),
+                              ((center.dy / size.height) * 2.0 - 1.0).clamp(-1.0, 1.0),
+                            );
+                          }
+                          widget.onOpenPlaylist(playlist, originAlignment: alignment);
+                        },
                       );
                     }, childCount: state.playlists.length),
                   ),
@@ -194,7 +207,7 @@ class _DiscoverPlaylistCard extends StatelessWidget {
   const _DiscoverPlaylistCard({required this.playlist, required this.onTap});
 
   final DiscoveryPlaylist playlist;
-  final VoidCallback onTap;
+  final ValueChanged<BuildContext> onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -212,7 +225,7 @@ class _DiscoverPlaylistCard extends StatelessWidget {
         color: Colors.transparent,
         contentColor: theme.colors.onBackground,
       ),
-      onPressed: onTap,
+      onPressed: () => onTap(context),
       feedbackType: MiuixPressFeedbackType.sink,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -224,21 +237,20 @@ class _DiscoverPlaylistCard extends StatelessWidget {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    if (playlist.coverImgUrl.isEmpty)
-                      fallback
-                    else
-                      CachedNetworkImage(
-                        imageUrl: playlist.coverImgUrl,
-                        httpHeaders: imageHeaders(playlist.coverImgUrl),
-                        fit: BoxFit.cover,
-                        // 网格 cell 宽 ≤ maxCrossAxisExtent(220),按此降采样解码,
-                        // 避免全尺寸封面拖累滚动(见 coverDecodeWidth)。
-                        memCacheWidth: coverDecodeWidth(
-                          220,
-                          MediaQuery.devicePixelRatioOf(context),
-                        ),
-                        errorWidget: (_, _, _) => fallback,
-                      ),
+                    playlist.coverImgUrl.isEmpty
+                        ? fallback
+                        : CachedNetworkImage(
+                            imageUrl: playlist.coverImgUrl,
+                            httpHeaders: imageHeaders(playlist.coverImgUrl),
+                            fit: BoxFit.cover,
+                            fadeInDuration: Duration.zero,
+                            fadeOutDuration: Duration.zero,
+                            memCacheWidth: coverDecodeWidth(
+                              220,
+                              MediaQuery.devicePixelRatioOf(context),
+                            ),
+                            errorWidget: (_, _, _) => fallback,
+                          ),
                     Positioned(
                       top: 10,
                       right: 10,
@@ -273,7 +285,7 @@ class _DiscoverPlaylistCard extends StatelessWidget {
                       bottom: 10,
                       child: _CoverGlassChip(
                         child: MiuixIconButton(
-                          onPressed: onTap,
+                          onPressed: () => onTap(context),
                           child: MiuixIcon(
                             vector: MiuixIcons.extended.byName(
                               'chevronForward',

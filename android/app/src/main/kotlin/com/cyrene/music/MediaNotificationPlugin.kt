@@ -12,6 +12,8 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Base64
+import android.util.Log
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -343,6 +345,12 @@ class MediaNotificationPlugin : FlutterPlugin, MethodCallHandler {
     }
 
     private fun downloadBitmap(urlStr: String): Bitmap? {
+        // 本地音乐的封面是 data:image/...;base64,... 数据 URL（来自音频内嵌
+        // 元数据），无法走 HttpURLConnection；先剥离前缀与 base64 解码，
+        // 再用 BitmapFactory 解码为 Bitmap。
+        if (urlStr.startsWith("data:")) {
+            return decodeDataUrl(urlStr)
+        }
         return try {
             val conn = URL(urlStr).openConnection() as HttpURLConnection
             conn.connectTimeout = 8000
@@ -353,6 +361,24 @@ class MediaNotificationPlugin : FlutterPlugin, MethodCallHandler {
                 BitmapFactory.decodeStream(input)
             }
         } catch (e: Exception) {
+            null
+        }
+    }
+
+    /// 解码 `data:[<mediatype>][;base64],<data>` 数据 URL 为 [Bitmap]。
+    ///
+    /// 仅处理 base64 编码的图片数据 URL（本地音乐封面由
+    /// `AudioMetadataReader._pictureToDataUrl` 生成，格式固定为
+    /// `data:<mime>;base64,<payload>`）。非 base64 或解码失败返回 null。
+    private fun decodeDataUrl(urlStr: String): Bitmap? {
+        return try {
+            val commaIdx = urlStr.indexOf(',')
+            if (commaIdx < 0) return null
+            val payload = urlStr.substring(commaIdx + 1)
+            val bytes = Base64.decode(payload, Base64.DEFAULT)
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        } catch (e: Exception) {
+            Log.w("MediaNotificationPlugin", "decodeDataUrl failed", e)
             null
         }
     }

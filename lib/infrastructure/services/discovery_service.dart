@@ -10,6 +10,23 @@ import '../../domain/models/track.dart';
 import '../core/api_client.dart';
 import '../core/url_service.dart';
 
+/// Spotify 专辑预览（用于首页「新碟上架」）。
+typedef SpotifyAlbumPreview = ({
+  String id,
+  String name,
+  String artists,
+  String coverImgUrl,
+});
+
+/// Spotify 歌单预览（用于首页「分类精选」）。
+typedef SpotifyPlaylistPreview = ({
+  String id,
+  String name,
+  String description,
+  String coverImgUrl,
+  int trackCount,
+});
+
 /// 发现页服务（对应 Next.js demo/lib/services/discoveryService.ts）。
 ///
 /// 单例。榜单 / 推荐 / 歌单详情 / 发现页标签与歌单 / 评论 / 曲目转换。
@@ -19,7 +36,7 @@ class DiscoveryService implements DiscoverRepository {
   DiscoveryService._();
   static final DiscoveryService instance = DiscoveryService._();
 
-  static const _spotifyCharts =
+  static const _spotifyStandardCharts =
       <({String id, String title, String description})>[
         (
           id: '37i9dQZEVXbMDoHDwVN2tF',
@@ -36,6 +53,25 @@ class DiscoveryService implements DiscoverRepository {
           title: '美国热门 50',
           description: 'Spotify 美国地区热门歌曲',
         ),
+        (
+          id: '37i9dQZF1DXcBWIGoYBM5M',
+          title: '今日热播',
+          description: 'Spotify 官方编辑的全球热门曲目',
+        ),
+        (
+          id: '37i9dQZF1DWWzBc3Sigger',
+          title: '流行崛起',
+          description: '正在上升的流行音乐新作',
+        ),
+        (
+          id: '37i9dQZF1DX0XUsuxWHRQd',
+          title: '说唱焦点',
+          description: 'Spotify 嘻哈与说唱精选',
+        ),
+      ];
+
+  static const _spotifyChineseCharts =
+      <({String id, String title, String description})>[
         (
           id: '37i9dQZEVXbLwpL8TjsxOG',
           title: '香港热门 50',
@@ -114,8 +150,10 @@ class DiscoveryService implements DiscoverRepository {
   /// 桌面榜单页使用的 Spotify 精选榜单。每个榜单由后端 librespot
   /// `/spotify/playlist/:id` 接口读取；移动端不会调用此方法。
   Future<List<Toplist>> getSpotifyToplists({int limit = 50}) async {
+    final allCharts = [..._spotifyStandardCharts, ..._spotifyChineseCharts];
+    final standardCount = _spotifyStandardCharts.length;
     final results = await Future.wait(
-      _spotifyCharts.indexed.map((entry) async {
+      allCharts.indexed.map((entry) async {
         final (index, chart) = entry;
         try {
           final response = await ApiClient.instance.apiFetch(
@@ -179,10 +217,10 @@ class DiscoveryService implements DiscoverRepository {
     );
     final available = results.whereType<Toplist>().toList(growable: false);
     final standardCharts = available
-        .where((chart) => chart.id >= -3)
+        .where((chart) => chart.id >= -standardCount)
         .toList(growable: false);
     final chineseSources = available
-        .where((chart) => chart.id < -3)
+        .where((chart) => chart.id < -standardCount)
         .toList(growable: false);
     if (chineseSources.isEmpty) return standardCharts;
 
@@ -216,6 +254,155 @@ class DiscoveryService implements DiscoverRepository {
       source: MusicSource.spotify,
     );
     return [...standardCharts, chineseChart];
+  }
+
+  /// 从 Spotify Web API images 数组中提取封面 URL。
+  String _extractSpotifyImageUrl(List<dynamic>? images) {
+    if (images == null) return '';
+    for (final image in images) {
+      if (image is Map) {
+        final url = image['url']?.toString();
+        if (url != null && url.isNotEmpty) return url;
+      }
+    }
+    return '';
+  }
+
+  /// 获取 Spotify 新碟上架（专辑列表）。
+  Future<List<SpotifyAlbumPreview>> getSpotifyNewReleases({
+    int limit = 20,
+    int offset = 0,
+    String country = 'US',
+  }) async {
+    try {
+      final response = await ApiClient.instance.apiFetch(
+        UrlService.instance.spotifyNewReleasesUrl(
+          limit: limit,
+          offset: offset,
+          country: country,
+        ),
+      );
+      final result = _decode(response);
+      final albums = result['albums'];
+      if (albums is! Map) return const [];
+      final items = albums['items'];
+      if (items is! List) return const [];
+      return items
+          .whereType<Map>()
+          .map<SpotifyAlbumPreview>((raw) {
+            final album = Map<String, Object?>.from(raw);
+            final artists = (album['artists'] as List? ?? const [])
+                .whereType<Map>()
+                .map((a) => a['name']?.toString() ?? '')
+                .where((name) => name.isNotEmpty)
+                .join(' / ');
+            return (
+              id: album['id']?.toString() ?? '',
+              name: album['name']?.toString() ?? '',
+              artists: artists,
+              coverImgUrl: _extractSpotifyImageUrl(album['images'] as List?),
+            );
+          })
+          .where((album) => album.id.isNotEmpty)
+          .toList(growable: false);
+    } catch (e) {
+      debugPrint('[DiscoveryService] getSpotifyNewReleases failed: $e');
+      return const [];
+    }
+  }
+
+  /// 获取 Spotify 某分类下的精选歌单。
+  Future<List<SpotifyPlaylistPreview>> getSpotifyCategoryPlaylists(
+    String categoryId, {
+    int limit = 20,
+    int offset = 0,
+    String country = 'US',
+  }) async {
+    try {
+      final response = await ApiClient.instance.apiFetch(
+        UrlService.instance.spotifyCategoryPlaylistsUrl(
+          categoryId,
+          limit: limit,
+          offset: offset,
+          country: country,
+        ),
+      );
+      final result = _decode(response);
+      final playlists = result['playlists'];
+      if (playlists is! Map) return const [];
+      final items = playlists['items'];
+      if (items is! List) return const [];
+      return items
+          .whereType<Map>()
+          .map<SpotifyPlaylistPreview>((raw) {
+            final playlist = Map<String, Object?>.from(raw);
+            final tracks = playlist['tracks'];
+            final trackCount = tracks is Map
+                ? (tracks['total'] as num?)?.toInt() ?? 0
+                : 0;
+            return (
+              id: playlist['id']?.toString() ?? '',
+              name: playlist['name']?.toString() ?? '',
+              description: playlist['description']?.toString() ?? '',
+              coverImgUrl: _extractSpotifyImageUrl(playlist['images'] as List?),
+              trackCount: trackCount,
+            );
+          })
+          .where((playlist) => playlist.id.isNotEmpty)
+          .toList(growable: false);
+    } catch (e) {
+      debugPrint('[DiscoveryService] getSpotifyCategoryPlaylists failed: $e');
+      return const [];
+    }
+  }
+
+  /// 获取 Spotify 专辑曲目。
+  Future<List<ToplistTrack>> getSpotifyAlbumTracks(
+    String albumId, {
+    int limit = 50,
+    int offset = 0,
+    String country = 'US',
+  }) async {
+    try {
+      final response = await ApiClient.instance.apiFetch(
+        UrlService.instance.spotifyAlbumTracksUrl(
+          albumId,
+          limit: limit,
+          offset: offset,
+          country: country,
+        ),
+      );
+      final result = _decode(response);
+      final items = result['items'];
+      if (items is! List) return const [];
+      final albumMeta = result['album'];
+      final albumName =
+          albumMeta is Map ? albumMeta['name']?.toString() ?? '' : '';
+      return items
+          .whereType<Map>()
+          .map<ToplistTrack>((raw) {
+            final track = Map<String, Object?>.from(raw);
+            final artists = (track['artists'] as List? ?? const [])
+                .whereType<Map>()
+                .map((a) => a['name']?.toString() ?? '')
+                .where((name) => name.isNotEmpty)
+                .join(' / ');
+            return ToplistTrack(
+              id: track['id']?.toString() ?? '',
+              name: track['name']?.toString() ?? '',
+              artists: artists,
+              album: albumName,
+              picUrl: '',
+              duration: (track['duration_ms'] as num?)?.toInt(),
+              source: MusicSource.spotify,
+            );
+          })
+          .where((track) => track.id.isNotEmpty)
+          .toList(growable: false);
+    } catch (e) {
+      debugPrint('[DiscoveryService] getSpotifyAlbumTracks failed: $e');
+      return const [];
+    }
   }
 
   /// 获取「推荐」聚合数据（每日歌曲 / 私人 FM / 推荐歌单等）。

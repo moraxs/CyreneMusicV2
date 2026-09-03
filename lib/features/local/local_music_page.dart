@@ -388,7 +388,9 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
 
     final tracks = entries
         .map(LocalMusicService.instance.toTrack)
-        .map((track) => track.copyWith(playbackUrl: Uri.file(track.filePath!)))
+        // content:// URI（Android SAF）与 file:// 路径（桌面/旧导入）均需支持，
+        // 用 Uri.parse 统一处理，避免 Uri.file 对 content:// 抛 FormatException。
+        .map((track) => track.copyWith(playbackUrl: Uri.parse(track.filePath!)))
         .toList(growable: false);
     return CyrenePullToRefresh(
       onRefresh: _load,

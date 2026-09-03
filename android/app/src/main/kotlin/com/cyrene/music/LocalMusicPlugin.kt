@@ -17,8 +17,6 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 import io.flutter.plugin.common.PluginRegistry.ActivityResultListener
-import java.io.File
-import java.io.FileOutputStream
 import java.nio.charset.Charset
 import java.util.Locale
 import java.util.concurrent.ExecutorService
@@ -30,13 +28,17 @@ import java.util.concurrent.Executors
 /// （`path` 指向缓存文件），而选文件夹（`getDirectoryPath`）的返回值按
 /// DocumentsProvider 的 tree id 拼装成一条不一定真实存在的 `/storage/...` 路径，
 /// 二者都拿不到可供 `dart:io` 稳定读写的真实文件。于是这里用原生 SAF
-/// （Storage Access Framework）重新实现两条导入通道，把用户选的音频复制成
-/// **应用私有目录下的真实文件**，返回给 Flutter 端的是真实 `file://` 路径：
-/// - `pickFiles`：ACTION_OPEN_DOCUMENT 多选音频（含同名 .lrc 一并复制）
-/// - `pickFolder`：ACTION_OPEN_DOCUMENT_TREE 选目录，递归扫描音频并复制
+/// （Storage Access Framework）重新实现两条导入通道。
 ///
-/// 复制出的文件落在 `getExternalFilesDir("music")`（app 专属目录，无需任何
-/// 存储权限），以「原文件名 + 时间戳 + 序号」去重，避免重名覆盖。
+/// **不再复制文件**：直接持久化 SAF 的 `content://` URI 权限，把原始 URI
+/// 返回给 Flutter 端。播放由 media_kit 内部的 `AndroidContentUriProvider`
+/// 把 `content://` 转为 `fd://` 供 libmpv 读取；元数据由 [readUriBytes] 通过
+/// ContentResolver 读出字节后交 Dart 端解析。这样避免了把整库音频复制进
+/// 应用私有目录导致的双倍存储占用。
+///
+/// - `pickFiles`：ACTION_OPEN_DOCUMENT 多选音频（含同名 .lrc 内容一并读取）
+/// - `pickFolder`：ACTION_OPEN_DOCUMENT_TREE 选目录，递归扫描音频
+/// - `readUriBytes`：读取单个 `content://` URI 的全部字节（供 Dart 解析元数据）
 class LocalMusicPlugin : FlutterPlugin, ActivityAware, MethodCallHandler,
     ActivityResultListener {
 
@@ -48,7 +50,6 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, MethodCallHandler,
         private const val REQUEST_PICK_FOLDER = 2102
 
         private const val MAX_DIRECTORY_DEPTH = 20
-        private const val COPY_BUFFER_SIZE = 65536
 
         private val AUDIO_MIME_TYPES = arrayOf(
             "audio/mpeg",
@@ -126,6 +127,23 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, MethodCallHandler,
         when (call.method) {
             "pickFiles" -> launchPickFiles(result)
             "pickFolder" -> launchPickFolder(result)
+            "readUriBytes" -> {
+                val uriStr = call.argument<String>("uri")
+                if (uriStr.isNullOrEmpty()) {
+                    result.error("invalid_argument", "uri is required", null)
+                    return
+                }
+                ioExecutor.execute {
+                    val bytes = readUriBytes(uriStr)
+                    mainHandler.post {
+                        if (bytes != null) {
+                            result.success(bytes)
+                        } else {
+                            result.error("read_failed", "Unable to read $uriStr", null)
+                        }
+                    }
+                }
+            }
             else -> result.notImplemented()
         }
     }
@@ -225,8 +243,21 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, MethodCallHandler,
             data.data?.let { uris.add(it) }
         }
 
+        // 持久化每个所选 URI 的读权限，使应用重启后仍可访问（content:// URI
+        // 的权限随 app 签名绑定，重装会失效，但重启不会）。
+        for (uri in uris) {
+            try {
+                ctx.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "takePersistableUriPermission failed for $uri", e)
+            }
+        }
+
         // 先收集同批选中的 .lrc，建立「文件名(不含扩展名) → 内容」映射，
-        // 供音频文件复制时查找同名歌词。
+        // 供音频文件导入时查找同名歌词。
         val lrcByBaseName = mutableMapOf<String, String>()
         val audioUris = mutableListOf<Uri>()
         for (uri in uris) {
@@ -243,8 +274,13 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, MethodCallHandler,
         for (uri in audioUris) {
             val name = queryDisplayName(ctx, uri) ?: continue
             val baseName = name.substringBeforeLast('.')
-            val imported = importUri(ctx, uri, name, lrcByBaseName[baseName]) ?: continue
-            tracks.add(imported)
+            tracks.add(
+                ImportedTrack(
+                    uri = uri.toString(),
+                    displayName = name,
+                    sidecarLrc = lrcByBaseName[baseName],
+                )
+            )
         }
         return tracks
     }
@@ -267,11 +303,12 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, MethodCallHandler,
         return tracks
     }
 
-    /// 递归遍历所选目录树，找到音频文件后复制到应用私有目录。
+    /// 递归遍历所选目录树，找到音频文件后直接收集其 content:// URI（不复制）。
     ///
     /// [treeUri] 始终为根 Tree URI，[dirDocId] 为当前目录的 document ID。
     /// 必须使用 `buildChildDocumentsUriUsingTree(treeUri, dirDocId)`，避免将
-    /// childUri 当成 treeUri 导致的死循环。
+    /// childUri 当成 treeUri 导致的死循环。子文档 URI 的访问依赖根 treeUri
+    /// 的持久化权限，无需为每个子 URI 单独 takePersistableUriPermission。
     private fun scanDirectory(
         ctx: Context,
         treeUri: Uri,
@@ -337,7 +374,13 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, MethodCallHandler,
 
         for ((uri, name) in pendingAudio) {
             val baseName = name.substringBeforeLast('.')
-            importUri(ctx, uri, name, lrcByBaseName[baseName])?.let { out.add(it) }
+            out.add(
+                ImportedTrack(
+                    uri = uri.toString(),
+                    displayName = name,
+                    sidecarLrc = lrcByBaseName[baseName],
+                )
+            )
         }
 
         for (subDirDocId in subDirs) {
@@ -360,40 +403,20 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, MethodCallHandler,
     }
 
     // -------------------------------------------------------------------------
-    // 复制到应用私有目录（真实文件）
+    // ContentResolver 读取（供 Dart 端解析元数据）
     // -------------------------------------------------------------------------
 
-    private fun importUri(
-        ctx: Context,
-        uri: Uri,
-        preferredName: String,
-        sidecarLrc: String?,
-    ): ImportedTrack? {
-        if (!isSupportedAudio(ctx, uri)) return null
-
-        val targetDir = File(ctx.getExternalFilesDir(null), "music").apply { mkdirs() }
-        val audioFile = uniqueFile(targetDir, preferredName)
-
-        val ok = copyToFile(ctx, uri, audioFile)
-        if (!ok || audioFile.length() == 0L) {
-            audioFile.delete()
-            return null
+    /// 读取 `content://` URI 的全部字节。供 Dart 端 [AudioMetadataReader] 解析
+    /// 元数据使用。失败返回 null。
+    private fun readUriBytes(uriStr: String): ByteArray? {
+        val ctx = context ?: return null
+        return try {
+            val uri = Uri.parse(uriStr)
+            ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        } catch (e: Exception) {
+            Log.e(TAG, "readUriBytes failed: $uriStr", e)
+            null
         }
-
-        var sidecarLrcPath: String? = null
-        if (sidecarLrc != null && sidecarLrc.isNotEmpty()) {
-            val baseName = preferredName.substringBeforeLast('.')
-            val lrcFile = uniqueFile(targetDir, "$baseName.lrc")
-            if (writeLrcContent(lrcFile, sidecarLrc)) {
-                sidecarLrcPath = lrcFile.absolutePath
-            }
-        }
-
-        return ImportedTrack(
-            filePath = audioFile.absolutePath,
-            displayName = preferredName,
-            sidecarLrcPath = sidecarLrcPath,
-        )
     }
 
     private fun readLrcContent(ctx: Context, uri: Uri): String? {
@@ -414,29 +437,6 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, MethodCallHandler,
         }
     }
 
-    private fun writeLrcContent(target: File, content: String): Boolean {
-        return try {
-            target.writeText(content)
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    private fun copyToFile(ctx: Context, uri: Uri, target: File): Boolean {
-        return try {
-            ctx.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(target).use { output ->
-                    input.copyTo(output, COPY_BUFFER_SIZE)
-                }
-                true
-            } ?: false
-        } catch (e: Exception) {
-            Log.e(TAG, "copy failed: $uri", e)
-            false
-        }
-    }
-
     private fun queryDisplayName(ctx: Context, uri: Uri): String? {
         return try {
             ctx.contentResolver.query(
@@ -450,32 +450,22 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, MethodCallHandler,
             null
         }
     }
-
-    private fun uniqueFile(dir: File, name: String): File {
-        val safeName = name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-        val dot = safeName.lastIndexOf('.')
-        val base = if (dot > 0) safeName.substring(0, dot) else safeName
-        val ext = if (dot > 0) safeName.substring(dot) else ""
-        var candidate = File(dir, safeName)
-        var index = 1
-        while (candidate.exists()) {
-            candidate = File(dir, "$base (${index++})$ext")
-        }
-        return candidate
-    }
 }
 
 /// 单个成功导入的音轨，映射为 Dart 侧可读的 map。
+///
+/// [uri] 为 SAF 返回的 `content://` URI 字符串，作为曲目的主键与播放地址；
+/// [sidecarLrc] 为同名 .lrc 的文本内容（已解码），无则 null。
 data class ImportedTrack(
-    val filePath: String,
+    val uri: String,
     val displayName: String,
-    val sidecarLrcPath: String?,
+    val sidecarLrc: String?,
 ) {
     fun toMap(): Map<String, Any?> {
         return hashMapOf<String, Any?>(
-            "filePath" to filePath,
+            "filePath" to uri,
             "displayName" to displayName,
-            "sidecarLrcPath" to sidecarLrcPath,
+            "sidecarLrc" to sidecarLrc,
         )
     }
 }
