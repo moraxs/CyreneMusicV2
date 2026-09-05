@@ -89,13 +89,21 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "cyrene_music_reborn" "\0"
+            // 注意：path_provider_windows 在运行时从这里读 CompanyName 与
+            // ProductName，拼出 %APPDATA%\<CompanyName>\<ProductName> 当作应用
+            // 数据目录（偏好、崩溃日志、歌曲缓存都落在里面）。改这两行等于给
+            // 应用数据搬家，务必同步 WindowsAppDataMigration 里的旧路径常量。
+            //
+            // 也别改成 "Cyrene Music"\"Cyrene Music"——那是原版 cyrene_music
+            // 项目占用的目录，两个应用会共用同一份 shared_preferences.json。
+            VALUE "CompanyName", "Cyrene" "\0"
+            VALUE "FileDescription", "Cyrene Music" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "cyrene_music_reborn" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.example. All rights reserved." "\0"
+            VALUE "InternalName", "Cyrene Music" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Cyrene. All rights reserved." "\0"
+            // 必须与 windows/CMakeLists.txt 的 BINARY_NAME 保持一致。
             VALUE "OriginalFilename", "cyrene_music_reborn.exe" "\0"
-            VALUE "ProductName", "cyrene_music_reborn" "\0"
+            VALUE "ProductName", "Cyrene Music" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

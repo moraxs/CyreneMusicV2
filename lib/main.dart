@@ -30,6 +30,7 @@ import 'features/taskbar_player/taskbar_player_controller.dart';
 import 'features/player/mobile/compat/lyric_font_service.dart';
 import 'features/player/mobile/compat/lyric_style_service.dart';
 import 'features/player/mobile/compat/player_background_service.dart';
+import 'infrastructure/cache/song_cache_service.dart';
 import 'infrastructure/core/url_service.dart';
 import 'infrastructure/media_notification/media_notification_service.dart';
 import 'infrastructure/media_notification/ios_now_playing_service.dart';
@@ -39,6 +40,7 @@ import 'infrastructure/services/developer_mode_service.dart';
 import 'infrastructure/services/listening_card_sync.dart';
 import 'infrastructure/services/system_tray_service.dart';
 import 'infrastructure/services/update_service.dart';
+import 'infrastructure/storage/windows_app_data_migration.dart';
 import 'presentation/cyrene/cyrene_theme.dart';
 import 'presentation/cyrene/cyrene_toast.dart';
 
@@ -69,6 +71,12 @@ Future<void> main(List<String> args) async {
     runApp(const TaskbarPlayerApp());
     return;
   }
+
+  // ===== 应用数据目录搬家（Windows）=====
+  // 必须排在所有会碰应用数据的初始化之前（崩溃日志、偏好存储都写在里面）。
+  // 见 WindowsAppDataMigration：目录名跟着 Runner.rc 的 CompanyName/ProductName
+  // 走，改名后老用户的登录态与设置得靠这一步搬过去。
+  await WindowsAppDataMigration.run();
 
   // ===== 主引擎：崩溃日志 + 全局异常捕获（启动期最先初始化）=====
   // 即使后续初始化（media_kit / 窗口效果 / 偏好）崩了，也把异常写到文件。
@@ -145,6 +153,9 @@ Future<void> _bootstrap(List<String> args) async {
     OnboardingStore.instance.init(),
     // 开发者模式状态（决定设置页「开发者选项」入口与性能叠加层）。
     DeveloperModeService.instance.ensureLoaded(),
+    // 歌曲缓存：开关/目录须在首次解析音源前就绪，否则冷启动第一首歌查不到
+    // 缓存，会白白再联网取一次流。
+    SongCacheService.instance.init(),
     // 移植版播放器（原版全屏播放器）的样式/背景/字体偏好，与原版 main 一致。
     LyricStyleService().initialize(),
     PlayerBackgroundService().initialize(),

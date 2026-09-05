@@ -9,7 +9,11 @@ import '../application/playlists/playlist_library_controller.dart';
 import '../application/search/search_controller.dart';
 import '../domain/discovery/discover_repository.dart';
 import '../domain/models/discovery.dart';
+import '../domain/playback/audio_cache.dart';
 import '../domain/playback/audio_player_gateway.dart';
+import '../infrastructure/audio/audio_filter_chain.dart';
+import '../infrastructure/cache/song_cache_service.dart';
+import '../infrastructure/audio/dsp_effects_service.dart';
 import '../infrastructure/audio/equalizer_service.dart';
 import '../infrastructure/audio/media_kit_player_gateway.dart';
 import '../infrastructure/core/api_client.dart';
@@ -41,13 +45,23 @@ class AppDependencies {
 
   factory AppDependencies.production() {
     final gateway = MediaKitPlayerGateway();
-    // 均衡器直接操作 libmpv 的 af 属性，需拿到底层 Player；
+    // 均衡器与 DSP 音效都经 af 属性操作 libmpv，需拿到底层 Player；
     // preview（SilentAudioPlayerGateway）下不绑定，设置仍可编辑与持久化。
-    unawaited(EqualizerService.instance.attach(gateway.player));
+    unawaited(_applyAudioFilters(gateway));
     return AppDependencies._build(
       gateway,
       discoverRepository: DiscoveryService.instance,
+      // 歌曲缓存：命中即绕过音源解析直接播本地解密流（见 SongCacheService）。
+      // preview 走 NoOpAudioCache，不碰磁盘。
+      cache: SongCacheService.instance,
     );
+  }
+
+  /// 先绑定播放器再让各服务登记片段，避免 attach 时链上还是空的。
+  static Future<void> _applyAudioFilters(MediaKitPlayerGateway gateway) async {
+    await AudioFilterChain.instance.attach(gateway.player);
+    await EqualizerService.instance.ensureApplied();
+    await DspEffectsService.instance.ensureApplied();
   }
 
   factory AppDependencies.preview() => AppDependencies._build(
@@ -58,6 +72,7 @@ class AppDependencies {
   factory AppDependencies._build(
     AudioPlayerGateway audio, {
     required DiscoverRepository discoverRepository,
+    AudioCache cache = const NoOpAudioCache(),
   }) {
     final urls = UrlService.instance;
     final apiClient = ApiClient.instance;
@@ -76,7 +91,7 @@ class AppDependencies {
     final sourceResolver = ConfiguredAudioSourceResolver(
       preferences: preferences,
       sourceClient: sourceClient,
-      cache: const NoOpAudioCache(),
+      cache: cache,
       crossPlatformFallback: CrossPlatformFallbackService(
         apiClient: apiClient,
         urls: urls,

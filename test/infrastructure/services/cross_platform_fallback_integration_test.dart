@@ -169,5 +169,12 @@ class _EmptyAudioCache implements AudioCache {
   const _EmptyAudioCache();
 
   @override
-  Future<Uri?> find(Track track, AudioQuality quality) async => null;
+  Future<CachedAudio?> lookup(Track track, AudioQuality quality) async => null;
+
+  @override
+  Future<Uri> intercept({
+    required Track track,
+    required AudioQuality quality,
+    required Uri remoteUrl,
+  }) async => remoteUrl;
 }

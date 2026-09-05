@@ -108,28 +108,85 @@ void main() {
     expect(resolved.candidates.single.sourceId, 'enabled');
   });
 
-  test('音频命中缓存时第一候选仍会回填解析结果中的歌词', () async {
-    final sourceClient = _FakePlaybackSourceClient()
-      ..fetchedLyrics = null
-      ..resolvedLyrics = const LyricData(
-        lyric: '[00:01]第二首歌词',
-        yrc: '[1000,1000](1000,1000,0)第二首歌词',
-      );
+  test('命中缓存时直接返回缓存候选，不再请求音源（离线可播）', () async {
+    final sourceClient = _FakePlaybackSourceClient();
     final resolver = ConfiguredAudioSourceResolver(
       preferences: _FakePreferencesStore([
         _config('cached-source', ['netease']),
       ]),
       sourceClient: sourceClient,
-      cache: const _HitAudioCache(),
+      cache: _HitAudioCache(
+        lyrics: const LyricData(
+          lyric: '[00:01]缓存里的歌词',
+          yrc: '[1000,1000](1000,1000,0)缓存里的歌词',
+        ),
+      ),
     );
 
     final resolved = await resolver.resolve(_track());
-    final cachedCandidate = resolved.candidates.first;
+    final cachedCandidate = resolved.candidates.single;
 
-    expect(cachedCandidate.sourceId, 'cached-source:cache');
+    expect(sourceClient.calls, isEmpty);
+    expect(cachedCandidate.sourceId, 'cache');
     expect(cachedCandidate.track.playbackUrl, Uri.parse('file:///cached.mp3'));
-    expect(cachedCandidate.track.lyric, '[00:01]第二首歌词');
+    // 歌词随缓存一起落盘，命中后不必再联网取。
+    expect(cachedCandidate.track.lyric, '[00:01]缓存里的歌词');
     expect(cachedCandidate.track.yrc, isNotEmpty);
+  });
+
+  test('缓存里没有歌词时仍补一次网络歌词', () async {
+    final sourceClient = _FakePlaybackSourceClient();
+    final resolver = ConfiguredAudioSourceResolver(
+      preferences: _FakePreferencesStore([
+        _config('cached-source', ['netease']),
+      ]),
+      sourceClient: sourceClient,
+      cache: _HitAudioCache(),
+    );
+
+    final resolved = await resolver.resolve(_track());
+
+    expect(resolved.candidates.single.track.lyric, '[00:01]歌词');
+  });
+
+  test('缓存命中的平台被排除后不再返回该缓存候选（避免死循环）', () async {
+    final resolver = ConfiguredAudioSourceResolver(
+      preferences: _FakePreferencesStore([
+        _config('cached-source', ['netease']),
+      ]),
+      sourceClient: _FakePlaybackSourceClient(),
+      cache: _HitAudioCache(),
+    );
+
+    // 缓存文件加载失败后调用方会排除该平台重来；此时唯一的平台已被排除，
+    // 应当照常报「解析失败」，而不是把同一个缓存候选再交回去。
+    await expectLater(
+      resolver.resolve(_track(), exclude: {MusicSource.netease.wireName}),
+      throwsA(isA<AudioSourceResolutionFailure>()),
+    );
+  });
+
+  test('解析成功后交给缓存中转，播放地址换成中转地址（只下一次）', () async {
+    final cache = _RecordingAudioCache();
+    final resolver = ConfiguredAudioSourceResolver(
+      preferences: _FakePreferencesStore([_config('omni', ['netease'])]),
+      sourceClient: _FakePlaybackSourceClient(),
+      cache: cache,
+    );
+
+    final resolved = await resolver.resolve(_track());
+
+    // 缓存拿到的是源站地址 + 完整曲目信息（含歌词，随音频一起落盘）。
+    expect(cache.captured, hasLength(1));
+    final (track, quality, url) = cache.captured.single;
+    expect(url, Uri.parse('https://cdn.test/netease-id.mp3'));
+    expect(quality, AudioQuality.lossless);
+    expect(track.lyric, '[00:01]歌词');
+    // 播放器拿到的是中转地址，而不是源站地址。
+    expect(
+      resolved.candidates.single.track.playbackUrl,
+      Uri.parse('http://127.0.0.1:9/proxy'),
+    );
   });
 
   test('Android 未启用 LxMusic 运行时时返回受控解析错误', () async {
@@ -261,15 +318,54 @@ class _EmptyAudioCache implements AudioCache {
   const _EmptyAudioCache();
 
   @override
-  Future<Uri?> find(Track track, AudioQuality quality) async => null;
+  Future<CachedAudio?> lookup(Track track, AudioQuality quality) async => null;
+
+  @override
+  Future<Uri> intercept({
+    required Track track,
+    required AudioQuality quality,
+    required Uri remoteUrl,
+  }) async => remoteUrl;
 }
 
 class _HitAudioCache implements AudioCache {
-  const _HitAudioCache();
+  _HitAudioCache({this.lyrics});
+
+  final LyricData? lyrics;
+  final captured = <Uri>[];
 
   @override
-  Future<Uri?> find(Track track, AudioQuality quality) async =>
-      Uri.parse('file:///cached.mp3');
+  Future<CachedAudio?> lookup(Track track, AudioQuality quality) async =>
+      CachedAudio(uri: Uri.parse('file:///cached.mp3'), lyrics: lyrics);
+
+  @override
+  Future<Uri> intercept({
+    required Track track,
+    required AudioQuality quality,
+    required Uri remoteUrl,
+  }) async {
+    captured.add(remoteUrl);
+    return remoteUrl;
+  }
+}
+
+/// 只记录 capture 调用，不命中缓存。
+class _RecordingAudioCache implements AudioCache {
+  final captured = <(Track, AudioQuality, Uri)>[];
+
+  @override
+  Future<CachedAudio?> lookup(Track track, AudioQuality quality) async => null;
+
+  /// 把播放地址换成「本地中转」地址，模拟边播边缓存。
+  @override
+  Future<Uri> intercept({
+    required Track track,
+    required AudioQuality quality,
+    required Uri remoteUrl,
+  }) async {
+    captured.add((track, quality, remoteUrl));
+    return Uri.parse('http://127.0.0.1:9/proxy');
+  }
 }
 
 class _FakePlaybackSourceClient implements PlaybackSourceClient {

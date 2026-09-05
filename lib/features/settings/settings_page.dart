@@ -10,7 +10,9 @@ import '../../application/stores/appearance_settings_store.dart';
 import '../../application/updates/update_controller.dart';
 import '../../domain/models/media_url.dart';
 import '../../domain/models/user.dart';
+import '../../infrastructure/audio/dsp_effects_service.dart';
 import '../../infrastructure/audio/equalizer_service.dart';
+import '../../infrastructure/cache/song_cache_service.dart';
 import '../../infrastructure/services/announcement_service.dart';
 import '../../infrastructure/services/developer_mode_service.dart';
 import '../../presentation/cyrene/cyrene_overlays.dart';
@@ -20,10 +22,21 @@ import '../updates/update_dialogs.dart';
 import 'about_page.dart';
 import 'appearance_settings_page.dart';
 import 'audio_source_settings_page.dart';
+import 'cache_settings_page.dart';
 import 'developer_options_page.dart';
 import 'equalizer_page.dart';
 import 'login_page.dart';
 import 'personal_center_page.dart';
+
+/// 「音效与均衡器」行右侧的状态摘要：均衡器与 DSP 各自的开关合成一句。
+String _audioEffectsSummary() {
+  final parts = [
+    if (EqualizerService.instance.enabled) '均衡器',
+    if (DspEffectsService.isSupported && DspEffectsService.instance.enabled)
+      'DSP ${DspEffectsService.instance.activeCount} 项',
+  ];
+  return parts.isEmpty ? '已关闭' : parts.join(' · ');
+}
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({
@@ -92,14 +105,32 @@ class SettingsPage extends StatelessWidget {
                   ),
                 ),
                 ListenableBuilder(
-                  listenable: EqualizerService.instance,
+                  listenable: Listenable.merge([
+                    EqualizerService.instance,
+                    if (DspEffectsService.isSupported) DspEffectsService.instance,
+                  ]),
                   builder: (context, _) => CyreneMenuRow(
                     vector: MiuixIcons.extended.byName('tune')!,
                     iconBackground: _iconGreen,
                     title: '音效与均衡器',
-                    subtitle: '自定义音频频率响应',
-                    value: EqualizerService.instance.enabled ? '已开启' : '已关闭',
+                    subtitle: DspEffectsService.isSupported
+                        ? '自定义音频频率响应与 DSP 滤镜'
+                        : '自定义音频频率响应',
+                    value: _audioEffectsSummary(),
                     onTap: () => _openPage(context, const EqualizerPage()),
+                  ),
+                ),
+                ListenableBuilder(
+                  listenable: SongCacheService.instance,
+                  builder: (context, _) => CyreneMenuRow(
+                    key: const Key('open-cache-settings'),
+                    vector: MiuixIcons.extended.byName('download')!,
+                    iconBackground: _iconOrange,
+                    title: '歌曲缓存',
+                    subtitle: '加密缓存已播放的歌曲，离线也能听',
+                    value: songCacheSummary(),
+                    onTap: () =>
+                        _openPage(context, const CacheSettingsPage()),
                   ),
                 ),
               ],

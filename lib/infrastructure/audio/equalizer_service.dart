@@ -1,8 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:media_kit/media_kit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'audio_filter_chain.dart';
 
 /// 10 段均衡器（对应原版 PlayerService 的均衡器部分）。
 ///
@@ -10,6 +11,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// 滤镜链（`equalizer=f=31:width_type=o:width=1:g=1.5,...`），因此仅在
 /// media_kit（NativePlayer）后端生效；持久化键名与原版一致
 /// （`player_eq_gains` / `player_eq_enabled`），旧数据可直接沿用。
+///
+/// `af` 由 [AudioFilterChain] 统一写入——DSP 音效也要往同一属性注入滤镜，
+/// 本类只负责登记均衡器那一段。
 class EqualizerService extends ChangeNotifier {
   EqualizerService._();
 
@@ -35,7 +39,6 @@ class EqualizerService extends ChangeNotifier {
   static const _kGains = 'player_eq_gains';
   static const _kEnabled = 'player_eq_enabled';
 
-  Player? _player;
   List<double> _gains = List.filled(frequencies.length, 0.0);
   /// 默认关闭均衡器；仅当用户显式开启时才对音频应用 `af` 滤镜链（原版
   /// 默认开启，但历史残留增益会在每次启动时静默生效，容易造成失真）。
@@ -46,9 +49,8 @@ class EqualizerService extends ChangeNotifier {
   List<double> get gains => List.unmodifiable(_gains);
   bool get enabled => _enabled;
 
-  /// 绑定播放器并应用当前设置（由 AppDependencies 在创建播放网关时调用）。
-  Future<void> attach(Player player) async {
-    _player = player;
+  /// 载入并应用当前设置（由 AppDependencies 绑定播放器后调用）。
+  Future<void> ensureApplied() async {
     await ensureLoaded();
     await _apply();
   }
@@ -110,31 +112,25 @@ class EqualizerService extends ChangeNotifier {
     });
   }
 
-  /// 把当前状态编译成 FFmpeg 滤镜链写入 libmpv。
+  /// 把当前状态编译成 FFmpeg 滤镜片段登记到 [AudioFilterChain]。
   ///
-  /// 与原版相同的细节：|gain| <= 0.1 的频段跳过；链为空或禁用时写空串清除；
+  /// 与原版相同的细节：|gain| <= 0.1 的频段跳过；禁用时登记空列表即摘除；
   /// libmpv 属性在 Player 生命周期内保持，切歌无需重设。
   Future<void> _apply() async {
-    final platform = _player?.platform;
-    if (platform is! NativePlayer) return;
-    try {
-      if (!_enabled) {
-        await platform.setProperty('af', '');
-        return;
-      }
-      final buffer = StringBuffer();
+    final segments = <String>[];
+    if (_enabled) {
       for (var i = 0; i < frequencies.length; i++) {
         final gain = _gains[i];
         if (gain.abs() <= 0.1) continue;
-        if (buffer.isNotEmpty) buffer.write(',');
-        buffer.write(
+        segments.add(
           'equalizer=f=${frequencies[i]}'
           ':width_type=o:width=1:g=${gain.toStringAsFixed(1)}',
         );
       }
-      await platform.setProperty('af', buffer.toString());
-    } catch (e) {
-      debugPrint('[EqualizerService] 应用均衡器失败: $e');
     }
+    await AudioFilterChain.instance.setSegments(
+      AudioFilterChain.equalizerSlot,
+      segments,
+    );
   }
 }

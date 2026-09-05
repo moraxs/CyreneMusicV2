@@ -1,13 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
 
+import '../../infrastructure/audio/dsp_effects_service.dart';
 import '../../infrastructure/audio/equalizer_service.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
+import 'dsp_effects_section.dart';
 
 /// 均衡器设置页（对应原版 equalizer_page.dart 的移动端 Material 版）。
 ///
 /// 预设表、频段、±12dB 范围与文案照抄原版；UI 重排为 HyperOS 风格
 /// （灰底白卡 + Miuix 控件），推子仍是原版的"竖排 10 列"布局。
+///
+/// 均衡器之后追加 [DspEffectsSection]，但仅限捆绑了定制 libmpv 的平台
+/// （目前只有 Windows，见 [DspEffectsService.isSupported]）。
 class EqualizerPage extends StatefulWidget {
   const EqualizerPage({super.key});
 
@@ -42,6 +47,9 @@ class _EqualizerPageState extends State<EqualizerPage> {
     super.initState();
     // 未绑定播放器时（如 preview）也要能查看/编辑已保存的设置。
     _equalizer.ensureLoaded();
+    if (DspEffectsService.isSupported) {
+      DspEffectsService.instance.ensureLoaded();
+    }
   }
 
   /// 与原版一致：每段增益与预设差值都在 0.1 内即视为命中该预设。
@@ -67,7 +75,7 @@ class _EqualizerPageState extends State<EqualizerPage> {
 
   @override
   Widget build(BuildContext context) => CyrenePage(
-    title: '均衡器',
+    title: DspEffectsService.isSupported ? '音效与均衡器' : '均衡器',
     bodyBuilder: (context, topPadding) => ListenableBuilder(
       listenable: _equalizer,
       builder: (context, _) {
@@ -79,6 +87,13 @@ class _EqualizerPageState extends State<EqualizerPage> {
           physics: const BouncingScrollPhysics(),
           padding: topPadding + const EdgeInsets.fromLTRB(12, 4, 12, 40),
           children: [
+            // 只有并排出现 DSP 区块时才需要小标题分节；移动端页面只有均衡器
+            // 一节，页标题已经说明，不再重复。
+            if (DspEffectsService.isSupported)
+              const MiuixSmallTitle(
+                '均衡器',
+                insideMargin: EdgeInsets.fromLTRB(16, 4, 16, 8),
+              ),
             CyreneMenuGroup(
               children: [
                 CyreneMenuRow(
@@ -179,6 +194,7 @@ class _EqualizerPageState extends State<EqualizerPage> {
                 ),
               ),
             ),
+            if (DspEffectsService.isSupported) const DspEffectsSection(),
           ],
         );
       },

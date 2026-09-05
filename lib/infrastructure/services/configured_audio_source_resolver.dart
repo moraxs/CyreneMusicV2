@@ -54,6 +54,11 @@ class ConfiguredAudioSourceResolver implements AudioSourceResolver {
         .toList(growable: false);
     final failures = <String>[];
 
+    // 本地缓存优先于任何音源：命中即短路，既不解析也不联网（离线可播、秒开）。
+    // 放在音源循环之前是有意为之——没启用任何音源时也应该能播已缓存的歌。
+    final cached = await _findCached(track, preferences, excluded);
+    if (cached != null) return cached;
+
     for (final config in enabledSources) {
       for (final sourceRef in track.sourceCandidates) {
         if (excluded.contains(sourceRef.source.wireName)) continue;
@@ -63,7 +68,6 @@ class ConfiguredAudioSourceResolver implements AudioSourceResolver {
         // 生效；其它来源回落到极高音质，避免把网易云 level 透传给别的后端。
         final quality = preferences.quality.effectiveFor(sourceRef.source);
 
-        final cached = await _cache.find(sourceTrack, quality);
         try {
           final resolved = await _sourceClient.resolveUrlFromSource(
             sourceTrack,
@@ -74,36 +78,28 @@ class ConfiguredAudioSourceResolver implements AudioSourceResolver {
               resolved.lyrics ??
               await _sourceClient.fetchLyrics(sourceTrack) ??
               const LyricData();
-          // 主候选为当前平台；若命中缓存则缓存文件优先（同样回填歌词）。
-          final candidates = <PlaybackCandidate>[];
-          if (cached != null) {
-            candidates.add(
-              PlaybackCandidate(
-                track: sourceTrack.copyWith(
-                  playbackUrl: cached,
-                  lyric: lyric.lyric,
-                  yrc: lyric.yrc,
-                  tlyric: lyric.tlyric,
-                  ytlrc: lyric.ytlrc,
-                  romaji: lyric.romaji,
-                ),
-                sourceId: '${config.id}:cache',
-              ),
-            );
-          }
-          candidates.add(
+          final originUrl = _parsePlaybackUri(resolved.url);
+          final resolvedTrack = sourceTrack.copyWith(
+            playbackUrl: originUrl,
+            lyric: lyric.lyric,
+            yrc: lyric.yrc,
+            tlyric: lyric.tlyric,
+            ytlrc: lyric.ytlrc,
+            romaji: lyric.romaji,
+          );
+          // 交给播放器的可能是本地中转地址：播放的同时把音频加密存下来，
+          // 只向源站取一次流（缓存关闭或中转不可用时原样直连）。
+          final playbackUrl = await _cache.intercept(
+            track: resolvedTrack,
+            quality: quality,
+            remoteUrl: originUrl,
+          );
+          final candidates = <PlaybackCandidate>[
             PlaybackCandidate(
-              track: sourceTrack.copyWith(
-                playbackUrl: _parsePlaybackUri(resolved.url),
-                lyric: lyric.lyric,
-                yrc: lyric.yrc,
-                tlyric: lyric.tlyric,
-                ytlrc: lyric.ytlrc,
-                romaji: lyric.romaji,
-              ),
+              track: resolvedTrack.copyWith(playbackUrl: playbackUrl),
               sourceId: config.id,
             ),
-          );
+          ];
           final fallback = resolved.fallbackUrl;
           if (fallback != null && fallback.isNotEmpty) {
             candidates.add(
@@ -127,25 +123,6 @@ class ConfiguredAudioSourceResolver implements AudioSourceResolver {
           return ResolvedAudioSources(candidates);
         } catch (error) {
           failures.add('${config.name}/${sourceRef.source.wireName}: $error');
-          // 当前平台 URL 解析失败（如版权失效）但本地已有缓存：仍用缓存兜底
-          // 并尽量补一次歌词。若缓存加载也失败，调用方会排除该平台继续回退。
-          if (cached != null) {
-            final lyric =
-                await _sourceClient.fetchLyrics(sourceTrack) ?? const LyricData();
-            return ResolvedAudioSources([
-              PlaybackCandidate(
-                track: sourceTrack.copyWith(
-                  playbackUrl: cached,
-                  lyric: lyric.lyric,
-                  yrc: lyric.yrc,
-                  tlyric: lyric.tlyric,
-                  ytlrc: lyric.ytlrc,
-                  romaji: lyric.romaji,
-                ),
-                sourceId: '${config.id}:cache',
-              ),
-            ]);
-          }
         }
       }
     }
@@ -165,6 +142,57 @@ class ConfiguredAudioSourceResolver implements AudioSourceResolver {
       enabledSources.isEmpty ? '尚未启用可用音源。' : '所有音源解析均失败。',
       causes: failures,
     );
+  }
+
+  /// 逐个候选平台查本地缓存，命中即产出唯一候选。
+  ///
+  /// [excluded] 同样要尊重：某平台的缓存文件加载失败后，调用方会排除该平台
+  /// 重新解析，若这里再把同一个缓存候选交回去就成死循环了。
+  ///
+  /// 歌词优先用缓存里那份（离线可用）；缓存里没有才补一次网络请求，且失败
+  /// 不影响播放。
+  Future<ResolvedAudioSources?> _findCached(
+    Track track,
+    AudioSourcePreferences preferences,
+    Set<String> excluded,
+  ) async {
+    for (final sourceRef in track.sourceCandidates) {
+      if (excluded.contains(sourceRef.source.wireName)) continue;
+      final sourceTrack = track.withSource(sourceRef);
+      final quality = preferences.quality.effectiveFor(sourceRef.source);
+      final CachedAudio? cached;
+      try {
+        cached = await _cache.lookup(sourceTrack, quality);
+      } catch (_) {
+        continue;
+      }
+      if (cached == null) continue;
+
+      var lyric = cached.lyrics;
+      if (lyric == null) {
+        try {
+          lyric = await _sourceClient.fetchLyrics(sourceTrack);
+        } catch (_) {
+          // 离线时取歌词必然失败，缓存播放本身不该受影响。
+        }
+      }
+      lyric ??= const LyricData();
+      return ResolvedAudioSources([
+        PlaybackCandidate(
+          track: sourceTrack.copyWith(
+            playbackUrl: cached.uri,
+            duration: cached.duration,
+            lyric: lyric.lyric,
+            yrc: lyric.yrc,
+            tlyric: lyric.tlyric,
+            ytlrc: lyric.ytlrc,
+            romaji: lyric.romaji,
+          ),
+          sourceId: 'cache',
+        ),
+      ]);
+    }
+    return null;
   }
 
   /// 跨平台兜底：仅对无 alternatives 的曲目（导入歌单曲目）触发一次。
@@ -208,16 +236,23 @@ class ConfiguredAudioSourceResolver implements AudioSourceResolver {
               resolved.lyrics ??
               await _sourceClient.fetchLyrics(match.track) ??
               const LyricData();
+          final originUrl = _parsePlaybackUri(resolved.url);
+          final resolvedTrack = match.track.copyWith(
+            playbackUrl: originUrl,
+            lyric: lyric.lyric,
+            yrc: lyric.yrc,
+            tlyric: lyric.tlyric,
+            ytlrc: lyric.ytlrc,
+            romaji: lyric.romaji,
+          );
+          final playbackUrl = await _cache.intercept(
+            track: resolvedTrack,
+            quality: quality,
+            remoteUrl: originUrl,
+          );
           candidates.add(
             PlaybackCandidate(
-              track: match.track.copyWith(
-                playbackUrl: _parsePlaybackUri(resolved.url),
-                lyric: lyric.lyric,
-                yrc: lyric.yrc,
-                tlyric: lyric.tlyric,
-                ytlrc: lyric.ytlrc,
-                romaji: lyric.romaji,
-              ),
+              track: resolvedTrack.copyWith(playbackUrl: playbackUrl),
               sourceId: '${config.id}:cross-fallback',
               fallbackFrom: TrackSourceRef(
                 id: track.id,

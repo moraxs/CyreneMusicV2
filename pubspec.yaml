@@ -34,6 +34,9 @@ dependencies:
   cached_network_image: ^3.4.1
   fluent_ui: ^4.15.1
   cryptography: ^2.9.0
+  # 直接调 libmpv 的 mpv_set_property_string 取返回码（media_kit 的 setProperty
+  # 会把它丢掉），用于判断音频滤镜链是否真的被接受。见 AudioFilterChain。
+  ffi: ^2.1.4
   file_picker: ^11.0.2
   flutter:
     sdk: flutter
@@ -76,6 +79,19 @@ dependencies:
 
   # 暂时停用：该版本在 Windows 上触发 Kotlin 增量编译跨盘符路径异常。
   # adaptive_platform_ui: ^0.1.110
+
+dependency_overrides:
+  # 自定义 libmpv 构建（含 DSP 滤镜：bass/treble/stereowiden/crossfeed/dynaudnorm/
+  # acompressor/alimiter/aecho/acrusher/vibrato）。path 依赖覆盖 pub.dev 的官方包，
+  # 使构建脚本下载我们 fork 的 release —— 官方的最小音频构建只编进了 equalizer。
+  media_kit_libs_windows_audio:
+    path: packages/media_kit_libs_windows_audio
+  media_kit_libs_android_audio:
+    path: packages/media_kit_libs_android_audio
+  media_kit_libs_macos_audio:
+    path: packages/media_kit_libs_macos_audio
+  media_kit_libs_ios_audio:
+    path: packages/media_kit_libs_ios_audio
 
 dev_dependencies:
   flutter_test:
