@@ -34,7 +34,9 @@ import '../../domain/playback/playback_snapshot_store.dart';
 // RepeatMode 与 flutter/material 的同名类冲突，加前缀消歧。
 import '../../domain/playback/repeat_mode.dart' as playback;
 import '../desktop_player/desktop_classic_lyrics.dart';
-import '../player/classic_record_stage.dart';
+import '../player/monet/monet_floating_decor.dart';
+import '../player/monet/monet_palette.dart';
+import '../player/monet/monet_poster.dart';
 import '../player/super_cyrene/super_cyrene_chat_lyrics.dart';
 import '../player/super_cyrene/super_cyrene_classic_lyrics.dart';
 import '../player/super_cyrene/super_cyrene_pixel_lyrics.dart';
@@ -285,13 +287,28 @@ const _kSuperCyreneBackdrop = LinearGradient(
   colors: [Color(0xFF4B3E7A), Color(0xFF241F45), Color(0xFF14172E)],
 );
 
-/// 桌面「经典」预览：左黑胶唱台 + 右流体云歌词，与 [DesktopFullscreenPlayer]
-/// 的主区域同构（省掉底部控制胶囊与悬停标题栏——它们挂着 windowManager 回调，
-/// 在预览里既无意义也有误触风险）。
+/// 桌面「经典」预览：folia「莫奈」海报——左侧曲目信息 + 流体云歌词，右侧向左
+/// 溢出的方形封面，与 [DesktopFullscreenPlayer] 的主区域同构（省掉底部控制胶囊
+/// 与悬停标题栏——它们挂着 windowManager 回调，在预览里既无意义也有误触风险；
+/// 也省掉封面浮动层，那一层要发网络请求）。
+///
+/// `animate: false` 是定格预览的关键：入场动画与花瓣飘落都停在终态，卡片才是一张
+/// 静止的真实截图而不是一段永不 settle 的动画。
 class DesktopClassicPreview extends StatelessWidget {
   const DesktopClassicPreview({super.key, required this.playback});
 
   final PlaybackController playback;
+
+  /// 预览的莫奈调色板。
+  ///
+  /// 真实播放器这里由封面提色算出（`MonetPalette.fromThemeColor`），预览不联网
+  /// 也就没有封面，取一组与 [_kClassicBackdrop] 同调的定值。
+  static const _palette = MonetPalette(
+    primary: Color(0xFFF3F1F8),
+    secondary: Color(0xFFC9C2E0),
+    accent: Color(0xFF8B7BD8),
+    background: Color(0xFF17151D),
+  );
 
   @override
   Widget build(BuildContext context) => _PreviewCanvas(
@@ -300,30 +317,29 @@ class DesktopClassicPreview extends StatelessWidget {
     backdrop: _kClassicBackdrop.colors.last,
     child: DecoratedBox(
       decoration: const BoxDecoration(gradient: _kClassicBackdrop),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(28, 32, 28, 32),
-        child: Row(
-          children: [
-            const Expanded(
-              flex: 45,
-              // isPlaying: false —— 定格预览，唱片不转、唱臂停在起始角度。
-              child: ClassicRecordStage(
-                track: previewTrack,
-                size: 210,
-                isPlaying: false,
-                cover: PreviewCover(iconSize: 52),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          const MonetFloatingDecor(palette: _palette, animate: false),
+          MonetPoster(
+            title: previewTrack.name,
+            artist: previewTrack.artists,
+            album: previewTrack.album,
+            palette: _palette,
+            cover: null,
+            coverFallback: const PreviewCover(iconSize: 52),
+            animate: false,
+            contentBuilder: (context, metrics) => ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: 780 * metrics.layoutScale,
               ),
-            ),
-            const SizedBox(width: 24),
-            Expanded(
-              flex: 55,
               child: DesktopClassicLyrics(
                 playback: playback,
                 track: previewTrack,
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     ),
   );

@@ -1,6 +1,6 @@
-import 'package:cyrene_music_reborn/features/player/classic_record_stage.dart';
 import 'package:cyrene_music_reborn/features/player/mobile/compat/lyric_parser.dart';
 import 'package:cyrene_music_reborn/features/player/mobile/compat/player_service.dart';
+import 'package:cyrene_music_reborn/features/player/monet/monet_poster.dart';
 import 'package:cyrene_music_reborn/features/settings/player_style_preview.dart';
 import 'package:cyrene_music_reborn/presentation/cyrene/cyrene_theme.dart';
 import 'package:flutter/material.dart';
@@ -57,8 +57,11 @@ void main() {
     );
     await tester.pump();
 
-    // 真实黑胶唱台，而非手绘示意图。
-    expect(find.byType(ClassicRecordStage), findsOneWidget);
+    // 真实的莫奈海报，而非手绘示意图。
+    expect(find.byType(MonetPoster), findsOneWidget);
+    // 海报读得到示例曲目的元数据（专辑名在海报里是大写的）。
+    expect(find.text('晚风与星光'), findsOneWidget);
+    expect(find.text('示例专辑'.toUpperCase()), findsOneWidget);
     // 歌词组件解析出了内容（没有落到「暂无歌词」占位）。
     expect(find.text('暂无歌词'), findsNothing);
 

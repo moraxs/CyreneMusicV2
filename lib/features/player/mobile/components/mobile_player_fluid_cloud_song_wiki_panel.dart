@@ -8,6 +8,7 @@ import '../compat/player_service.dart';
 import '../compat/wiki_services.dart';
 import '../compat/playlist_queue_service.dart';
 import 'mobile_player_song_comments.dart';
+import '../../../ai/ai_song_appreciation_card.dart';
 import '../../../../domain/models/track.dart';
 import '../../../../domain/models/media_url.dart';
 import '../../../../domain/models/music_source.dart';
@@ -504,6 +505,18 @@ class _MobilePlayerFluidCloudSongWikiPanelState extends State<MobilePlayerFluidC
           ),
         ),
         const SizedBox(height: 32),
+
+        // AI 赏析：没配置 AI 时整块不渲染，配了也要点一下才发请求。
+        // 曲风/BPM/歌手简介直接把本面板已经加载好的传过去，省掉重复请求。
+        AiSongAppreciationCard(
+          track: track,
+          styles: styles,
+          language: language,
+          bpm: bpm,
+          artistBio: _artistsDataList.isEmpty
+              ? ''
+              : (_artistsDataList.first['desc'] as String? ?? ''),
+        ),
 
         // 音乐百科元数据
         if (styles.isNotEmpty || language.isNotEmpty || bpm.isNotEmpty) ...[

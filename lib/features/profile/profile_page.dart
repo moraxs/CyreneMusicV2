@@ -14,6 +14,7 @@ import '../../presentation/cyrene/cyrene_page.dart';
 import '../../presentation/cyrene/cyrene_toast.dart';
 import '../../presentation/cyrene/cyrene_user_hero_card.dart';
 import '../history/history_page.dart';
+import '../together/together_lobby_page.dart';
 import '../local/local_music_page.dart';
 import '../playlist/playlist_detail_page.dart';
 import '../settings/login_page.dart';
@@ -107,6 +108,12 @@ class _ProfilePageState extends State<ProfilePage> {
                     context,
                     LocalMusicPage(playback: widget.playback),
                   ),
+                ),
+                CyreneMenuRow(
+                  icon: Icons.groups_rounded,
+                  title: '一起听',
+                  subtitle: '和朋友同步听歌、发弹幕',
+                  onTap: () => _open(context, const TogetherLobbyPage()),
                 ),
                 CyreneMenuRow(
                   icon: Icons.history_rounded,

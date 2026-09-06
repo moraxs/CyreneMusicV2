@@ -22,6 +22,9 @@ import 'application/playback/playback_history_recorder.dart';
 import 'application/stores/appearance_settings_store.dart';
 import 'application/stores/fullscreen_settings_store.dart';
 import 'application/stores/onboarding_store.dart';
+import 'application/stores/ai_settings_store.dart';
+import 'application/stores/together_settings_store.dart';
+import 'application/together/together_controller.dart';
 import 'application/stores/window_material_settings_store.dart';
 import 'features/desktop_player/desktop_player_app.dart';
 import 'features/desktop_player/desktop_player_controller.dart';
@@ -156,6 +159,10 @@ Future<void> _bootstrap(List<String> args) async {
     // 歌曲缓存：开关/目录须在首次解析音源前就绪，否则冷启动第一首歌查不到
     // 缓存，会白白再联网取一次流。
     SongCacheService.instance.init(),
+    // 一起听：开关要在播放器绑定前就绪，否则冷启动后第一首歌不会自动开房。
+    TogetherSettingsStore.instance.init(),
+    // AI：设置项要在首帧前就绪，否则会先闪一下「未配置」再变成已就绪。
+    AiSettingsStore.instance.init(),
     // 移植版播放器（原版全屏播放器）的样式/背景/字体偏好，与原版 main 一致。
     LyricStyleService().initialize(),
     PlayerBackgroundService().initialize(),
@@ -163,6 +170,12 @@ Future<void> _bootstrap(List<String> args) async {
   ]);
   UpdateService.instance.setCurrentVersion(appVersion);
   final dependencies = AppDependencies.production();
+  // 一起听：房主靠播放器状态广播，听众收到同步后反过来驱动播放器，
+  // 因此要在这里把两者绑上（开关关着时它什么都不做）。
+  TogetherController.instance.bind(
+    playback: dependencies.playback,
+    account: dependencies.account,
+  );
   // 桌面播放器的播放状态来源：子窗口是独立 isolate，歌词要靠主窗口把状态
   // 推送过去（见 desktop_player_bridge.dart）。无条件注入——设置页里随时
   // 可能打开开关，那里拿不到 AppDependencies。

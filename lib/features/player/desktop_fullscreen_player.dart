@@ -5,6 +5,7 @@ import 'dart:ui' show FontFeature, ImageFilter;
 
 import 'package:flutter/cupertino.dart' show CupertinoIcons, CupertinoPageRoute;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter_miuix/miuix.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:window_manager/window_manager.dart';
@@ -15,17 +16,31 @@ import '../../application/playback/playback_controller.dart';
 import '../../domain/models/music_source.dart';
 import '../../domain/models/track.dart';
 import '../settings/equalizer_page.dart';
-import 'classic_record_stage.dart';
 import 'desktop_favorite_button.dart';
 import 'mobile/compat/lyric_line.dart';
 import 'mobile/compat/lyric_parser.dart';
+import 'mobile/compat/player_background_service.dart';
 import 'mobile/compat/player_service.dart';
 import 'mobile/components/mobile_player_background.dart';
 import 'mobile/components/mobile_player_fluid_cloud_lyric_panel.dart';
 import 'mobile/components/mobile_player_fluid_cloud_song_wiki_panel.dart';
 import 'mobile/components/mobile_player_song_comments.dart';
+import 'monet/monet_cover_provider.dart';
+import 'monet/monet_floating_cover.dart';
+import 'monet/monet_floating_decor.dart';
+import 'monet/monet_palette_builder.dart';
+import 'monet/monet_poster.dart';
 import 'queue_sheet.dart';
 import 'track_artwork.dart';
+import '../together/together_player_overlay.dart';
+
+/// 底部胶囊排上方要保持「逐帧完全静止」的高度。
+///
+/// 胶囊排本身占 bottom:24 起的 64px。液态玻璃的边缘描边是从**位移采样的背景**
+/// 算出来的，取样点会伸到胶囊框线外侧，所以只让开胶囊自身的高度不够。任何逐帧
+/// 变化的图层（漂移封面、飘落花瓣）都必须在这条线以上就淡干净，否则那圈白描边
+/// 会跟着采样值一起抖。
+const double _kCapsuleSafeAreaPx = 200;
 
 /// 桌面端专用全屏播放器：左封面、右歌词、底部三段式悬浮胶囊。
 class DesktopFullscreenPlayer extends StatefulWidget {
@@ -57,6 +72,17 @@ class _DesktopFullscreenPlayerState extends State<DesktopFullscreenPlayer>
   List<LyricLine> _lyrics = const [];
   int _currentLyricIndex = -1;
   Object? _lastTrack;
+
+  /// 播放状态 + 播放器背景设置。
+  ///
+  /// 背景设置也必须进这里：换背景类型时要重新判断「要不要画封面浮动层」，
+  /// 只听 playback 的话，用户在设置里切到纯色背景后浮动层会一直挂着不走。
+  /// 合并对象在 initState 建一次——写在 build 里每帧都是新实例，AnimatedBuilder
+  /// 会跟着反复退订重订。
+  late final Listenable _repaint = Listenable.merge([
+    widget.playback,
+    PlayerBackgroundService(),
+  ]);
 
   @override
   void initState() {
@@ -154,208 +180,215 @@ class _DesktopFullscreenPlayerState extends State<DesktopFullscreenPlayer>
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: widget.playback,
-      builder: (context, _) {
-        final state = widget.playback.state;
-        final track = state.currentTrack;
-        final colors = MiuixTheme.of(context).colors;
-        if (track == null) {
-          return Material(
-            color: colors.background,
-            child: const Center(child: Text('还没有选择歌曲')),
-          );
-        }
+    // Esc 退出 / 空格播放暂停，与 SuperCyrene 一致。
+    //
+    // 这层不只是快捷键：本页唯一的退出入口是**悬停顶部才浮现**的标题栏折叠键，
+    // 一旦内容没画出来（或用户不知道要往上悬停），整窗看起来就是卡死且出不去。
+    // 键盘退出是这种情况下的兜底。
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): () {
+          if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+        },
+        const SingleActivator(LogicalKeyboardKey.space):
+            widget.playback.togglePlay,
+      },
+      child: Focus(
+        autofocus: true,
+        child: AnimatedBuilder(
+          animation: _repaint,
+          builder: (context, _) {
+            final state = widget.playback.state;
+            final track = state.currentTrack;
+            final colors = MiuixTheme.of(context).colors;
+            if (track == null) {
+              return Material(
+                color: colors.background,
+                child: const Center(child: Text('还没有选择歌曲')),
+              );
+            }
 
-        return Material(
-          type: MaterialType.transparency,
-          child: Stack(
-            children: [
-              const Positioned.fill(
-                child: MobilePlayerBackground(isolateRepaints: false),
-              ),
-              Positioned.fill(
-                bottom: 112,
-                child: Center(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 1700),
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(56, 62, 56, 20),
-                      child: LayoutBuilder(
-                        builder: (context, constraints) {
-                          final recordSize = math
-                              .min(
-                                520.0,
-                                math.min(
-                                  constraints.maxWidth *
-                                      (_showLyrics ? .34 : .48),
-                                  constraints.maxHeight * .78,
-                                ),
-                              )
-                              .clamp(240.0, 520.0)
-                              .toDouble();
-                          return Row(
-                            children: [
-                              Expanded(
-                                flex: _showLyrics ? 45 : 10,
-                                child: ClassicRecordStage(
-                                  track: track,
-                                  size: recordSize,
-                                  isPlaying: state.isPlaying,
-                                ),
-                              ),
-                              if (_showLyrics) ...[
-                                SizedBox(
-                                  width: constraints.maxWidth > 1200 ? 56 : 28,
-                                ),
-                                Expanded(
-                                  flex: 55,
-                                  child: Padding(
-                                    padding: EdgeInsets.only(
-                                      left: constraints.maxWidth > 1200
-                                          ? 24
-                                          : 0,
-                                      right: constraints.maxWidth > 1200
-                                          ? 36
-                                          : 0,
-                                    ),
-                                    child: AnimatedSwitcher(
-                                      duration: const Duration(
-                                        milliseconds: 320,
-                                      ),
-                                      switchInCurve: Curves.easeOutCubic,
-                                      switchOutCurve: Curves.easeInCubic,
-                                      transitionBuilder: (child, animation) =>
-                                          FadeTransition(
-                                            opacity: animation,
-                                            child: SlideTransition(
-                                              position: Tween<Offset>(
-                                                begin: const Offset(.035, 0),
-                                                end: Offset.zero,
-                                              ).animate(animation),
-                                              child: child,
-                                            ),
-                                          ),
-                                      child: _showSongInfoPanel
-                                          ? _DesktopSongInfoPanel(
-                                              key: ValueKey('song-info'),
-                                              track: track,
-                                            )
-                                          : MobilePlayerFluidCloudLyricsPanel(
-                                              key: const ValueKey('lyrics'),
-                                              lyrics: _lyrics,
-                                              currentLyricIndex:
-                                                  _currentLyricIndex,
-                                              showTranslation: true,
-                                              showRomaji: true,
-                                              visibleLineCount: 7,
-                                            ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ],
-                          );
-                        },
+            return Material(
+              type: MaterialType.transparency,
+              child: MonetPaletteBuilder(
+                builder: (context, palette) {
+                  final cover = monetCoverProvider(track.picUrl);
+                  // 背景类型换了要重画：封面浮动层是否出现由它决定。
+                  final background = PlayerBackgroundService();
+                  // 只有「基于封面」的两种背景才叠封面浮动层。用户特意选了纯色 /
+                  // 图片 / 视频背景，再往上糊一张漂移的专辑封面，就等于把他的选择
+                  // 抹掉了。
+                  final coverDerived =
+                      background.isAdaptive || background.isDynamic;
+                  return Stack(
+                    children: [
+                      const Positioned.fill(
+                        child: MobilePlayerBackground(isolateRepaints: false),
                       ),
+                      // 「莫奈」封面浮动层：底色仍是上面那层由设置决定的背景，
+                      // 这里只叠一层缓慢漂移的模糊封面纹理。
+                      if (coverDerived)
+                        Positioned.fill(
+                          child: MonetFloatingCoverLayer(
+                            cover: cover,
+                            palette: palette,
+                            // 底部让出的高度要盖过整排胶囊（bottom:24 + 高 64）
+                            // 再加上玻璃边缘的取样半径，见 bottomFadePx 的注释。
+                            bottomFadePx: _kCapsuleSafeAreaPx,
+                          ),
+                        ),
+                      // 同理：花瓣是每帧重绘的，不能垫在胶囊的液态玻璃底下。
+                      Positioned.fill(
+                        bottom: _kCapsuleSafeAreaPx * .5,
+                        child: MonetFloatingDecor(palette: palette),
+                      ),
+                      Positioned.fill(
+                        bottom: 112,
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 42),
+                          child: MonetPoster(
+                            title: track.name,
+                            artist: track.artists,
+                            album: track.album,
+                            palette: palette,
+                            cover: cover,
+                            introKey: track.key,
+                            showContent: _showLyrics,
+                            // 歌词沿用经典播放器原本的流体云面板，只是被摆进
+                            // 莫奈海报的左栏；宽度跟上游歌词轨对齐（780 × 大屏
+                            // 系数），否则会一路铺到右侧封面底下。
+                            contentBuilder: (context, metrics) => ConstrainedBox(
+                              constraints: BoxConstraints(
+                                maxWidth: 780 * metrics.layoutScale,
+                              ),
+                              child: _showSongInfoPanel
+                                  ? _DesktopSongInfoPanel(track: track)
+                                  : MobilePlayerFluidCloudLyricsPanel(
+                                      lyrics: _lyrics,
+                                      currentLyricIndex: _currentLyricIndex,
+                                      showTranslation: true,
+                                      showRomaji: true,
+                                      visibleLineCount: 7,
+                                    ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      ..._chrome(context, track),
+                    ],
+                  );
+                },
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  /// 悬停标题栏、底部胶囊排、一起听图层——与海报无关的那部分外壳。
+  List<Widget> _chrome(BuildContext context, Track track) => [
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    height: 32,
+                    child: MouseRegion(
+                      onEnter: (_) => _showTitleBar(),
+                      child: const SizedBox.expand(),
                     ),
                   ),
-                ),
-              ),
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                height: 32,
-                child: MouseRegion(
-                  onEnter: (_) => _showTitleBar(),
-                  child: const SizedBox.expand(),
-                ),
-              ),
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: IgnorePointer(
-                  ignoring: !_titleBarVisible,
-                  child: AnimatedSlide(
-                    offset: _titleBarVisible
-                        ? Offset.zero
-                        : const Offset(0, -1),
-                    duration: const Duration(milliseconds: 500),
-                    curve: Curves.easeOutCubic,
-                    child: AnimatedOpacity(
-                      opacity: _titleBarVisible ? 1 : 0,
-                      duration: const Duration(milliseconds: 350),
-                      curve: Curves.easeOut,
-                      child: MouseRegion(
-                        onEnter: (_) => _showTitleBar(),
-                        onExit: (_) => _scheduleTitleBarHide(),
-                        child: _FullscreenTitleBar(
-                          title: track.name.isEmpty
-                              ? 'Cyrene Player'
-                              : track.name,
-                          isMaximized: _isMaximized,
-                          onSwitchToSuperCyrene: widget.onSwitchToSuperCyrene,
-                          onExitFullscreen: () => Navigator.of(context).pop(),
-                          onMinimize: windowManager.minimize,
-                          onToggleMaximize: () => _isMaximized
-                              ? windowManager.unmaximize()
-                              : windowManager.maximize(),
-                          onClose: windowManager.close,
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: IgnorePointer(
+                      ignoring: !_titleBarVisible,
+                      child: AnimatedSlide(
+                        offset: _titleBarVisible
+                            ? Offset.zero
+                            : const Offset(0, -1),
+                        duration: const Duration(milliseconds: 500),
+                        curve: Curves.easeOutCubic,
+                        child: AnimatedOpacity(
+                          opacity: _titleBarVisible ? 1 : 0,
+                          duration: const Duration(milliseconds: 350),
+                          curve: Curves.easeOut,
+                          child: MouseRegion(
+                            onEnter: (_) => _showTitleBar(),
+                            onExit: (_) => _scheduleTitleBarHide(),
+                            child: _FullscreenTitleBar(
+                              title: track.name.isEmpty
+                                  ? 'Cyrene Player'
+                                  : track.name,
+                              isMaximized: _isMaximized,
+                              onSwitchToSuperCyrene:
+                                  widget.onSwitchToSuperCyrene,
+                              onExitFullscreen: () =>
+                                  Navigator.of(context).pop(),
+                              onMinimize: windowManager.minimize,
+                              onToggleMaximize: () => _isMaximized
+                                  ? windowManager.unmaximize()
+                                  : windowManager.maximize(),
+                              onClose: windowManager.close,
+                            ),
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
-              ),
-              Positioned(
-                left: 28,
-                right: 28,
-                bottom: 24,
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    _UtilityCapsule(
-                      playback: widget.playback,
-                      lyricsVisible: _showLyrics && !_showSongInfoPanel,
-                      songInfoVisible: _showLyrics && _showSongInfoPanel,
-                      onToggleLyrics: () => setState(() {
-                        if (_showSongInfoPanel || !_showLyrics) {
-                          _showSongInfoPanel = false;
-                          _showLyrics = true;
-                        } else {
-                          _showLyrics = false;
-                        }
-                      }),
-                      onSongInfo: () => setState(() {
-                        if (_showLyrics && _showSongInfoPanel) {
-                          _showLyrics = false;
-                          _showSongInfoPanel = false;
-                        } else {
-                          _showLyrics = true;
-                          _showSongInfoPanel = true;
-                        }
-                      }),
+                  Positioned(
+                    left: 28,
+                    right: 28,
+                    bottom: 24,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        _UtilityCapsule(
+                          playback: widget.playback,
+                          lyricsVisible: _showLyrics && !_showSongInfoPanel,
+                          songInfoVisible: _showLyrics && _showSongInfoPanel,
+                          onToggleLyrics: () => setState(() {
+                            if (_showSongInfoPanel || !_showLyrics) {
+                              _showSongInfoPanel = false;
+                              _showLyrics = true;
+                            } else {
+                              _showLyrics = false;
+                            }
+                          }),
+                          onSongInfo: () => setState(() {
+                            if (_showLyrics && _showSongInfoPanel) {
+                              _showLyrics = false;
+                              _showSongInfoPanel = false;
+                            } else {
+                              _showLyrics = true;
+                              _showSongInfoPanel = true;
+                            }
+                          }),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: _MainCapsule(
+                            playback: widget.playback,
+                            account: widget.account,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        _ExpandableVolume(playback: widget.playback),
+                      ],
                     ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: _MainCapsule(
-                        playback: widget.playback,
-                        account: widget.account,
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    _ExpandableVolume(playback: widget.playback),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
+                  ),
+                  // 一起听图层：房间胶囊 + 弹幕 + 发言入口，没在一起听时是空盒子。
+                  // 顶部让开 52px 的悬浮标题栏，底部让开 bottom:24 的控制胶囊排。
+                  const TogetherPlayerOverlay(
+                    // 桌面端不往语义树里加节点：见 TogetherPlayerOverlay.excludeSemantics
+                    // （Windows 无障碍桥 flutter#182444）。
+                    excludeSemantics: true,
+                    topOffset: 64,
+                    bottomOffset: 120,
+                    rightOffset: 28,
+                  ),
+  ];
 }
 
 /// Hover-revealed window bar matching SuperCyreneFullscreen.tsx. The buttons
@@ -519,7 +552,7 @@ class _FullscreenCaptionButton extends StatelessWidget {
 /// complete wiki page; other sources still keep their basic metadata in the
 /// same right-hand panel instead of falling back to a dialog.
 class _DesktopSongInfoPanel extends StatelessWidget {
-  const _DesktopSongInfoPanel({super.key, required this.track});
+  const _DesktopSongInfoPanel({required this.track});
 
   final Track track;
 
@@ -531,7 +564,7 @@ class _DesktopSongInfoPanel extends StatelessWidget {
 
     return ListView(
       key: ValueKey(track.key),
-      padding: const EdgeInsets.fromLTRB(20, 34, 20, 72),
+      padding: const EdgeInsets.fromLTRB(0, 8, 20, 24),
       children: [
         Text(
           track.name,
@@ -694,8 +727,6 @@ class _UtilityCapsule extends StatelessWidget {
   );
 }
 
-
-
 class _MainCapsule extends StatelessWidget {
   const _MainCapsule({required this.playback, required this.account});
 
@@ -770,10 +801,7 @@ class _MainCapsule extends StatelessWidget {
           const SizedBox(width: 12),
           Expanded(child: _SeekControl(playback: playback)),
           const SizedBox(width: 10),
-          DesktopFavoriteButton(
-            playback: playback,
-            account: account,
-          ),
+          DesktopFavoriteButton(playback: playback, account: account),
         ],
       ),
     );
@@ -893,7 +921,9 @@ class _ModernProgressBarState extends State<_ModernProgressBar>
 
   @override
   Widget build(BuildContext context) {
-    final activeFraction = (_dragFraction ?? widget.value).clamp(0.0, 1.0).toDouble();
+    final activeFraction = (_dragFraction ?? widget.value)
+        .clamp(0.0, 1.0)
+        .toDouble();
 
     return MouseRegion(
       cursor: widget.enabled
@@ -927,10 +957,11 @@ class _ModernProgressBarState extends State<_ModernProgressBar>
         builder: (context, constraints) {
           final width = constraints.maxWidth;
           final hoverFrac = _hoverFraction;
-          final hoverTime = (hoverFrac != null && widget.duration > Duration.zero)
+          final hoverTime =
+              (hoverFrac != null && widget.duration > Duration.zero)
               ? Duration(
-                  milliseconds:
-                      (widget.duration.inMilliseconds * hoverFrac).round(),
+                  milliseconds: (widget.duration.inMilliseconds * hoverFrac)
+                      .round(),
                 )
               : null;
 
@@ -1103,10 +1134,7 @@ class _ModernProgressPainter extends CustomPainter {
       canvas.clipRRect(trackRRect);
       final activePaint = Paint()
         ..shader = LinearGradient(
-          colors: [
-            Colors.white.withValues(alpha: 0.95),
-            Colors.white,
-          ],
+          colors: [Colors.white.withValues(alpha: 0.95), Colors.white],
         ).createShader(activeRect);
       canvas.drawRect(activeRect, activePaint);
       canvas.restore();
@@ -1210,8 +1238,8 @@ class _ExpandableVolumeState extends State<_ExpandableVolume> {
                 icon: volume <= 0
                     ? CupertinoIcons.volume_off
                     : (volume < 0.5
-                        ? CupertinoIcons.volume_down
-                        : CupertinoIcons.volume_up),
+                          ? CupertinoIcons.volume_down
+                          : CupertinoIcons.volume_up),
                 iconSize: 21,
                 tooltip: volume <= 0 ? '取消静音' : '静音',
                 onPressed: () {
@@ -1310,11 +1338,7 @@ class _GlassTrackPainter extends CustomPainter {
         ..color = Colors.black.withValues(alpha: 0.25)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5),
     );
-    canvas.drawCircle(
-      thumbCenter,
-      4.5,
-      Paint()..color = Colors.white,
-    );
+    canvas.drawCircle(thumbCenter, 4.5, Paint()..color = Colors.white);
     canvas.drawCircle(
       thumbCenter,
       4.5,
@@ -1331,13 +1355,37 @@ class _GlassTrackPainter extends CustomPainter {
 }
 
 class _Capsule extends StatelessWidget {
-  const _Capsule({
-    required this.child,
-    this.padding = const EdgeInsets.all(6),
-  });
+  const _Capsule({required this.child, this.padding = const EdgeInsets.all(6)});
 
   final Widget child;
   final EdgeInsets padding;
+
+  /// 关掉玻璃的镜面描边。
+  ///
+  /// 那圈会闪的白边来自 liquid_glass_widgets 的 `_SpecularRimPainter`：它用
+  /// **`BlendMode.overlay`** 沿轮廓描两道渐变线，而 overlay 对底色的细微变化
+  /// 极其敏感——背景里只要有任何逐帧的亚像素变动（莫奈的漂移封面、飘落花瓣，
+  /// 甚至只是有 ticker 在跑导致整帧重新合成），描边就会跟着抖。把背景改成静态
+  /// 试过两轮都压不住，所以直接不画这道边。
+  /// 该 painter 在 `lightIntensity == 0` 时会提前 return，这就是关掉它的开关。
+  ///
+  /// 只覆盖光照三项，其余（玻璃色、磨砂、折射、饱和）仍从主题解出来——传一份
+  /// 全新的 const 设置会把主题里的玻璃色一起顶掉，胶囊在纯黑背景上会看不见。
+  LiquidGlassSettings _rimlessGlass(BuildContext context) {
+    // 与 GlassThemeHelpers.resolveSettings 同序：本应用没有 LiquidGlassLayer
+    // 祖先，所以只剩「全局覆盖 → 主题 → 默认」这三档。
+    final base =
+        LiquidGlassWidgets.globalSettings ??
+        GlassThemeData.of(
+          context,
+        ).settingsFor(context)?.applyTo(const LiquidGlassSettings()) ??
+        const LiquidGlassSettings();
+    return base.copyWith(
+      lightIntensity: 0,
+      ambientStrength: 0,
+      ambientRim: 0,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1356,6 +1404,7 @@ class _Capsule extends StatelessWidget {
       child: GlassContainer(
         shape: const LiquidRoundedSuperellipse(borderRadius: 999),
         clipBehavior: Clip.antiAlias,
+        settings: _rimlessGlass(context),
         child: SizedBox(
           height: 64,
           child: Padding(padding: padding, child: child),
@@ -1364,7 +1413,6 @@ class _Capsule extends StatelessWidget {
     );
   }
 }
-
 
 class _CapsuleButton extends StatefulWidget {
   const _CapsuleButton({
@@ -1399,7 +1447,6 @@ class _CapsuleButtonState extends State<_CapsuleButton> {
     final selected = widget.selected;
     final emphasized = widget.emphasized;
     final buttonSize = emphasized ? 48.0 : 44.0;
-
 
     final Color backgroundColor;
     final Border? border;
@@ -1501,11 +1548,7 @@ class _CapsuleButtonState extends State<_CapsuleButton> {
                 duration: const Duration(milliseconds: 150),
                 curve: Curves.easeOutCubic,
                 child: widget.icon != null
-                    ? Icon(
-                        widget.icon,
-                        size: widget.iconSize,
-                        color: iconColor,
-                      )
+                    ? Icon(widget.icon, size: widget.iconSize, color: iconColor)
                     : MiuixIcon(
                         vector: widget.vector,
                         size: widget.iconSize,
@@ -1519,7 +1562,6 @@ class _CapsuleButtonState extends State<_CapsuleButton> {
     );
   }
 }
-
 
 String _time(Duration value) {
   final minutes = value.inMinutes.remainder(60).toString().padLeft(2, '0');

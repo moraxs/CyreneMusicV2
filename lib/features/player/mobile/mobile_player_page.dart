@@ -15,6 +15,7 @@ import '../../../application/audio_sources/audio_source_preferences_controller.d
 import '../../../application/auth/account_session_controller.dart';
 import '../../../application/playback/playback_controller.dart';
 import '../../../domain/models/track.dart';
+import '../../together/together_player_overlay.dart';
 
 /// 移动端播放器页面（重构版本）
 /// 适用于 Android/iOS，现在使用组件化架构
@@ -465,6 +466,9 @@ class _MobilePlayerPageState extends State<MobilePlayerPage> with TickerProvider
                   ),
                 ),
               ],
+
+          // 一起听图层：房间胶囊 + 弹幕 + 发言入口。没在一起听时是空盒子。
+          const TogetherPlayerOverlay(),
 
           // 控制中心面板
           MobilePlayerControlCenter(

@@ -13,6 +13,7 @@ import '../../../application/audio_sources/audio_source_preferences_controller.d
 import '../../../application/auth/account_session_controller.dart';
 import '../../../application/playback/playback_controller.dart';
 import '../../../application/stores/fullscreen_settings_store.dart';
+import '../../together/together_player_overlay.dart';
 import '../mobile/compat/player_service.dart';
 import 'super_cyrene_amll_background.dart';
 import 'super_cyrene_chat_lyrics.dart';
@@ -518,6 +519,16 @@ class _SuperCyreneFullscreenPlayerState
                       ),
                     ),
                   ],
+                  // 一起听图层：房间胶囊 + 弹幕 + 发言入口，没在一起听时是空盒子。
+                  // 放在最外层且不受 track 判空影响——房间可以先建着还没开始播。
+                  // 顶部让开悬浮标题栏，底部让开左下控制面板与居中播放胶囊。
+                  TogetherPlayerOverlay(
+                    // 同经典播放器：桌面端对语义树零贡献。
+                    excludeSemantics: _isDesktop,
+                    topOffset: _isDesktop ? 64 : 8,
+                    bottomOffset: _isDesktop ? 150 : 96,
+                    rightOffset: _isDesktop ? 24 : 16,
+                  ),
                 ],
               );
             },

@@ -12,6 +12,9 @@ import '../../domain/models/media_url.dart';
 import '../../domain/models/user.dart';
 import '../../infrastructure/audio/dsp_effects_service.dart';
 import '../../infrastructure/audio/equalizer_service.dart';
+import '../../application/stores/ai_settings_store.dart';
+import '../../application/together/together_controller.dart';
+import '../../application/stores/together_settings_store.dart';
 import '../../infrastructure/cache/song_cache_service.dart';
 import '../../infrastructure/services/announcement_service.dart';
 import '../../infrastructure/services/developer_mode_service.dart';
@@ -24,6 +27,8 @@ import 'appearance_settings_page.dart';
 import 'audio_source_settings_page.dart';
 import 'cache_settings_page.dart';
 import 'developer_options_page.dart';
+import 'ai_settings_page.dart';
+import 'together_settings_page.dart';
 import 'equalizer_page.dart';
 import 'login_page.dart';
 import 'personal_center_page.dart';
@@ -36,6 +41,16 @@ String _audioEffectsSummary() {
       'DSP ${DspEffectsService.instance.activeCount} 项',
   ];
   return parts.isEmpty ? '已关闭' : parts.join(' · ');
+}
+
+/// 「一起听」行右侧摘要：在房里就显示房间号，否则显示开关状态。
+String _togetherSummary() {
+  final together = TogetherController.instance;
+  if (together.isActive) {
+    final code = together.roomCode ?? '';
+    return '${together.isHost ? '房主' : '收听'} $code'.trim();
+  }
+  return TogetherSettingsStore.instance.enabled ? '已开启' : '已关闭';
 }
 
 class SettingsPage extends StatelessWidget {
@@ -118,6 +133,38 @@ class SettingsPage extends StatelessWidget {
                         : '自定义音频频率响应',
                     value: _audioEffectsSummary(),
                     onTap: () => _openPage(context, const EqualizerPage()),
+                  ),
+                ),
+                ListenableBuilder(
+                  listenable: AiSettingsStore.instance,
+                  builder: (context, _) => CyreneMenuRow(
+                    key: const Key('open-ai-settings'),
+                    vector: MiuixIcons.extended.byName('mindMap')!,
+                    iconBackground: const Color(0xFF7C5CFF),
+                    title: 'AI 助手',
+                    subtitle: '接自己的模型服务，生成赏析、总结与推荐',
+                    value: AiSettingsStore.instance.isConfigured
+                        ? '已就绪'
+                        : (AiSettingsStore.instance.enabled ? '待配置' : '已关闭'),
+                    onTap: () => _openPage(context, const AiSettingsPage()),
+                  ),
+                ),
+                ListenableBuilder(
+                  listenable: Listenable.merge([
+                    TogetherSettingsStore.instance,
+                    TogetherController.instance,
+                  ]),
+                  builder: (context, _) => CyreneMenuRow(
+                    key: const Key('open-together-settings'),
+                    vector: MiuixIcons.extended.byName('community')!,
+                    iconBackground: const Color(0xFFFF375F),
+                    title: '一起听',
+                    subtitle: '和朋友同步听歌、发弹幕',
+                    value: _togetherSummary(),
+                    onTap: () => _openPage(
+                      context,
+                      TogetherSettingsPage(onOpenSecondary: onOpenSecondary),
+                    ),
                   ),
                 ),
                 ListenableBuilder(
