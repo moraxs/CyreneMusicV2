@@ -4,7 +4,7 @@ all: Frameworks/*.xcframework Frameworks/.symlinks
 # acompressor/alimiter/aecho/acrusher/vibrato）。官方的最小音频构建只编进了
 # equalizer，这些滤镜会被 libmpv 拒绝。上游基线 v0.7.2 + 一个 meson.build 补丁。
 MPV_XCFRAMEWORKS_VERSION=v0.7.2-dsp
-MPV_XCFRAMEWORKS_SHA256SUM=d988e58918987b0902377e344255e90f1eeb69b8222d3da0a5bbc39f865258b8
+MPV_XCFRAMEWORKS_SHA256SUM=57b49bb450760e13d9df49328198e9d270ecb31cb0127a35475a336d4a4a76e1
 
 .cache/xcframeworks/libmpv-xcframeworks-${MPV_XCFRAMEWORKS_VERSION}-macos-universal.tar.gz:
 	mkdir -p .cache/xcframeworks

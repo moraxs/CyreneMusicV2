@@ -11,6 +11,7 @@ import '../domain/discovery/discover_repository.dart';
 import '../domain/models/discovery.dart';
 import '../domain/playback/audio_cache.dart';
 import '../domain/playback/audio_player_gateway.dart';
+import '../infrastructure/audio/audio_engine.dart';
 import '../infrastructure/audio/audio_filter_chain.dart';
 import '../infrastructure/cache/song_cache_service.dart';
 import '../infrastructure/audio/dsp_effects_service.dart';
@@ -44,10 +45,12 @@ class AppDependencies {
   });
 
   factory AppDependencies.production() {
-    final gateway = MediaKitPlayerGateway();
+    final gateway = _createAudioGateway();
     // 均衡器与 DSP 音效都经 af 属性操作 libmpv，需拿到底层 Player；
-    // preview（SilentAudioPlayerGateway）下不绑定，设置仍可编辑与持久化。
-    unawaited(_applyAudioFilters(gateway));
+    // preview / 静音降级（SilentAudioPlayerGateway）下不绑定，设置仍可编辑与持久化。
+    if (gateway is MediaKitPlayerGateway) {
+      unawaited(_applyAudioFilters(gateway));
+    }
     return AppDependencies._build(
       gateway,
       discoverRepository: DiscoveryService.instance,
@@ -55,6 +58,23 @@ class AppDependencies {
       // preview 走 NoOpAudioCache，不碰磁盘。
       cache: SongCacheService.instance,
     );
+  }
+
+  /// 原生播放器不可用时退回静音网关。
+  ///
+  /// libmpv 没打进包（darwin 上出过这个事故）时，`Player()` 的构造会抛异常。
+  /// 若放任它冒泡，整个 `_bootstrap` 就断在这里、`runApp` 永不执行——用户看到
+  /// 的是白屏。降级后除了不出声，登录 / 发现 / 歌单 / 搜索等全部照常，用户
+  /// 至少能看到界面和错误提示（见 [AudioEngine] 与 main 的启动提示）。
+  static AudioPlayerGateway _createAudioGateway() {
+    if (!AudioEngine.isAvailable) return const SilentAudioPlayerGateway();
+    try {
+      return MediaKitPlayerGateway();
+    } catch (error, stack) {
+      // 库加载成功不等于实例建得起来，这条路径同样要能降级。
+      AudioEngine.markUnavailable(error, stack);
+      return const SilentAudioPlayerGateway();
+    }
   }
 
   /// 先绑定播放器再让各服务登记片段，避免 attach 时链上还是空的。

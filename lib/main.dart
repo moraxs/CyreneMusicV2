@@ -10,12 +10,12 @@ import 'package:flutter_acrylic/window_effect.dart' as acrylic;
 import 'package:flutter_displaymode/flutter_displaymode.dart';
 import 'package:flutter_miuix/miuix.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
-import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 import 'app/app_dependencies.dart';
 import 'app/app_gate.dart';
 import 'app/app_version.dart';
 import 'app/debug_probe.dart';
+import 'app/startup_failure_app.dart';
 import 'app/desktop/desktop_fluent_theme.dart';
 import 'app/desktop/window_accent_acrylic.dart';
 import 'application/playback/playback_history_recorder.dart';
@@ -34,6 +34,7 @@ import 'features/player/mini_player_layer.dart';
 import 'features/player/mobile/compat/lyric_font_service.dart';
 import 'features/player/mobile/compat/lyric_style_service.dart';
 import 'features/player/mobile/compat/player_background_service.dart';
+import 'infrastructure/audio/audio_engine.dart';
 import 'infrastructure/cache/song_cache_service.dart';
 import 'infrastructure/core/url_service.dart';
 import 'infrastructure/media_notification/media_notification_service.dart';
@@ -90,7 +91,27 @@ Future<void> main(List<String> args) async {
   // runZonedGuarded 包裹主初始化与 runApp：捕获任意 async / 顶层未处理异常
   // （FlutterError.onError 只管框架报告，管不了普通 async 冒泡错误）。
   await runZonedGuarded(
-    () async => _bootstrap(args),
+    () async {
+      // _bootstrap 抛异常 = runApp 从不执行 = 白屏，且用户看不到任何线索
+      // （darwin 上 libmpv 没打进包时就是这个下场，见 AudioEngine）。
+      // 兜底渲染 StartupFailureApp：宁可显示一屏错误，也不能什么都不显示。
+      try {
+        await _bootstrap(args);
+      } catch (error, stack) {
+        CrashLogService.instance.logException(
+          error,
+          stack,
+          context: 'bootstrap',
+        );
+        runApp(
+          StartupFailureApp(
+            error: error,
+            appVersion: appVersion,
+            logFilePath: CrashLogService.instance.logFilePath,
+          ),
+        );
+      }
+    },
     (error, stack) {
       CrashLogService.instance.logException(error, stack, context: 'zone');
     },
@@ -131,8 +152,9 @@ Future<void> _bootstrap(List<String> args) async {
     defaultDebugPrint(message, wrapWidth: wrapWidth);
   };
   installProbe();
-  // media_kit 必须在使用前初始化（会加载 libmpv 原生库）。
-  MediaKit.ensureInitialized();
+  // media_kit 必须在使用前初始化（会加载 libmpv 原生库）。失败不再中断启动：
+  // AudioEngine 记下状态，播放层降级为静音网关，界面照常起来并提示用户。
+  AudioEngine.ensureInitialized();
   // 桌面端融合标题栏：隐藏 Win32 原生标题栏，改由 fluent TitleBar 绘制
   // （见 app/desktop/desktop_title_bar.dart）。必须在首帧前完成，否则会先
   // 闪一下原生标题栏。移动端不触碰（插件在 Android/iOS 上无对应实现）。
@@ -417,7 +439,18 @@ class _MyAppState extends State<MyApp>
     // 首帧后再请求：过早调用在部分机型会拿到空的显示模式列表。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _enableHighRefreshRate();
+      _notifyAudioEngineFailure();
     });
+  }
+
+  /// libmpv 没能加载时告知用户：界面看着一切正常，但点播放不会有任何声音，
+  /// 不说明白用户只会以为是音源坏了。详见 [AudioEngine]。
+  void _notifyAudioEngineFailure() {
+    if (AudioEngine.isAvailable) return;
+    CyreneToast.show(
+      '音频引擎加载失败，当前无法播放：${AudioEngine.errorSummary}',
+      duration: MiuixSnackbarDuration.long,
+    );
   }
 
   /// 窗口关闭拦截：改为隐藏到托盘（仅托盘服务开启时），真正退出走托盘菜单。

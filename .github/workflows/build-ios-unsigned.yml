@@ -36,6 +36,15 @@ jobs:
       - name: Build iOS release (no codesign)
         run: flutter build ios --release --no-codesign
 
+      # 自定义 libmpv 走 packages/media_kit_libs_ios_audio 的 Makefile 下载，
+      # 一旦没进包，应用会在 MediaKit.ensureInitialized() 抛异常、runApp 不执行，
+      # 装上就是白屏而不是崩溃——没有这道断言就会一路发到用户手上。
+      - name: Assert libmpv is embedded
+        run: |
+          set -euo pipefail
+          test -f build/ios/iphoneos/Runner.app/Frameworks/Mpv.framework/Mpv \
+            || { echo "::error::Mpv.framework 缺失，产物会白屏"; ls -la build/ios/iphoneos/Runner.app/Frameworks || true; exit 1; }
+
       - name: Package unsigned .ipa
         run: |
           set -euo pipefail
