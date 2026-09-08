@@ -28,7 +28,7 @@ import '../../features/player/desktop_mini_player.dart';
 import '../../features/playlist/playlist_detail_page.dart';
 import '../../features/profile/profile_page.dart';
 import '../../features/search/search_page.dart';
-import '../../features/settings/settings_page.dart';
+import '../../features/settings/desktop/desktop_settings_page.dart';
 import '../../features/support/support_page.dart';
 import 'desktop_fluent_theme.dart';
 import 'desktop_title_bar.dart';
@@ -460,7 +460,9 @@ class _DesktopShellState extends State<DesktopShell> {
     ),
     HistoryPage(playback: widget.playback),
     LocalMusicPage(playback: widget.playback),
-    SettingsPage(
+    // 桌面端设置走合并长页 + 顶部锚点 tab（见 DesktopSettingsPage 类文档）；
+    // 移动端仍是 SettingsPage 那套「一屏入口 + 逐层下钻」。
+    DesktopSettingsPage(
       account: widget.account,
       audioSources: widget.audioSources,
       onOpenSecondary: (page) => setState(() => _settingsStack.push(page)),

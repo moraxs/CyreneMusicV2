@@ -360,9 +360,18 @@ class CyreneInlineAlert extends StatelessWidget {
 /// HyperOS 风格的分组卡片：白色 squircle 大圆角卡片，组内行直接堆叠、
 /// 无分隔线（对照系统设置截图）。
 class CyreneMenuGroup extends StatelessWidget {
-  const CyreneMenuGroup({super.key, required this.children});
+  const CyreneMenuGroup({super.key, required this.children}) : child = null;
+
+  /// 卡片外观不变，但内容自己给。
+  ///
+  /// 给的是「行数可能很多」的场景用的：默认构造把所有行放进一个 [Column]，
+  /// 全部立即构建；传一个 `ListView.builder` 进来就能在同一张卡里懒加载
+  /// （见「已缓存歌曲」页）。传进来的可滚动组件需要外部给出有界高度。
+  const CyreneMenuGroup.custom({super.key, required Widget this.child})
+    : children = const [];
 
   final List<Widget> children;
+  final Widget? child;
 
   @override
   Widget build(BuildContext context) {
@@ -376,7 +385,7 @@ class CyreneMenuGroup extends StatelessWidget {
         ),
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Column(children: children),
+          child: child ?? Column(children: children),
         ),
       ),
     );

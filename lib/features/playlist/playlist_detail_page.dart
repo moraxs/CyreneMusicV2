@@ -163,12 +163,21 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   }
 
   /// 过滤后再按当前排序方式排序后的最终列表，供列表渲染与「播放全部」使用。
-  /// 默认排序时反转歌单原始顺序（最后一首在前），其余按歌名升/降序。
+  ///
+  /// 默认排序的目标一致：**最近加入的歌排在最前**。但两类歌单拿到手的原始顺序
+  /// 相反，所以处理方式也相反：
+  /// - 个人歌单：后端 `getTracks` 已按 `added_at` 倒序返回（新的在前），直接用原序。
+  ///   这里若再反转，同步/收藏进来的新歌会被顶到列表最底部，最想找的反而最难找。
+  /// - 第三方歌单：来源 API 给的是歌单创建顺序（最早的在前），反转后才是新的在前。
+  ///
+  /// 其余排序模式按歌名升/降序。
   List<Track> get _sortedTracks {
     final filtered = _filteredTracks;
     if (filtered.isEmpty) return filtered;
     if (_sortMode == PlaylistSortMode.defaultOrder) {
-      return filtered.reversed.toList(growable: false);
+      return widget.isPersonal
+          ? filtered
+          : filtered.reversed.toList(growable: false);
     }
     if (filtered.length == 1) return filtered;
     final sorted = [...filtered];
@@ -450,12 +459,19 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
         return;
       }
       final added = result.insertedCount;
-      final removed = result.removedCount;
-      CyreneToast.show(
-        (added > 0 || removed > 0)
-            ? '已同步到「${target.name}」，新增 $added 首${removed > 0 ? '、移除 $removed 首' : ''}'
-            : '已同步到「${target.name}」，暂无变化',
-      );
+      if (result.sourceIncomplete) {
+        CyreneToast.show(
+          added > 0
+              ? '已同步到「${target.name}」，新增 $added 首；来源歌单未拉全，可稍后再同步一次'
+              : '「${target.name}」来源歌单未拉全，请稍后重试',
+        );
+      } else {
+        CyreneToast.show(
+          added > 0
+              ? '已同步到「${target.name}」，新增 $added 首'
+              : '已同步到「${target.name}」，暂无变化',
+        );
+      }
     } finally {
       if (mounted) setState(() => _isSyncing = false);
     }
@@ -682,7 +698,15 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
           )
         else
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+            // 底部留白要能让开浮在 Navigator 之上的迷你播放器（MiniPlayerLayer
+            // 固定在 bottom:104，自身约 68 高），否则最后一首会被它压住点不到。
+            // 没在播放时不用留这么多。
+            padding: EdgeInsets.fromLTRB(
+              16,
+              4,
+              16,
+              widget.playback.state.currentTrack != null ? 188 : 32,
+            ),
             sliver: SliverList.separated(
               itemCount: tracks.length,
               separatorBuilder: (_, _) => const SizedBox(height: 10),

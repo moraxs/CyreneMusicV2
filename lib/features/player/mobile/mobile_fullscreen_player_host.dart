@@ -7,6 +7,7 @@ import '../../../application/audio_sources/audio_source_preferences_controller.d
 import '../../../application/auth/account_session_controller.dart';
 import '../../../application/playback/playback_controller.dart';
 import '../../../application/stores/fullscreen_settings_store.dart';
+import '../mini_player_layer.dart' show kFullscreenPlayerRouteName;
 import '../super_cyrene/super_cyrene_fullscreen_player.dart';
 import 'mobile_fullscreen_player_route.dart';
 
@@ -22,14 +23,19 @@ bool shouldOpenMobileSuperCyrene() {
 }
 
 /// 移动端打开 SuperCyrene 全屏播放器（横屏页）。
+///
+/// 收 [NavigatorState] 而不是 BuildContext：调用方之一是全局迷你播放器层，
+/// 它挂在 Navigator 上方，`Navigator.of(context)` 找不到祖先。
 void pushMobileSuperCyrenePlayer(
-  BuildContext context, {
+  NavigatorState navigator, {
   required PlaybackController playback,
   required AudioSourcePreferencesController audioSources,
   required AccountSessionController account,
 }) {
-  Navigator.of(context).push(
+  navigator.push(
     MobileFullscreenPlayerRoute(
+      // 标记成全屏播放器路由，好让全局迷你播放器层在它打开时收起自己。
+      settings: const RouteSettings(name: kFullscreenPlayerRouteName),
       builder: (_) => MobileFullscreenPlayerHost(
         playback: playback,
         audioSources: audioSources,

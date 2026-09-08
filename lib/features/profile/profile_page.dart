@@ -295,12 +295,20 @@ class _ProfilePageState extends State<ProfilePage> {
         CyreneToast.show('同步失败，请稍后重试');
       } else {
         final added = result.insertedCount;
-        final removed = result.removedCount;
-        CyreneToast.show(
-          (added > 0 || removed > 0)
-              ? '「${playlist.name}」已同步：新增 $added 首${removed > 0 ? '、移除 $removed 首' : ''}'
-              : '「${playlist.name}」已是最新',
-        );
+        // 来源没拉全 = 有歌没加进来，这时不能报「已是最新」，得提示可以重试。
+        if (result.sourceIncomplete) {
+          CyreneToast.show(
+            added > 0
+                ? '「${playlist.name}」新增 $added 首；来源歌单未拉全，可稍后再同步一次'
+                : '「${playlist.name}」来源歌单未拉全，请稍后重试',
+          );
+        } else {
+          CyreneToast.show(
+            added > 0
+                ? '「${playlist.name}」已同步：新增 $added 首'
+                : '「${playlist.name}」已是最新',
+          );
+        }
         widget.playlists.load(token);
       }
     } finally {

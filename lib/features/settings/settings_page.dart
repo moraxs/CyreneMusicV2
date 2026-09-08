@@ -7,7 +7,6 @@ import '../../app/app_version.dart';
 import '../../application/audio_sources/audio_source_preferences_controller.dart';
 import '../../application/auth/account_session_controller.dart';
 import '../../application/stores/appearance_settings_store.dart';
-import '../../application/updates/update_controller.dart';
 import '../../domain/models/media_url.dart';
 import '../../domain/models/user.dart';
 import '../../infrastructure/audio/dsp_effects_service.dart';
@@ -16,12 +15,9 @@ import '../../application/stores/ai_settings_store.dart';
 import '../../application/together/together_controller.dart';
 import '../../application/stores/together_settings_store.dart';
 import '../../infrastructure/cache/song_cache_service.dart';
-import '../../infrastructure/services/announcement_service.dart';
 import '../../infrastructure/services/developer_mode_service.dart';
-import '../../presentation/cyrene/cyrene_overlays.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
 import '../../presentation/cyrene/cyrene_toast.dart';
-import '../updates/update_dialogs.dart';
 import 'about_page.dart';
 import 'appearance_settings_page.dart';
 import 'audio_source_settings_page.dart';
@@ -32,6 +28,7 @@ import 'together_settings_page.dart';
 import 'equalizer_page.dart';
 import 'login_page.dart';
 import 'personal_center_page.dart';
+import 'settings_actions.dart';
 
 /// 「音效与均衡器」行右侧的状态摘要：均衡器与 DSP 各自的开关合成一句。
 String _audioEffectsSummary() {
@@ -204,14 +201,14 @@ class SettingsPage extends StatelessWidget {
                   iconBackground: _iconBlue,
                   title: '公告',
                   subtitle: '查看最新通知',
-                  onTap: () => _showAnnouncement(context),
+                  onTap: () => openAnnouncement(context),
                 ),
                 CyreneMenuRow(
                   vector: MiuixIcons.extended.byName('update')!,
                   iconBackground: _iconGreen,
                   title: '检查更新',
                   value: 'v$appVersion',
-                  onTap: () => _checkUpdate(context),
+                  onTap: () => checkUpdateInteractively(context),
                 ),
                 CyreneMenuRow(
                   vector: MiuixIcons.extended.byName('info')!,
@@ -254,70 +251,6 @@ class SettingsPage extends StatelessWidget {
     Navigator.of(
       context,
     ).push(CupertinoPageRoute<void>(builder: (_) => page));
-  }
-
-  /// 查看服务端公告（对应原版启动公告的手动入口）。
-  Future<void> _showAnnouncement(BuildContext context) async {
-    final announcement = await AnnouncementService.instance.fetchAnnouncement();
-    if (!context.mounted) return;
-    if (announcement == null || !announcement.enabled) {
-      CyreneToast.show('暂无公告');
-      return;
-    }
-    await showCyreneDialog<void>(
-      context: context,
-      title: announcement.title,
-      builder: (dialogContext, dismiss) {
-        final theme = MiuixTheme.of(dialogContext);
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 360),
-              child: SingleChildScrollView(
-                child: Text(
-                  announcement.content,
-                  style: theme.textStyles.body2.copyWith(
-                    color: theme.colors.onSurfaceContainer,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                MiuixButton(
-                  onPressed: () => dismiss(),
-                  colors: MiuixButtonDefaults.buttonColorsPrimary(
-                    dialogContext,
-                  ),
-                  child: MiuixText('知道了', style: theme.textStyles.button),
-                ),
-              ],
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  /// 手动检查更新：有新版则走与启动检查同一套弹窗（下载 + 安装）。
-  ///
-  /// 与启动检查的区别是不走 `shouldPrompt` —— 用户主动点的，即使之前忽略过
-  /// 这个版本也该给出结果。
-  Future<void> _checkUpdate(BuildContext context) async {
-    CyreneToast.show('正在检查更新…');
-    final update = UpdateController.instance;
-    final info = await update.check(silent: false);
-    if (!context.mounted) return;
-    if (info == null) {
-      CyreneToast.show(update.errorMessage ?? '当前已是最新版本');
-      update.clearError();
-      return;
-    }
-    await showUpdateDialog(context, info);
   }
 
   List<Widget> _accountRows(BuildContext context, AccountSessionState state) {

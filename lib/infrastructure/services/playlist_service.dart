@@ -335,7 +335,6 @@ class PlaylistService {
         final result = _decode(response);
         return PlaylistSyncResult(
           insertedCount: (result['insertedCount'] as num?)?.toInt() ?? 0,
-          removedCount: (result['removedCount'] as num?)?.toInt() ?? 0,
           newTracks:
               (result['newTracks'] as List?)
                   ?.whereType<Map>()
@@ -345,6 +344,7 @@ class PlaylistService {
                   .toList() ??
               const [],
           message: result['message']?.toString() ?? '',
+          sourceIncomplete: result['sourceIncomplete'] == true,
         );
       }
       return null;

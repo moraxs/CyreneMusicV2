@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 /// 淡入淡出让横竖屏切换不那么生硬。桌面端有专属的 [DesktopFullscreenPlayerRoute]
 /// （底部展开），两者不共用。
 class MobileFullscreenPlayerRoute extends PageRouteBuilder<void> {
-  MobileFullscreenPlayerRoute({required WidgetBuilder builder})
+  MobileFullscreenPlayerRoute({required WidgetBuilder builder, super.settings})
     : super(
         opaque: true,
         barrierDismissible: false,

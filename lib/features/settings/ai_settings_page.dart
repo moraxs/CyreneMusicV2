@@ -7,16 +7,39 @@ import '../../infrastructure/ai/ai_client.dart';
 import '../../presentation/cyrene/cyrene_overlays.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
 import '../../presentation/cyrene/cyrene_toast.dart';
+import 'settings_body.dart';
 
 /// 「AI 助手」设置：兼容路由、Base URL、API Key、模型，以及一个测试连接。
-class AiSettingsPage extends StatefulWidget {
+class AiSettingsPage extends StatelessWidget {
   const AiSettingsPage({super.key});
 
   @override
-  State<AiSettingsPage> createState() => _AiSettingsPageState();
+  Widget build(BuildContext context) => CyrenePage(
+    title: 'AI 助手',
+    bodyBuilder: (context, topPadding) =>
+        AiSettingsBody(topPadding: topPadding),
+  );
 }
 
-class _AiSettingsPageState extends State<AiSettingsPage> {
+/// 「AI 助手」设置正文，不含页面骨架。
+///
+/// 独立成组件是为了让桌面端的合并设置页直接嵌这一份（连同「测试连接」的
+/// 临时状态一起搬过来），而不是照抄一遍表单。
+class AiSettingsBody extends StatefulWidget {
+  const AiSettingsBody({
+    super.key,
+    this.topPadding = EdgeInsets.zero,
+    this.embedded = false,
+  });
+
+  final EdgeInsets topPadding;
+  final bool embedded;
+
+  @override
+  State<AiSettingsBody> createState() => _AiSettingsBodyState();
+}
+
+class _AiSettingsBodyState extends State<AiSettingsBody> {
   final _settings = AiSettingsStore.instance;
 
   bool _testing = false;
@@ -25,135 +48,132 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return CyrenePage(
-      title: 'AI 助手',
-      bodyBuilder: (context, topPadding) => ListenableBuilder(
-        listenable: _settings,
-        builder: (context, _) => ListView(
-          physics: const BouncingScrollPhysics(),
-          padding: topPadding + const EdgeInsets.fromLTRB(12, 4, 12, 40),
-          children: [
-            CyreneMenuGroup(
-              children: [
-                CyreneMenuRow(
-                  key: const Key('toggle-ai'),
-                  vector: MiuixIcons.extended.byName('mindMap')!,
-                  iconBackground: const Color(0xFF7C5CFF),
-                  title: '启用 AI 功能',
-                  subtitle: '用你自己的模型服务生成赏析、总结与推荐',
-                  trailing: MiuixSwitch(
-                    value: _settings.enabled,
-                    onChanged: _settings.setEnabled,
-                  ),
-                  onTap: () => _settings.setEnabled(!_settings.enabled),
+    return ListenableBuilder(
+      listenable: _settings,
+      builder: (context, _) => SettingsBody(
+        topPadding: widget.topPadding,
+        embedded: widget.embedded,
+        children: [
+          CyreneMenuGroup(
+            children: [
+              CyreneMenuRow(
+                key: const Key('toggle-ai'),
+                vector: MiuixIcons.extended.byName('mindMap')!,
+                iconBackground: const Color(0xFF7C5CFF),
+                title: '启用 AI 功能',
+                subtitle: '用你自己的模型服务生成赏析、总结与推荐',
+                trailing: MiuixSwitch(
+                  value: _settings.enabled,
+                  onChanged: _settings.setEnabled,
                 ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            const MiuixSmallTitle(
-              '服务配置',
-              insideMargin: EdgeInsets.fromLTRB(16, 4, 16, 8),
-            ),
-            CyreneMenuGroup(
-              children: [
-                CyreneMenuRow(
-                  vector: MiuixIcons.extended.byName('link')!,
-                  iconBackground: const Color(0xFF3482FF),
-                  title: '兼容路由',
-                  subtitle: _settings.route == AiRoute.openai
-                      ? 'POST {地址}/chat/completions'
-                      : 'POST {地址}/v1/messages',
-                  value: _settings.route.label,
-                  onTap: _pickRoute,
-                ),
-                CyreneMenuRow(
-                  vector: MiuixIcons.extended.byName('cloudFill')!,
-                  iconBackground: const Color(0xFF00A6A6),
-                  title: 'Base URL',
-                  subtitle: _settings.baseUrl.isEmpty
-                      ? '如 ${_settings.route.baseUrlHint}'
-                      : null,
-                  value: _shorten(_settings.baseUrl),
-                  onTap: () => _editText(
-                    title: 'Base URL',
-                    summary: '带不带结尾的 /v1 都可以，会自动补齐路径',
-                    initial: _settings.baseUrl,
-                    hint: _settings.route.baseUrlHint,
-                    onSubmit: _settings.setBaseUrl,
-                  ),
-                ),
-                CyreneMenuRow(
-                  vector: MiuixIcons.extended.byName('lock')!,
-                  iconBackground: const Color(0xFFFF375F),
-                  title: 'API Key',
-                  subtitle: _settings.apiKey.isEmpty ? '还没有填' : '已加密保存在本机',
-                  value: _settings.maskedApiKey,
-                  onTap: () => _editText(
-                    title: 'API Key',
-                    summary: '只保存在这台设备上，不会上传到 Cyrene 的服务器',
-                    initial: _settings.apiKey,
-                    hint: 'sk-...',
-                    obscure: true,
-                    onSubmit: _settings.setApiKey,
-                  ),
-                ),
-                CyreneMenuRow(
-                  vector: MiuixIcons.extended.byName('playlist')!,
-                  iconBackground: const Color(0xFF3CC756),
-                  title: '模型',
-                  subtitle: _settings.model.isEmpty
-                      ? '如 ${_settings.route.suggestedModel}'
-                      : null,
-                  value: _shorten(_settings.model),
-                  onTap: () => _editText(
-                    title: '模型',
-                    summary: '填服务端认得的模型名，两家的模型名不通用',
-                    initial: _settings.model,
-                    hint: _settings.route.suggestedModel,
-                    onSubmit: _settings.setModel,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            CyreneMenuGroup(
-              children: [
-                CyreneMenuRow(
-                  key: const Key('test-ai-connection'),
-                  vector: MiuixIcons.extended.byName('refresh')!,
-                  iconBackground: const Color(0xFFFF9F0A),
-                  title: '测试连接',
-                  subtitle: '真发一次请求，把服务端的原话带回来',
-                  trailing: _testing
-                      ? const MiuixCircularProgressIndicator(
-                          size: 18,
-                          strokeWidth: 2,
-                        )
-                      : null,
-                  onTap: _testing ? null : _runTest,
-                ),
-              ],
-            ),
-            if (_testResult != null) ...[
-              const SizedBox(height: 12),
-              CyreneInlineAlert(
-                vector: MiuixIcons.extended.byName(_testOk ? 'ok' : 'info')!,
-                title: _testOk ? '连接正常' : '连接失败',
-                description: _testResult!,
-                destructive: !_testOk,
+                onTap: () => _settings.setEnabled(!_settings.enabled),
               ),
             ],
+          ),
+          const SizedBox(height: 12),
+          const MiuixSmallTitle(
+            '服务配置',
+            insideMargin: EdgeInsets.fromLTRB(16, 4, 16, 8),
+          ),
+          CyreneMenuGroup(
+            children: [
+              CyreneMenuRow(
+                vector: MiuixIcons.extended.byName('link')!,
+                iconBackground: const Color(0xFF3482FF),
+                title: '兼容路由',
+                subtitle: _settings.route == AiRoute.openai
+                    ? 'POST {地址}/chat/completions'
+                    : 'POST {地址}/v1/messages',
+                value: _settings.route.label,
+                onTap: _pickRoute,
+              ),
+              CyreneMenuRow(
+                vector: MiuixIcons.extended.byName('cloudFill')!,
+                iconBackground: const Color(0xFF00A6A6),
+                title: 'Base URL',
+                subtitle: _settings.baseUrl.isEmpty
+                    ? '如 ${_settings.route.baseUrlHint}'
+                    : null,
+                value: _shorten(_settings.baseUrl),
+                onTap: () => _editText(
+                  title: 'Base URL',
+                  summary: '带不带结尾的 /v1 都可以，会自动补齐路径',
+                  initial: _settings.baseUrl,
+                  hint: _settings.route.baseUrlHint,
+                  onSubmit: _settings.setBaseUrl,
+                ),
+              ),
+              CyreneMenuRow(
+                vector: MiuixIcons.extended.byName('lock')!,
+                iconBackground: const Color(0xFFFF375F),
+                title: 'API Key',
+                subtitle: _settings.apiKey.isEmpty ? '还没有填' : '已加密保存在本机',
+                value: _settings.maskedApiKey,
+                onTap: () => _editText(
+                  title: 'API Key',
+                  summary: '只保存在这台设备上，不会上传到 Cyrene 的服务器',
+                  initial: _settings.apiKey,
+                  hint: 'sk-...',
+                  obscure: true,
+                  onSubmit: _settings.setApiKey,
+                ),
+              ),
+              CyreneMenuRow(
+                vector: MiuixIcons.extended.byName('playlist')!,
+                iconBackground: const Color(0xFF3CC756),
+                title: '模型',
+                subtitle: _settings.model.isEmpty
+                    ? '如 ${_settings.route.suggestedModel}'
+                    : null,
+                value: _shorten(_settings.model),
+                onTap: () => _editText(
+                  title: '模型',
+                  summary: '填服务端认得的模型名，两家的模型名不通用',
+                  initial: _settings.model,
+                  hint: _settings.route.suggestedModel,
+                  onSubmit: _settings.setModel,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          CyreneMenuGroup(
+            children: [
+              CyreneMenuRow(
+                key: const Key('test-ai-connection'),
+                vector: MiuixIcons.extended.byName('refresh')!,
+                iconBackground: const Color(0xFFFF9F0A),
+                title: '测试连接',
+                subtitle: '真发一次请求，把服务端的原话带回来',
+                trailing: _testing
+                    ? const MiuixCircularProgressIndicator(
+                        size: 18,
+                        strokeWidth: 2,
+                      )
+                    : null,
+                onTap: _testing ? null : _runTest,
+              ),
+            ],
+          ),
+          if (_testResult != null) ...[
             const SizedBox(height: 12),
             CyreneInlineAlert(
-              vector: MiuixIcons.extended.byName('info')!,
-              description:
-                  '这里配置的是**你自己的**模型服务：请求由本机直接发往你填的地址，'
-                  '歌曲信息会随请求发过去，Cyrene 的服务器不参与、也拿不到你的密钥。'
-                  '密钥在本机加密保存，但密钥派生自 App 内固定口令——它挡的是随手'
-                  '翻看，不等于拿到设备也解不开。费用按你自己的服务商计费。',
+              vector: MiuixIcons.extended.byName(_testOk ? 'ok' : 'info')!,
+              title: _testOk ? '连接正常' : '连接失败',
+              description: _testResult!,
+              destructive: !_testOk,
             ),
           ],
-        ),
+          const SizedBox(height: 12),
+          CyreneInlineAlert(
+            vector: MiuixIcons.extended.byName('info')!,
+            description:
+                '这里配置的是**你自己的**模型服务：请求由本机直接发往你填的地址，'
+                '歌曲信息会随请求发过去，Cyrene 的服务器不参与、也拿不到你的密钥。'
+                '密钥在本机加密保存，但密钥派生自 App 内固定口令——它挡的是随手'
+                '翻看，不等于拿到设备也解不开。费用按你自己的服务商计费。',
+          ),
+        ],
       ),
     );
   }

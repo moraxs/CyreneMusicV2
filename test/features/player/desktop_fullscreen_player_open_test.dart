@@ -18,6 +18,8 @@ import 'package:cyrene_music_reborn/features/player/desktop_fullscreen_player_ho
 import 'package:cyrene_music_reborn/features/player/desktop_fullscreen_player_route.dart';
 import 'package:cyrene_music_reborn/features/player/super_cyrene/super_cyrene_fullscreen_player.dart';
 import 'package:cyrene_music_reborn/infrastructure/services/configured_audio_source_importer.dart';
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -71,10 +73,115 @@ void main() {
         (tester) async => _pumpRoute(tester, size: size, superCyrene: superCyrene),
       );
     }
+
+    // 平板走的就是这套桌面播放器（断点按宽度判），但它没有鼠标悬停也没有键盘，
+    // 标题栏折叠键与 Esc 全部失效，返回键是唯一的退路。
+    testWidgets(
+      '返回键最小化播放器：${superCyrene ? 'SuperCyrene' : '经典'}',
+      (tester) async {
+        final ctx = await _pumpRoute(
+          tester,
+          size: const Size(1280, 800),
+          superCyrene: superCyrene,
+        );
+
+        await _pressBack(tester);
+        for (var i = 0; i < 40; i++) {
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+
+        expect(
+          find.byType(DesktopFullscreenPlayerHost),
+          findsNothing,
+          reason: '返回键该把全屏播放器 pop 掉',
+        );
+        // 「最小化」而不是「退出到别处」：外壳原样还在。
+        expect(find.text('shell'), findsOneWidget);
+        expect(ctx.navigatorKey.currentState!.canPop(), isFalse);
+      },
+    );
   }
+
+  // 经典播放器在触摸平板上没有 hover 标题栏也没有键盘，左上角必须有常驻的
+  // 最小化按钮兜底（SuperCyrene 早就有自己的移动端分支，不走这条）。
+  testWidgets('触摸平台：经典播放器左上角有最小化按钮，点击即最小化', (tester) async {
+    // 必须在测试体内复位：绑定的不变量校验早于 addTearDown，留着会让本条红。
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      final ctx = await _pumpRoute(
+        tester,
+        size: const Size(1280, 800),
+        superCyrene: false,
+      );
+
+      final button = find.byTooltip('最小化播放器');
+      expect(button, findsOneWidget);
+      // 左上角：在窗口的左半、上半区。
+      final center = tester.getCenter(button);
+      expect(center.dx, lessThan(120));
+      expect(center.dy, lessThan(120));
+
+      await tester.tap(button);
+      for (var i = 0; i < 40; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+
+      expect(find.byType(DesktopFullscreenPlayerHost), findsNothing);
+      expect(find.text('shell'), findsOneWidget);
+      expect(ctx.navigatorKey.currentState!.canPop(), isFalse);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('桌面平台：不渲染触摸最小化按钮，仍走 hover 标题栏', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    try {
+      await _pumpRoute(tester, size: const Size(1280, 800), superCyrene: false);
+
+      expect(find.byTooltip('最小化播放器'), findsNothing);
+      expect(find.byTooltip('折叠全屏播放器'), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('退场动画途中再按返回键不会把外壳一起弹掉', (tester) async {
+    final ctx = await _pumpRoute(
+      tester,
+      size: const Size(1280, 800),
+      superCyrene: false,
+    );
+
+    // 连按两下：第二下落在退场动画途中，此时路由已不是 current。
+    await _pressBack(tester);
+    await tester.pump(const Duration(milliseconds: 16));
+    await _pressBack(tester);
+    for (var i = 0; i < 40; i++) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+
+    expect(find.text('shell'), findsOneWidget);
+    expect(ctx.navigatorKey.currentState!.canPop(), isFalse);
+  });
 }
 
-Future<void> _pumpRoute(
+/// 模拟系统返回键：走 Flutter 的 popRoute 通道，与安卓实机同一条路径。
+Future<void> _pressBack(WidgetTester tester) async {
+  await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+    'flutter/navigation',
+    const JSONMethodCodec().encodeMethodCall(
+      const MethodCall('popRoute'),
+    ),
+    (_) {},
+  );
+  await tester.pump();
+}
+
+/// [_pumpRoute] 的产物，供调用方在 pump 完之后继续操作导航栈。
+typedef _PumpedRoute = ({GlobalKey<NavigatorState> navigatorKey});
+
+Future<_PumpedRoute> _pumpRoute(
   WidgetTester tester, {
   required Size size,
   required bool superCyrene,
@@ -157,6 +264,8 @@ Future<void> _pumpRoute(
     expect(painted.height, greaterThan(0));
     // 入场动画走完后应当铺满窗口，而不是被揭幕裁剪停在 0 高。
     expect(painted.height, closeTo(size.height, 1));
+
+    return (navigatorKey: navigatorKey);
   }
 }
 

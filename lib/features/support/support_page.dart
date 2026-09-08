@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../application/auth/account_session_controller.dart';
+import '../../domain/models/qq_group.dart';
 import '../../domain/models/sponsor.dart';
+import '../../infrastructure/services/public_config_service.dart';
 import '../../infrastructure/services/sponsor_service.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
+import '../../presentation/cyrene/cyrene_toast.dart';
 
 class SupportPage extends StatefulWidget {
   const SupportPage({super.key, required this.account});
@@ -20,6 +24,9 @@ class _SupportPageState extends State<SupportPage> {
   var _requestId = 0;
   String? _error;
   SponsorListResponse? _list;
+
+  /// 服务端下发的 QQ 群配置。null = 还没拉到 / 拉取失败，此时不渲染入口。
+  QqGroup? _qqGroup;
 
   @override
   void initState() {
@@ -39,15 +46,40 @@ class _SupportPageState extends State<SupportPage> {
       _loading = true;
       _error = null;
     });
-    final response = await SponsorService.instance.getSponsorList();
+    // 两个请求并行：QQ 群配置慢/失败不该拖住赞助墙，反之亦然。
+    // 先各自起飞再逐个 await——Future.wait 在这里会把两个不同的返回类型
+    // 归并成 List<Object?>，落地时还得强转回来。
+    final sponsorRequest = SponsorService.instance.getSponsorList();
+    final qqGroupRequest = PublicConfigService.instance.fetchQqGroup();
+    final response = await sponsorRequest;
+    final qqGroup = await qqGroupRequest;
     if (!mounted || requestId != _requestId) return;
     setState(() {
       _loading = false;
       _list = response.data;
+      _qqGroup = qqGroup;
       if (response.code != 200 || response.data == null) {
         _error = response.message ?? '赞助墙加载失败，请稍后重试。';
       }
     });
+  }
+
+  /// 跳到 QQ 的入群链接。
+  ///
+  /// 走 externalApplication：这个链接在装了 QQ 的机器上应当由 QQ 接管，
+  /// 塞进应用内 WebView 只会得到一个「请在 QQ 中打开」的空页。
+  Future<void> _joinQqGroup(QqGroup group) async {
+    final uri = Uri.tryParse(group.url);
+    if (uri == null) {
+      CyreneToast.show('入群链接无效');
+      return;
+    }
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok) CyreneToast.show('无法打开入群链接');
+    } catch (e) {
+      CyreneToast.show('无法打开入群链接');
+    }
   }
 
   @override
@@ -109,6 +141,30 @@ class _SupportPageState extends State<SupportPage> {
                 ],
               ),
             ),
+            // 交流群入口完全由服务端 config.json 的 qq_group 决定：
+            // enabled 为 false（或没配 url）时整块不渲染，不留占位也不留死按钮。
+            if (_qqGroup?.canJoin == true) ...[
+              const SizedBox(height: 24),
+              const CyreneSectionTitle(
+                title: '交流与反馈',
+                description: '遇到问题或想提建议，来群里找我们',
+              ),
+              const SizedBox(height: 12),
+              CyreneMenuGroup(
+                children: [
+                  CyreneMenuRow(
+                    key: const Key('join-qq-group'),
+                    vector: MiuixIcons.extended.byName('community')!,
+                    iconBackground: const Color(0xFF12B7F5),
+                    title: '加入 QQ 群',
+                    subtitle: _qqGroup!.name.isEmpty
+                        ? 'Cyrene Music 用户群'
+                        : _qqGroup!.name,
+                    onTap: () => _joinQqGroup(_qqGroup!),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 24),
             const CyreneSectionTitle(title: '赞助墙', description: '感谢这些同行者'),
             const SizedBox(height: 12),

@@ -9,6 +9,7 @@ import '../../application/auth/account_session_controller.dart';
 import '../../application/playback/playback_controller.dart';
 import '../../domain/models/track.dart';
 import '../../domain/playback/playback_state.dart';
+import 'mini_player_layer.dart' show kFullscreenPlayerRouteName;
 import 'mobile/mobile_fullscreen_player_host.dart';
 import 'mobile/mobile_player_page.dart';
 import 'track_artwork.dart';
@@ -24,11 +25,19 @@ class MiniPlayer extends StatefulWidget {
     required this.playback,
     required this.audioSources,
     required this.account,
+    this.navigatorKey,
   });
 
   final PlaybackController playback;
   final AudioSourcePreferencesController audioSources;
   final AccountSessionController account;
+
+  /// 用于打开全屏播放器的 Navigator。
+  ///
+  /// 迷你播放器现在挂在 Navigator **之上**（见 [MiniPlayerLayer]），
+  /// `Navigator.of(context)` 找不到祖先，必须由外部把根 Navigator 的 key 传进来。
+  /// 为 null 时退回从 context 找（保留给仍在路由树内使用的场景）。
+  final GlobalKey<NavigatorState>? navigatorKey;
 
   @override
   State<MiniPlayer> createState() => _MiniPlayerState();
@@ -66,19 +75,26 @@ class _MiniPlayerState extends State<MiniPlayer> {
     _restartCollapseTimer();
   }
 
+  NavigatorState? get _navigator =>
+      widget.navigatorKey?.currentState ?? Navigator.maybeOf(context);
+
   void _openPlayer() {
+    final navigator = _navigator;
+    if (navigator == null) return;
     // 移动端：外观设置选了 SuperCyrene 时进横屏 SuperCyrene 播放器。
     if (shouldOpenMobileSuperCyrene()) {
       pushMobileSuperCyrenePlayer(
-        context,
+        navigator,
         playback: widget.playback,
         audioSources: widget.audioSources,
         account: widget.account,
       );
       return;
     }
-    Navigator.of(context).push(
+    navigator.push(
       CupertinoPageRoute<void>(
+        // 标记成全屏播放器路由，好让全局迷你播放器层在它打开时收起自己。
+        settings: const RouteSettings(name: kFullscreenPlayerRouteName),
         builder: (_) => MobilePlayerPage(
           playback: widget.playback,
           audioSources: widget.audioSources,

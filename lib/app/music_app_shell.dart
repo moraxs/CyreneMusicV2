@@ -3,6 +3,7 @@ import 'package:flutter/material.dart' hide SearchController;
 import 'package:flutter_miuix/miuix.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
+import '../application/announcements/announcement_controller.dart';
 import '../application/audio_sources/audio_source_preferences_controller.dart';
 import '../application/auth/account_session_controller.dart';
 import '../application/discovery/discover_controller.dart';
@@ -12,10 +13,12 @@ import '../application/playlists/playlist_library_controller.dart';
 import '../application/search/search_controller.dart';
 import '../application/updates/update_controller.dart';
 import '../domain/models/discovery.dart';
+import '../features/announcements/announcement_dialog.dart';
 import '../features/discover/discover_page.dart';
 import '../features/home/now_listening_page.dart';
 import '../features/more/more_menu_drawer.dart';
-import '../features/player/mini_player.dart';
+import '../features/player/mini_player_layer.dart'
+    show kFullscreenPlayerRouteName;
 import '../features/player/mobile/mobile_player_page.dart';
 import '../features/player/mobile/mobile_fullscreen_player_host.dart';
 import '../features/player/desktop_fullscreen_player_host.dart';
@@ -58,17 +61,28 @@ class _MusicAppShellState extends State<MusicAppShell> {
   @override
   void initState() {
     super.initState();
-    // 启动后静默检查一次更新。放在外壳而不是 main：弹窗需要导航树里的
+    // 启动后静默跑一遍更新检查与公告。放在外壳而不是 main：弹窗需要导航树里的
     // context，main 的 initState 拿不到。首帧后再延迟几秒，避开启动期的
     // 网络与布局高峰。
-    WidgetsBinding.instance.addPostFrameCallback((_) => _checkUpdateOnce());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _runStartupChecks());
   }
 
-  /// 整个应用生命周期内只自动检查一次——外壳不会被重建，无需额外的重入保护。
-  Future<void> _checkUpdateOnce() async {
+  /// 整个应用生命周期内只跑一次——外壳不会被重建，无需额外的重入保护。
+  ///
+  /// 顺序是先更新后公告，且串行 await：两者都是命令式弹窗，并行会互相叠在
+  /// 一起，后弹的还可能被先弹那个的退场动画顺手 pop 掉（见 showUpdateDialog
+  /// 里的注释）。强制更新/维护公告的弹窗不可关闭，公告自然就轮不上——这也是
+  /// 想要的效果。
+  Future<void> _runStartupChecks() async {
     await Future<void>.delayed(const Duration(seconds: 4));
     if (!mounted) return;
 
+    await _checkUpdateOnce();
+    if (!mounted) return;
+    await _showAnnouncementOnce();
+  }
+
+  Future<void> _checkUpdateOnce() async {
     final update = UpdateController.instance;
     final info = await update.check();
     if (!mounted || info == null) return;
@@ -76,6 +90,22 @@ class _MusicAppShellState extends State<MusicAppShell> {
     if (!mounted) return;
 
     await showUpdateDialog(context, info);
+  }
+
+  /// 启动公告：后端开了公告、且编号比用户勾「不再提示」时记下的更大才弹。
+  Future<void> _showAnnouncementOnce() async {
+    final announcements = AnnouncementController.instance;
+    final announcement = await announcements.fetch();
+    if (!mounted || announcement == null) return;
+    if (!await announcements.shouldPrompt(announcement)) return;
+    if (!mounted) return;
+
+    await showAnnouncementDialog(
+      context,
+      announcement,
+      showDismissOption: true,
+      controller: announcements,
+    );
   }
 
   @override
@@ -126,17 +156,9 @@ class _MusicAppShellState extends State<MusicAppShell> {
                 ),
               ],
             ),
-            if (widget.playback.state.currentTrack != null)
-              Positioned(
-                left: 16,
-                right: 16,
-                bottom: 104,
-                child: MiniPlayer(
-                  playback: widget.playback,
-                  audioSources: widget.audioSources,
-                  account: widget.account,
-                ),
-              ),
+            // 迷你播放器不在这里——它已提到 Navigator 之上（见 MiniPlayerLayer
+            // 与 main.dart 的 MaterialApp.builder）。留在外壳 Scaffold 里的话，
+            // 任何 push 出来的页面（歌单详情、搜索…）都会整块把它盖掉。
             Positioned(
               left: 0,
               right: 0,
@@ -282,7 +304,7 @@ class _MusicAppShellState extends State<MusicAppShell> {
     // 移动端：外观设置选了 SuperCyrene 时进横屏 SuperCyrene 播放器。
     if (shouldOpenMobileSuperCyrene()) {
       pushMobileSuperCyrenePlayer(
-        context,
+        Navigator.of(context),
         playback: widget.playback,
         audioSources: widget.audioSources,
         account: widget.account,
@@ -291,6 +313,8 @@ class _MusicAppShellState extends State<MusicAppShell> {
     }
     Navigator.of(context).push(
       CupertinoPageRoute<void>(
+        // 标记成全屏播放器路由，好让全局迷你播放器层在它打开时收起自己。
+        settings: const RouteSettings(name: kFullscreenPlayerRouteName),
         builder: (_) => MobilePlayerPage(
           playback: widget.playback,
           audioSources: widget.audioSources,

@@ -5,6 +5,7 @@ import '../../infrastructure/audio/dsp_effects_service.dart';
 import '../../infrastructure/audio/equalizer_service.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
 import 'dsp_effects_section.dart';
+import 'settings_body.dart';
 
 /// 均衡器设置页（对应原版 equalizer_page.dart 的移动端 Material 版）。
 ///
@@ -13,14 +14,34 @@ import 'dsp_effects_section.dart';
 ///
 /// 均衡器之后追加 [DspEffectsSection]，但仅限捆绑了定制 libmpv 的平台
 /// （目前只有 Windows，见 [DspEffectsService.isSupported]）。
-class EqualizerPage extends StatefulWidget {
+class EqualizerPage extends StatelessWidget {
   const EqualizerPage({super.key});
 
   @override
-  State<EqualizerPage> createState() => _EqualizerPageState();
+  Widget build(BuildContext context) => CyrenePage(
+    title: DspEffectsService.isSupported ? '音效与均衡器' : '均衡器',
+    bodyBuilder: (context, topPadding) => EqualizerBody(topPadding: topPadding),
+  );
 }
 
-class _EqualizerPageState extends State<EqualizerPage> {
+/// 均衡器（以及支持的平台上的 DSP）正文，不含页面骨架。
+///
+/// 独立成组件是为了让桌面端的合并设置页直接嵌这一份。
+class EqualizerBody extends StatefulWidget {
+  const EqualizerBody({
+    super.key,
+    this.topPadding = EdgeInsets.zero,
+    this.embedded = false,
+  });
+
+  final EdgeInsets topPadding;
+  final bool embedded;
+
+  @override
+  State<EqualizerBody> createState() => _EqualizerBodyState();
+}
+
+class _EqualizerBodyState extends State<EqualizerBody> {
   /// 内置预设（与原版完全一致），数组顺序对应 31Hz → 16kHz。
   static const Map<String, List<double>> _presets = {
     '默认': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -74,131 +95,126 @@ class _EqualizerPageState extends State<EqualizerPage> {
       '${gain > 0 ? '+' : ''}${gain.toStringAsFixed(1)}';
 
   @override
-  Widget build(BuildContext context) => CyrenePage(
-    title: DspEffectsService.isSupported ? '音效与均衡器' : '均衡器',
-    bodyBuilder: (context, topPadding) => ListenableBuilder(
-      listenable: _equalizer,
-      builder: (context, _) {
-        final theme = MiuixTheme.of(context);
-        final enabled = _equalizer.enabled;
-        final gains = _equalizer.gains;
-        final currentPreset = _currentPresetName(gains);
-        return ListView(
-          physics: const BouncingScrollPhysics(),
-          padding: topPadding + const EdgeInsets.fromLTRB(12, 4, 12, 40),
-          children: [
-            // 只有并排出现 DSP 区块时才需要小标题分节；移动端页面只有均衡器
-            // 一节，页标题已经说明，不再重复。
-            if (DspEffectsService.isSupported)
-              const MiuixSmallTitle(
-                '均衡器',
-                insideMargin: EdgeInsets.fromLTRB(16, 4, 16, 8),
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: _equalizer,
+    builder: (context, _) {
+      final theme = MiuixTheme.of(context);
+      final enabled = _equalizer.enabled;
+      final gains = _equalizer.gains;
+      final currentPreset = _currentPresetName(gains);
+      return SettingsBody(
+        topPadding: widget.topPadding,
+        embedded: widget.embedded,
+        children: [
+          // 只有并排出现 DSP 区块时才需要小标题分节；移动端页面只有均衡器
+          // 一节，页标题已经说明，不再重复。
+          if (DspEffectsService.isSupported)
+            const MiuixSmallTitle(
+              '均衡器',
+              insideMargin: EdgeInsets.fromLTRB(16, 4, 16, 8),
+            ),
+          CyreneMenuGroup(
+            children: [
+              CyreneMenuRow(
+                vector: MiuixIcons.extended.byName('tune')!,
+                iconBackground: const Color(0xFF3CC756),
+                title: '启用均衡器',
+                subtitle: '关闭后恢复原始音频输出',
+                trailing: MiuixSwitch(
+                  value: enabled,
+                  onChanged: (value) => _equalizer.setEnabled(value),
+                ),
+                onTap: () => _equalizer.setEnabled(!enabled),
               ),
-            CyreneMenuGroup(
-              children: [
-                CyreneMenuRow(
-                  vector: MiuixIcons.extended.byName('tune')!,
-                  iconBackground: const Color(0xFF3CC756),
-                  title: '启用均衡器',
-                  subtitle: '关闭后恢复原始音频输出',
-                  trailing: MiuixSwitch(
-                    value: enabled,
-                    onChanged: (value) => _equalizer.setEnabled(value),
+            ],
+          ),
+          const SizedBox(height: 12),
+          CyreneInlineAlert(
+            vector: MiuixIcons.extended.byName('info')!,
+            description: '均衡器目前仅支持mp3格式，暂时不支持无损音质和Hi-Res音质',
+          ),
+          const SizedBox(height: 8),
+          // 与原版一致：未启用时预设与推子整体变灰且不可交互。
+          Opacity(
+            opacity: enabled ? 1.0 : 0.4,
+            child: AbsorbPointer(
+              absorbing: !enabled,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const MiuixSmallTitle(
+                    '预设',
+                    insideMargin: EdgeInsets.fromLTRB(16, 8, 16, 8),
                   ),
-                  onTap: () => _equalizer.setEnabled(!enabled),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            CyreneInlineAlert(
-              vector: MiuixIcons.extended.byName('info')!,
-              description: '均衡器目前仅支持mp3格式，暂时不支持无损音质和Hi-Res音质',
-            ),
-            const SizedBox(height: 8),
-            // 与原版一致：未启用时预设与推子整体变灰且不可交互。
-            Opacity(
-              opacity: enabled ? 1.0 : 0.4,
-              child: AbsorbPointer(
-                absorbing: !enabled,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const MiuixSmallTitle(
-                      '预设',
-                      insideMargin: EdgeInsets.fromLTRB(16, 8, 16, 8),
+                  SizedBox(
+                    height: 48,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      physics: const BouncingScrollPhysics(),
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      itemCount: _presets.length,
+                      separatorBuilder: (_, _) => const SizedBox(width: 8),
+                      itemBuilder: (context, index) {
+                        final name = _presets.keys.elementAt(index);
+                        final selected = name == currentPreset;
+                        return MiuixButton(
+                          onPressed: () =>
+                              _equalizer.updateGains(_presets[name]!),
+                          colors: selected
+                              ? MiuixButtonDefaults.buttonColorsPrimary(context)
+                              : null,
+                          // 横向预设按钮默认 13px 垂直内边距会把文字下半部分挤出
+                          // 固定高度容器（含中文 descender），收紧到 6px 保证完整显示。
+                          insideMargin: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 6,
+                          ),
+                          child: MiuixText(
+                            name,
+                            style: theme.textStyles.button,
+                          ),
+                        );
+                      },
                     ),
-                    SizedBox(
-                      height: 48,
-                      child: ListView.separated(
-                        scrollDirection: Axis.horizontal,
-                        physics: const BouncingScrollPhysics(),
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        itemCount: _presets.length,
-                        separatorBuilder: (_, _) => const SizedBox(width: 8),
-                        itemBuilder: (context, index) {
-                          final name = _presets.keys.elementAt(index);
-                          final selected = name == currentPreset;
-                          return MiuixButton(
-                            onPressed: () =>
-                                _equalizer.updateGains(_presets[name]!),
-                            colors: selected
-                                ? MiuixButtonDefaults.buttonColorsPrimary(
-                                    context,
-                                  )
-                                : null,
-                            // 横向预设按钮默认 13px 垂直内边距会把文字下半部分挤出
-                            // 固定高度容器（含中文 descender），收紧到 6px 保证完整显示。
-                            insideMargin: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 6,
-                            ),
-                            child: MiuixText(
-                              name,
-                              style: theme.textStyles.button,
-                            ),
-                          );
-                        },
+                  ),
+                  const MiuixSmallTitle(
+                    '频段增益 (dB)',
+                    insideMargin: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  ),
+                  MiuixCard(
+                    cornerRadius: 20,
+                    insideMargin: const EdgeInsets.fromLTRB(10, 18, 10, 14),
+                    child: SizedBox(
+                      height: 300,
+                      child: Row(
+                        children: [
+                          for (
+                            var i = 0;
+                            i < EqualizerService.frequencies.length;
+                            i++
+                          )
+                            Expanded(child: _buildBand(theme, gains, i)),
+                        ],
                       ),
                     ),
-                    const MiuixSmallTitle(
-                      '频段增益 (dB)',
-                      insideMargin: EdgeInsets.fromLTRB(16, 16, 16, 8),
-                    ),
-                    MiuixCard(
-                      cornerRadius: 20,
-                      insideMargin: const EdgeInsets.fromLTRB(10, 18, 10, 14),
-                      child: SizedBox(
-                        height: 300,
-                        child: Row(
-                          children: [
-                            for (
-                              var i = 0;
-                              i < EqualizerService.frequencies.length;
-                              i++
-                            )
-                              Expanded(child: _buildBand(theme, gains, i)),
-                          ],
-                        ),
+                  ),
+                  const SizedBox(height: 14),
+                  Center(
+                    child: Text(
+                      '提示：调节过大可能会导致失真',
+                      style: theme.textStyles.footnote1.copyWith(
+                        color: theme.colors.onSurfaceVariantSummary,
                       ),
                     ),
-                    const SizedBox(height: 14),
-                    Center(
-                      child: Text(
-                        '提示：调节过大可能会导致失真',
-                        style: theme.textStyles.footnote1.copyWith(
-                          color: theme.colors.onSurfaceVariantSummary,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
-            if (DspEffectsService.isSupported) const DspEffectsSection(),
-          ],
-        );
-      },
-    ),
+          ),
+          if (DspEffectsService.isSupported) const DspEffectsSection(),
+        ],
+      );
+    },
   );
 
   Widget _buildBand(MiuixThemeData theme, List<double> gains, int index) {

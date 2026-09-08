@@ -4,6 +4,8 @@ import 'dart:ui' as ui show lerpDouble;
 import 'dart:ui' show FontFeature, ImageFilter;
 
 import 'package:flutter/cupertino.dart' show CupertinoIcons, CupertinoPageRoute;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter_miuix/miuix.dart';
@@ -84,6 +86,17 @@ class _DesktopFullscreenPlayerState extends State<DesktopFullscreenPlayer>
     PlayerBackgroundService(),
   ]);
 
+  /// 触摸平台（安卓 / iOS 平板）。
+  ///
+  /// 布局断点只看宽度（>= 900 走桌面壳），所以平板也会落到这套桌面播放器上，
+  /// 但它既没有鼠标 hover 也没有键盘，更没有「窗口」可最小化/最大化——
+  /// windowManager 那套在这里全是空调用（安卓上直接抛 MissingPluginException）。
+  /// 与 SuperCyrene 的 `_isDesktop` 同一个用途，只是这里正面判触摸平台，
+  /// 免得把 macOS / Linux 误划进移动端。
+  static bool get _isTouch =>
+      defaultTargetPlatform == TargetPlatform.android ||
+      defaultTargetPlatform == TargetPlatform.iOS;
+
   @override
   void initState() {
     super.initState();
@@ -94,8 +107,10 @@ class _DesktopFullscreenPlayerState extends State<DesktopFullscreenPlayer>
     );
     _lastTrack = widget.playback.state.currentTrack;
     _loadLyrics();
-    windowManager.addListener(this);
-    _syncMaximizedState();
+    if (!_isTouch) {
+      windowManager.addListener(this);
+      _syncMaximizedState();
+    }
     widget.playback.addListener(_onPlaybackChanged);
     widget.playback.positionListenable.addListener(_updateLyricIndex);
   }
@@ -103,7 +118,7 @@ class _DesktopFullscreenPlayerState extends State<DesktopFullscreenPlayer>
   @override
   void dispose() {
     _titleBarHideTimer?.cancel();
-    windowManager.removeListener(this);
+    if (!_isTouch) windowManager.removeListener(this);
     widget.playback.removeListener(_onPlaybackChanged);
     widget.playback.positionListenable.removeListener(_updateLyricIndex);
     super.dispose();
@@ -257,20 +272,21 @@ class _DesktopFullscreenPlayerState extends State<DesktopFullscreenPlayer>
                             // 歌词沿用经典播放器原本的流体云面板，只是被摆进
                             // 莫奈海报的左栏；宽度跟上游歌词轨对齐（780 × 大屏
                             // 系数），否则会一路铺到右侧封面底下。
-                            contentBuilder: (context, metrics) => ConstrainedBox(
-                              constraints: BoxConstraints(
-                                maxWidth: 780 * metrics.layoutScale,
-                              ),
-                              child: _showSongInfoPanel
-                                  ? _DesktopSongInfoPanel(track: track)
-                                  : MobilePlayerFluidCloudLyricsPanel(
-                                      lyrics: _lyrics,
-                                      currentLyricIndex: _currentLyricIndex,
-                                      showTranslation: true,
-                                      showRomaji: true,
-                                      visibleLineCount: 7,
-                                    ),
-                            ),
+                            contentBuilder: (context, metrics) =>
+                                ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxWidth: 780 * metrics.layoutScale,
+                                  ),
+                                  child: _showSongInfoPanel
+                                      ? _DesktopSongInfoPanel(track: track)
+                                      : MobilePlayerFluidCloudLyricsPanel(
+                                          lyrics: _lyrics,
+                                          currentLyricIndex: _currentLyricIndex,
+                                          showTranslation: true,
+                                          showRomaji: true,
+                                          visibleLineCount: 7,
+                                        ),
+                                ),
                           ),
                         ),
                       ),
@@ -288,107 +304,146 @@ class _DesktopFullscreenPlayerState extends State<DesktopFullscreenPlayer>
 
   /// 悬停标题栏、底部胶囊排、一起听图层——与海报无关的那部分外壳。
   List<Widget> _chrome(BuildContext context, Track track) => [
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    height: 32,
-                    child: MouseRegion(
-                      onEnter: (_) => _showTitleBar(),
-                      child: const SizedBox.expand(),
-                    ),
-                  ),
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: IgnorePointer(
-                      ignoring: !_titleBarVisible,
-                      child: AnimatedSlide(
-                        offset: _titleBarVisible
-                            ? Offset.zero
-                            : const Offset(0, -1),
-                        duration: const Duration(milliseconds: 500),
-                        curve: Curves.easeOutCubic,
-                        child: AnimatedOpacity(
-                          opacity: _titleBarVisible ? 1 : 0,
-                          duration: const Duration(milliseconds: 350),
-                          curve: Curves.easeOut,
-                          child: MouseRegion(
-                            onEnter: (_) => _showTitleBar(),
-                            onExit: (_) => _scheduleTitleBarHide(),
-                            child: _FullscreenTitleBar(
-                              title: track.name.isEmpty
-                                  ? 'Cyrene Player'
-                                  : track.name,
-                              isMaximized: _isMaximized,
-                              onSwitchToSuperCyrene:
-                                  widget.onSwitchToSuperCyrene,
-                              onExitFullscreen: () =>
-                                  Navigator.of(context).pop(),
-                              onMinimize: windowManager.minimize,
-                              onToggleMaximize: () => _isMaximized
-                                  ? windowManager.unmaximize()
-                                  : windowManager.maximize(),
-                              onClose: windowManager.close,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    left: 28,
-                    right: 28,
-                    bottom: 24,
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        _UtilityCapsule(
-                          playback: widget.playback,
-                          lyricsVisible: _showLyrics && !_showSongInfoPanel,
-                          songInfoVisible: _showLyrics && _showSongInfoPanel,
-                          onToggleLyrics: () => setState(() {
-                            if (_showSongInfoPanel || !_showLyrics) {
-                              _showSongInfoPanel = false;
-                              _showLyrics = true;
-                            } else {
-                              _showLyrics = false;
-                            }
-                          }),
-                          onSongInfo: () => setState(() {
-                            if (_showLyrics && _showSongInfoPanel) {
-                              _showLyrics = false;
-                              _showSongInfoPanel = false;
-                            } else {
-                              _showLyrics = true;
-                              _showSongInfoPanel = true;
-                            }
-                          }),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: _MainCapsule(
-                            playback: widget.playback,
-                            account: widget.account,
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        _ExpandableVolume(playback: widget.playback),
-                      ],
-                    ),
-                  ),
-                  // 一起听图层：房间胶囊 + 弹幕 + 发言入口，没在一起听时是空盒子。
-                  // 顶部让开 52px 的悬浮标题栏，底部让开 bottom:24 的控制胶囊排。
-                  const TogetherPlayerOverlay(
-                    // 桌面端不往语义树里加节点：见 TogetherPlayerOverlay.excludeSemantics
-                    // （Windows 无障碍桥 flutter#182444）。
-                    excludeSemantics: true,
-                    topOffset: 64,
-                    bottomOffset: 120,
-                    rightOffset: 28,
-                  ),
+    // 触摸平板走宽度断点也会渲染这套桌面播放器，但 hover 标题栏和
+    // Esc 在触摸屏上都不存在，只能给一个常驻的最小化按钮。结构对齐
+    // SuperCyrene 的 `if (_isDesktop) ... else ...`。
+    if (_isTouch)
+      Positioned(
+        top: MediaQuery.paddingOf(context).top + 8,
+        left: 16,
+        child: _TouchMinimizeButton(onTap: () => Navigator.of(context).pop()),
+      )
+    else ...[
+      Positioned(
+        top: 0,
+        left: 0,
+        right: 0,
+        height: 32,
+        child: MouseRegion(
+          onEnter: (_) => _showTitleBar(),
+          child: const SizedBox.expand(),
+        ),
+      ),
+      Positioned(
+        top: 0,
+        left: 0,
+        right: 0,
+        child: IgnorePointer(
+          ignoring: !_titleBarVisible,
+          child: AnimatedSlide(
+            offset: _titleBarVisible ? Offset.zero : const Offset(0, -1),
+            duration: const Duration(milliseconds: 500),
+            curve: Curves.easeOutCubic,
+            child: AnimatedOpacity(
+              opacity: _titleBarVisible ? 1 : 0,
+              duration: const Duration(milliseconds: 350),
+              curve: Curves.easeOut,
+              child: MouseRegion(
+                onEnter: (_) => _showTitleBar(),
+                onExit: (_) => _scheduleTitleBarHide(),
+                child: _FullscreenTitleBar(
+                  title: track.name.isEmpty ? 'Cyrene Player' : track.name,
+                  isMaximized: _isMaximized,
+                  onSwitchToSuperCyrene: widget.onSwitchToSuperCyrene,
+                  onExitFullscreen: () => Navigator.of(context).pop(),
+                  onMinimize: windowManager.minimize,
+                  onToggleMaximize: () => _isMaximized
+                      ? windowManager.unmaximize()
+                      : windowManager.maximize(),
+                  onClose: windowManager.close,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ],
+    Positioned(
+      left: 28,
+      right: 28,
+      bottom: 24,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          _UtilityCapsule(
+            playback: widget.playback,
+            lyricsVisible: _showLyrics && !_showSongInfoPanel,
+            songInfoVisible: _showLyrics && _showSongInfoPanel,
+            onToggleLyrics: () => setState(() {
+              if (_showSongInfoPanel || !_showLyrics) {
+                _showSongInfoPanel = false;
+                _showLyrics = true;
+              } else {
+                _showLyrics = false;
+              }
+            }),
+            onSongInfo: () => setState(() {
+              if (_showLyrics && _showSongInfoPanel) {
+                _showLyrics = false;
+                _showSongInfoPanel = false;
+              } else {
+                _showLyrics = true;
+                _showSongInfoPanel = true;
+              }
+            }),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: _MainCapsule(
+              playback: widget.playback,
+              account: widget.account,
+            ),
+          ),
+          const SizedBox(width: 16),
+          _ExpandableVolume(playback: widget.playback),
+        ],
+      ),
+    ),
+    // 一起听图层：房间胶囊 + 弹幕 + 发言入口，没在一起听时是空盒子。
+    // 顶部让开 52px 的悬浮标题栏，底部让开 bottom:24 的控制胶囊排。
+    const TogetherPlayerOverlay(
+      // 桌面端不往语义树里加节点：见 TogetherPlayerOverlay.excludeSemantics
+      // （Windows 无障碍桥 flutter#182444）。
+      excludeSemantics: true,
+      topOffset: 64,
+      bottomOffset: 120,
+      rightOffset: 28,
+    ),
   ];
+}
+
+/// 触摸平板上左上角的常驻最小化按钮。
+///
+/// 桌面端那条标题栏靠 hover 浮现，触摸屏不产生 hover 事件，所以这里必须常驻。
+/// 图标沿用标题栏里「折叠全屏播放器」那颗的 chevron_down，语义一致：收起全屏，
+/// 回到外壳的迷你播放器，播放不中断。外观对齐 SuperCyrene 的 _MobileTopAction，
+/// 免得同一台平板上两个播放器的左上角长得不一样。
+class _TouchMinimizeButton extends StatelessWidget {
+  const _TouchMinimizeButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: '最小化播放器',
+    child: GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.black.withValues(alpha: .35),
+          border: Border.all(color: Colors.white.withValues(alpha: .15)),
+        ),
+        child: Icon(
+          CupertinoIcons.chevron_down,
+          size: 20,
+          color: Colors.white.withValues(alpha: .9),
+        ),
+      ),
+    ),
+  );
 }
 
 /// Hover-revealed window bar matching SuperCyreneFullscreen.tsx. The buttons
@@ -1380,11 +1435,7 @@ class _Capsule extends StatelessWidget {
           context,
         ).settingsFor(context)?.applyTo(const LiquidGlassSettings()) ??
         const LiquidGlassSettings();
-    return base.copyWith(
-      lightIntensity: 0,
-      ambientStrength: 0,
-      ambientRim: 0,
-    );
+    return base.copyWith(lightIntensity: 0, ambientStrength: 0, ambientRim: 0);
   }
 
   @override

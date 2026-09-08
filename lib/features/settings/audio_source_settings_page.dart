@@ -17,6 +17,7 @@ import '../../infrastructure/services/sponsor_service.dart';
 import '../../presentation/cyrene/cyrene_overlays.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
 import '../../presentation/cyrene/cyrene_toast.dart';
+import 'settings_body.dart';
 
 enum _SourceSetupAction { omniManual, omniFile, lxMusic }
 
@@ -65,6 +66,7 @@ class AudioSourceSettingsBody extends StatelessWidget {
     required this.topPadding,
     required this.token,
     this.desktopLayout = false,
+    this.embedded = false,
   });
 
   final AudioSourcePreferencesController controller;
@@ -72,6 +74,10 @@ class AudioSourceSettingsBody extends StatelessWidget {
   final EdgeInsets topPadding;
   final String? token;
   final bool desktopLayout;
+
+  /// 嵌进桌面端合并设置页时为 true：自己不再滚动，也不再兜宽度上限
+  /// （外层长页统一管这两件事）。
+  final bool embedded;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -83,6 +89,7 @@ class AudioSourceSettingsBody extends StatelessWidget {
       topPadding: topPadding,
       token: token,
       desktopLayout: desktopLayout,
+      embedded: embedded,
     ),
   );
 }
@@ -95,6 +102,7 @@ class _AudioSourceSettingsBody extends StatelessWidget {
     required this.topPadding,
     required this.token,
     required this.desktopLayout,
+    required this.embedded,
   });
 
   final AudioSourcePreferencesController controller;
@@ -103,6 +111,7 @@ class _AudioSourceSettingsBody extends StatelessWidget {
   final EdgeInsets topPadding;
   final String? token;
   final bool desktopLayout;
+  final bool embedded;
 
   @override
   Widget build(BuildContext context) {
@@ -112,16 +121,11 @@ class _AudioSourceSettingsBody extends StatelessWidget {
     }
 
     final theme = MiuixTheme.of(context);
-    final content = ListView(
-      physics: const BouncingScrollPhysics(),
+    final content = SettingsBody(
+      topPadding: topPadding,
+      embedded: embedded,
       // 桌面端内容区居中后增加留白；移动端继续沿用 HyperOS 的 12px 页边距。
-      padding: topPadding +
-          EdgeInsets.fromLTRB(
-            desktopLayout ? 24 : 12,
-            4,
-            desktopLayout ? 24 : 12,
-            40,
-          ),
+      horizontalPadding: desktopLayout ? 24 : 12,
       children: [
         // Cyrene Premium：付款后后端自动下发 OmniParse 音源配置。仅登录用户显示。
         if (token != null && token!.isNotEmpty) ...[
@@ -244,7 +248,7 @@ class _AudioSourceSettingsBody extends StatelessWidget {
       ],
     );
 
-    if (!desktopLayout) return content;
+    if (!desktopLayout || embedded) return content;
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 1040),
