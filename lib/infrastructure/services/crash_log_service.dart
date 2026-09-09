@@ -5,11 +5,13 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 /// 启动期崩溃日志：把 Dart 层未捕获异常落到文件，供无控制台的 release
-/// 构建（如 Windows 发行版）排查「点击没反应 / 启动即崩溃」。
+/// 构建（Windows 发行版、iOS 自签名安装包等）排查「点击没反应 / 启动即崩溃 /
+/// 打开就是白屏」。用户能交出来的东西**只有这个文件**，所以凡是排查要用的
+/// 信息都得写进来（启动追踪见 main 的 `_logStartupTrace`）。
 ///
 /// 设计约束（对应发版要求）：
 /// - **仅记录异常**：只有全局异常处理器（FlutterError / PlatformDispatcher /
-///   Zone）捕获到的错误才写盘，不记录任何正常运行日志。
+///   Zone）捕获到的错误、以及启动失败/降级才写盘，不记录任何正常运行日志。
 /// - **防文件过大**：单份日志超 [maxLogBytes] 后轮转成 `crash.old.log`
 ///   （最多保留两份），单条 stack 截断到 [maxStackLines] 行。
 /// - **启动期可用**：init() 在 main() 最开始调用，即使后续初始化崩了也能写到。
@@ -46,14 +48,14 @@ class CrashLogService {
 
   bool get isReady => _ready;
 
-  /// 应用支持目录下当前 crash.log 的绝对路径（null 表示 init 失败）。
+  /// 当前 crash.log 的绝对路径（null 表示 init 失败）。目录见 [_logDirectory]。
   String? get logFilePath => _file?.path;
 
   /// 初始化日志文件并轮转超限旧文件。必须在 main() 最早期调用一次。
   Future<void> init({String appVersion = ''}) async {
     if (_ready) return;
     try {
-      final dir = await getApplicationSupportDirectory();
+      final dir = await _logDirectory();
       await dir.create(recursive: true);
       _file = File(p.join(dir.path, logName));
       _rotateIfNeeded();
@@ -104,6 +106,17 @@ class CrashLogService {
       _pending.add(entry);
     }
   }
+
+  /// 日志目录。
+  ///
+  /// iOS 走 Documents 而非 Application Support：后者在沙盒里，用户**根本
+  /// 拿不到**——白屏事故中我们让用户「附上 crash.log」，结果他们连文件都
+  /// 打不开，等于没有日志。Documents 配合 Info.plist 的 `UIFileSharingEnabled`
+  /// 会出现在「文件 → 我的 iPhone → Cyrene Music Reborn」下，用户能直接发出来。
+  /// 其余平台维持原样（桌面端用户本就能进 AppData / Application Support）。
+  Future<Directory> _logDirectory() => Platform.isIOS
+      ? getApplicationDocumentsDirectory()
+      : getApplicationSupportDirectory();
 
   /// 追加一段文本到日志文件（串行、追加写、写完即轮转检查）。
   void _enqueue(String text) {

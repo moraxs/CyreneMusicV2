@@ -16,6 +16,7 @@ import 'app/app_gate.dart';
 import 'app/app_version.dart';
 import 'app/debug_probe.dart';
 import 'app/startup_failure_app.dart';
+import 'app/startup_trace.dart';
 import 'app/desktop/desktop_fluent_theme.dart';
 import 'app/desktop/window_accent_acrylic.dart';
 import 'application/playback/playback_history_recorder.dart';
@@ -76,16 +77,13 @@ Future<void> main(List<String> args) async {
     return;
   }
 
-  // ===== 应用数据目录搬家（Windows）=====
-  // 必须排在所有会碰应用数据的初始化之前（崩溃日志、偏好存储都写在里面）。
-  // 见 WindowsAppDataMigration：目录名跟着 Runner.rc 的 CompanyName/ProductName
-  // 走，改名后老用户的登录态与设置得靠这一步搬过去。
-  await WindowsAppDataMigration.run();
-
-  // ===== 主引擎：崩溃日志 + 全局异常捕获（启动期最先初始化）=====
-  // 即使后续初始化（media_kit / 窗口效果 / 偏好）崩了，也把异常写到文件。
-  await CrashLogService.instance.init(appVersion: appVersion);
+  // ===== 全局异常捕获（越早装越好）=====
+  // CrashLogService 在自己 init 完成前会把异常缓冲在内存里补写，所以处理器
+  // 不必等日志文件就绪——提前到这里，启动最早期的异常也不会漏。
   _installGlobalCrashHandlers();
+
+  // ===== 启动看门狗（必须早于任何 await）=====
+  _startStartupWatchdog();
 
   // runZonedGuarded 包裹主初始化与 runApp：捕获任意 async / 顶层未处理异常
   // （FlutterError.onError 只管框架报告，管不了普通 async 冒泡错误）。
@@ -102,10 +100,15 @@ Future<void> main(List<String> args) async {
           stack,
           context: 'bootstrap',
         );
+        // 异常本身说不出「走到哪一步炸的」，追踪单独再记一条。
+        _logStartupTrace('startup_trace', '启动中断，追踪如下');
+        _cancelStartupWatchdog();
+        StartupTrace.markRunApp();
         runApp(
           StartupFailureApp(
             error: error,
             appVersion: appVersion,
+            trace: StartupTrace.report(),
             logFilePath: CrashLogService.instance.logFilePath,
           ),
         );
@@ -115,6 +118,112 @@ Future<void> main(List<String> args) async {
       CrashLogService.instance.logException(error, stack, context: 'zone');
     },
   );
+}
+
+/// 首帧迟迟不出现时的兜底时限。
+///
+/// 正常冷启动到首帧在 1~2 秒内；12 秒既远超正常值（不会误伤慢设备），
+/// 又在用户强杀应用之前——白屏超过十几秒，多数人就直接卸载了。
+const Duration _kStartupWatchdogTimeout = Duration(seconds: 12);
+
+Timer? _startupWatchdog;
+
+/// 首帧看门狗：把「永远白屏」变成「一屏写着卡在哪一步的诊断」。
+///
+/// 前一次修复只给 `_bootstrap` 包了 try/catch，那只覆盖**抛异常**。白屏还有
+/// 另一种成因，而且更难查：某一步的 `await` **永远不返回**。没有异常、没有
+/// 崩溃，`runApp` 就是不执行，iOS 停在纯白的 LaunchScreen
+/// （`ios/Runner/Base.lproj/LaunchScreen.storyboard`），用户拿不到任何线索——
+/// 正是这次反馈的「依旧白屏，看不到任何报错」。
+///
+/// 所以这里不看「有没有异常」，只看**首帧到底画出来没有**：超时仍未渲染，
+/// 就强行挂上兜底页，把 [StartupTrace] 的步骤追踪摆到屏幕上。
+///
+/// 局限（诚实记录）：Dart 是单线程的，若卡点是**同步**调用（例如 dlopen 一个
+/// 坏掉的原生库直接死在 FFI 里），事件循环整个停摆，这个 Timer 也不会触发。
+/// 那种情况下屏幕上什么都不会出现——而「连兜底页都没出来」本身就是结论：
+/// 问题在原生层，不在 Dart 层。
+void _startStartupWatchdog() {
+  _watchFirstFrame();
+  _startupWatchdog = Timer(_kStartupWatchdogTimeout, () {
+    // 先置空：_watchFirstFrame 据此停止逐帧重挂回调（看门狗已经出手，
+    // 再盯下去没有意义）。
+    _startupWatchdog = null;
+    if (StartupTrace.firstFrameRendered) return;
+    final report = StartupTrace.report();
+    _logStartupTrace(
+      'startup_watchdog',
+      '启动超时：${_kStartupWatchdogTimeout.inSeconds}s 内未渲染首帧',
+    );
+    debugPrint('[启动] 看门狗触发，追踪如下：\n$report');
+    // 这里不 markRunApp：真正的 _bootstrap 可能只是慢，稍后仍会 runApp 把
+    // 应用换上来（能起来就让它起来，别为了留一屏错误把可用的应用挡掉）。
+    // 诊断信息已经落到崩溃日志，不会因为界面被替换而丢失。
+    runApp(
+      StartupFailureApp(
+        title: '启动超时',
+        error:
+            '应用启动 ${_kStartupWatchdogTimeout.inSeconds} 秒后仍未渲染首帧，'
+            '通常是某一步初始化卡住了。下方「启动追踪」中标记「← 卡在这里」'
+            '的那一步就是卡点。',
+        appVersion: appVersion,
+        trace: report,
+        logFilePath: CrashLogService.instance.logFilePath,
+      ),
+    );
+  });
+}
+
+/// 等待第一帧「有内容的」画面。
+///
+/// 挂上根 widget 之前引擎也可能画空帧（窗口尺寸变化等会触发），那种帧照样
+/// 是白的，不能当作启动成功，故要等 `runApp` 之后的第一帧。
+void _watchFirstFrame() {
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (!StartupTrace.runAppCalled) {
+      // 看门狗已经出手或已解除时不再重挂：那之后盯首帧没有任何意义。
+      if (_startupWatchdog != null) _watchFirstFrame();
+      return;
+    }
+    StartupTrace.markFirstFrame();
+    _cancelStartupWatchdog();
+  });
+}
+
+/// 把启动追踪写进崩溃日志。
+///
+/// 白屏用户唯一能交出来的东西就是这个文件——追踪只打到 debugPrint 是不够的，
+/// 那个缓冲是纯内存的，进程一重启就没了，而白屏用户根本进不了「运行日志」页。
+///
+/// 追踪塞在 error 参数里而不是 stack：CrashLogService 会把 stack 截断到
+/// [CrashLogService.maxStackLines] 行，而这份报告正是全部价值所在，一行都
+/// 不能丢。stack 传 null——这里没有异常现场，调用栈没有任何信息量。
+void _logStartupTrace(String context, String summary) {
+  CrashLogService.instance.logException(
+    StateError('$summary\n${StartupTrace.report()}'),
+    null,
+    context: context,
+  );
+}
+
+/// 启动成功、但中途有步骤超时或失败时，把追踪落进崩溃日志。
+///
+/// 「能用但缺东西」是最容易漏掉的一类反馈：用户只会说「没声音」「设置没保存」，
+/// 界面上看不出任何异常。有这条记录，用户把 crash.log 发过来就能一眼看到是
+/// 哪一步没跑成。
+///
+/// 一切正常时不写——CrashLogService 的约定是只记异常，不记常规运行日志。
+void _logDegradedStartup() {
+  if (!StartupTrace.hasIssues) return;
+  _logStartupTrace(
+    'startup_degraded',
+    '启动降级：${StartupTrace.issueNames.join('、')}',
+  );
+}
+
+void _cancelStartupWatchdog() {
+  _startupWatchdog?.cancel();
+  _startupWatchdog = null;
 }
 
 /// 全局异常处理器：把 Flutter 框架错误与平台通道错误都落到崩溃日志。
@@ -151,44 +260,81 @@ Future<void> _bootstrap(List<String> args) async {
     defaultDebugPrint(message, wrapWidth: wrapWidth);
   };
   installProbe();
+
+  // ===== 应用数据目录搬家（Windows）=====
+  // 必须排在所有会碰应用数据的初始化之前（崩溃日志、偏好存储都写在里面）。
+  // 见 WindowsAppDataMigration：目录名跟着 Runner.rc 的 CompanyName/ProductName
+  // 走，改名后老用户的登录态与设置得靠这一步搬过去。
+  await StartupTrace.guard('appdata_migration', WindowsAppDataMigration.run);
+  // ===== 崩溃日志 =====
+  // 即使后续初始化（media_kit / 窗口效果 / 偏好）崩了，也把异常写到文件。
+  await StartupTrace.guard(
+    'crash_log',
+    () => CrashLogService.instance.init(appVersion: appVersion),
+  );
+
+  // 以下每一步都经 StartupTrace.guard：**限时且不抛**。任何一步卡住或失败，
+  // 顶多是它自己那点功能降级，绝不允许把整个启动挡在这儿变成白屏——这正是
+  // 上一版只包 try/catch 没能覆盖的那半边（详见 StartupTrace 的文档）。
+
   // media_kit 必须在使用前初始化（会加载 libmpv 原生库）。失败不再中断启动：
   // AudioEngine 记下状态，播放层降级为静音网关，界面照常起来并提示用户。
-  AudioEngine.ensureInitialized();
+  await StartupTrace.guard('audio_engine', () async {
+    AudioEngine.ensureInitialized();
+  });
   // 桌面端融合标题栏：隐藏 Win32 原生标题栏，改由 fluent TitleBar 绘制
   // （见 app/desktop/desktop_title_bar.dart）。必须在首帧前完成，否则会先
   // 闪一下原生标题栏。移动端不触碰（插件在 Android/iOS 上无对应实现）。
-  await _initDesktopWindow();
+  await StartupTrace.guard('desktop_window', _initDesktopWindow);
   // 窗口材质与外观偏好须在窗口效果之前就绪：初始效果要按已保存的材质与
   // 明暗选择，否则暗色模式或换材质后启动会先闪一帧错误效果（见
   // _initDesktopBackdrop）。
   await Future.wait([
-    WindowMaterialSettingsStore.instance.init(),
-    AppearanceSettingsStore.instance.init(),
+    StartupTrace.guard(
+      'window_material_store',
+      WindowMaterialSettingsStore.instance.init,
+    ),
+    StartupTrace.guard(
+      'appearance_store',
+      AppearanceSettingsStore.instance.init,
+    ),
   ]);
   // Win11 窗口背景效果（云母 / 亚克力 / 不透明）见 _initDesktopBackdrop：
   // 仅桌面平台生效，需在首帧前初始化 flutter_acrylic（在 window_manager
   // 设完 titleBarStyle 后调用，避免原生标题栏残留）。
-  await _initDesktopBackdrop();
+  await StartupTrace.guard('desktop_backdrop', _initDesktopBackdrop);
+  // 逐项 guard 而不是整组：一组共用一个超时的话，只知道「这一组卡了」，
+  // 追踪报告里指不出到底是哪一个——而那正是唯一有用的信息。
   await Future.wait([
-    if (!probeNoGlass) LiquidGlassWidgets.initialize(),
-    UrlService.instance.init(),
-    FullscreenSettingsStore.instance.init(),
+    if (!probeNoGlass)
+      StartupTrace.guard('liquid_glass', LiquidGlassWidgets.initialize),
+    StartupTrace.guard('url_service', UrlService.instance.init),
+    StartupTrace.guard(
+      'fullscreen_store',
+      FullscreenSettingsStore.instance.init,
+    ),
     // 首启引导的进度标记（协议是否已同意 / 引导是否走完）。必须在首帧前就绪，
     // 否则老用户冷启动会先闪一帧引导页再切回主界面（见 AppGate）。
-    OnboardingStore.instance.init(),
+    StartupTrace.guard('onboarding_store', OnboardingStore.instance.init),
     // 开发者模式状态（决定设置页「开发者选项」入口与性能叠加层）。
-    DeveloperModeService.instance.ensureLoaded(),
+    StartupTrace.guard(
+      'developer_mode',
+      DeveloperModeService.instance.ensureLoaded,
+    ),
     // 歌曲缓存：开关/目录须在首次解析音源前就绪，否则冷启动第一首歌查不到
     // 缓存，会白白再联网取一次流。
-    SongCacheService.instance.init(),
+    StartupTrace.guard('song_cache', SongCacheService.instance.init),
     // 一起听：开关要在播放器绑定前就绪，否则冷启动后第一首歌不会自动开房。
-    TogetherSettingsStore.instance.init(),
+    StartupTrace.guard('together_store', TogetherSettingsStore.instance.init),
     // AI：设置项要在首帧前就绪，否则会先闪一下「未配置」再变成已就绪。
-    AiSettingsStore.instance.init(),
+    StartupTrace.guard('ai_store', AiSettingsStore.instance.init),
     // 移植版播放器（原版全屏播放器）的样式/背景/字体偏好，与原版 main 一致。
-    LyricStyleService().initialize(),
-    PlayerBackgroundService().initialize(),
-    LyricFontService().initialize(),
+    StartupTrace.guard('lyric_style', LyricStyleService().initialize),
+    StartupTrace.guard(
+      'player_background',
+      PlayerBackgroundService().initialize,
+    ),
+    StartupTrace.guard('lyric_font', LyricFontService().initialize),
   ]);
   UpdateService.instance.setCurrentVersion(appVersion);
   final dependencies = AppDependencies.production();
@@ -242,7 +388,11 @@ Future<void> _bootstrap(List<String> args) async {
     );
   }
   if (probeNoSemantics) app = ExcludeSemantics(child: app);
+  // 先登记再挂树：首帧回调据此判断这一帧是不是「有内容的」那一帧
+  // （见 _watchFirstFrame）。
+  StartupTrace.markRunApp();
   runApp(app);
+  _logDegradedStartup();
 }
 
 /// 桌面窗口初始化：隐藏原生标题栏（走应用内融合标题栏）、设最小窗口尺寸。
@@ -262,8 +412,11 @@ Future<void> _initDesktopWindow() async {
     // 会给客户区填一层不透明底色,盖住窗口效果——即便 setEffect 成功,窗口
     // 看上去仍是完全不透明。
     // macOS/Linux 尚未适配透明窗口(见 _initDesktopBackdrop 说明),保持不透明,
-    // 否则会直接露出桌面。
-    backgroundColor: Platform.isWindows ? Colors.transparent : Colors.white,
+    // 否则会直接露出桌面。底色取深色而非白色：首帧前露出的就是它,白色会让
+    // 「还在启动」与「卡死白屏」无法区分(与 MainFlutterWindow.swift 同色)。
+    backgroundColor: Platform.isWindows
+        ? Colors.transparent
+        : const Color(0xFF121212),
     // hidden：去掉系统标题栏与边框按钮，由应用自绘（含拖拽区与 caption 按钮）。
     titleBarStyle: TitleBarStyle.hidden,
   );
@@ -434,16 +587,28 @@ class _MyAppState extends State<MyApp>
     // 首帧后再请求：过早调用在部分机型会拿到空的显示模式列表。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _enableHighRefreshRate();
-      _notifyAudioEngineFailure();
+      _notifyStartupIssues();
     });
   }
 
-  /// libmpv 没能加载时告知用户：界面看着一切正常，但点播放不会有任何声音，
-  /// 不说明白用户只会以为是音源坏了。详见 [AudioEngine]。
-  void _notifyAudioEngineFailure() {
-    if (AudioEngine.isAvailable) return;
+  /// 启动期出过状况就告诉用户，别让它烂在日志里。
+  ///
+  /// 界面看着一切正常时，用户没有任何理由怀疑「音频引擎没加载」或「某个
+  /// 初始化超时了」——点了不响只会被当成音源坏了。所以降级必须说出来。
+  ///
+  /// 音频引擎单列一条：它是最影响使用的一项，且有专门的错误摘要。
+  void _notifyStartupIssues() {
+    if (!AudioEngine.isAvailable) {
+      CyreneToast.show(
+        '音频引擎加载失败，当前无法播放：${AudioEngine.errorSummary}',
+        duration: MiuixSnackbarDuration.long,
+      );
+      return;
+    }
+    if (!StartupTrace.hasIssues) return;
     CyreneToast.show(
-      '音频引擎加载失败，当前无法播放：${AudioEngine.errorSummary}',
+      '部分功能启动异常（${StartupTrace.issueNames.join('、')}），'
+      '可在设置 → 开发者选项 → 运行日志查看详情',
       duration: MiuixSnackbarDuration.long,
     );
   }

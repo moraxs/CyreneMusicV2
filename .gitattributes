@@ -1,0 +1,23 @@
+# darwin 构建脚本必须是 LF。
+#
+# 开发在 Windows 上进行且 core.autocrlf=true,一旦这些文件以 CRLF 进库,
+# macOS 的构建机上 make 会因行尾的 \r 直接失败——而 podspec 里 make 的失败
+# 曾经是被静默吞掉的(见 media_kit_libs_*_audio 的 podspec),结果就是产物里
+# 没有 libmpv、应用启动白屏。那次事故排查了很久,这里钉死行尾防止复发。
+Makefile         text eol=lf
+*.sh             text eol=lf
+*.podspec        text eol=lf
+
+# Xcode 工程与界面文件同理:CRLF 会让 Xcode/CocoaPods 解析出难以理解的错误。
+*.pbxproj        text eol=lf
+*.storyboard     text eol=lf
+*.xib            text eol=lf
+*.entitlements   text eol=lf
+*.xcconfig       text eol=lf
+
+# 二进制资源不做任何行尾转换。
+*.png            binary
+*.jpg            binary
+*.ico            binary
+*.ttf            binary
+*.otf            binary

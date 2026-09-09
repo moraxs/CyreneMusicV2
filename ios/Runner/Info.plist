@@ -49,6 +49,13 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<!-- 崩溃日志（Documents/crash.log，见 CrashLogService）要能被用户取到：
+	     沙盒里的文件用户根本打不开，白屏这类事故里「请附上 crash.log」就成了
+	     空话。开启后应用会出现在「文件 → 我的 iPhone」下，日志可直接导出。 -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<!-- 后台音频播放（锁屏/切到后台继续出声）。由 IosNowPlayingService +
 	     NowPlayingBridge 一并提供 Now Playing 媒体卡片与控制。 -->
 	<key>UIBackgroundModes</key>
