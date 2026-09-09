@@ -30,7 +30,6 @@ import 'features/desktop_player/desktop_player_app.dart';
 import 'features/desktop_player/desktop_player_controller.dart';
 import 'features/taskbar_player/taskbar_player_app.dart';
 import 'features/taskbar_player/taskbar_player_controller.dart';
-import 'features/player/mini_player_layer.dart';
 import 'features/player/mobile/compat/lyric_font_service.dart';
 import 'features/player/mobile/compat/lyric_style_service.dart';
 import 'features/player/mobile/compat/player_background_service.dart';
@@ -387,12 +386,8 @@ class _MyAppState extends State<MyApp>
   late final SmtcService _smtc;
   ListeningCardSync? _listeningCardSync;
 
-  /// 根 Navigator 的 key。全局迷你播放器层挂在 Navigator 之上，
-  /// 拿不到路由上下文，打开全屏播放器只能经由它。
+  /// 根 Navigator 的 key。
   final _navigatorKey = GlobalKey<NavigatorState>();
-
-  /// 迷你播放器的显隐判定（进了全屏播放器就收起自己）。
-  final _miniPlayerObserver = MiniPlayerRouteObserver();
 
   /// 最近一次已同步到窗口背景效果的材质与明暗（Windows）。build 里据此
   /// 幂等跳过，材质/明暗未变时不重复打平台通道。
@@ -621,7 +616,6 @@ class _MyAppState extends State<MyApp>
         title: 'Cyrene Music',
         debugShowCheckedModeBanner: false,
         navigatorKey: _navigatorKey,
-        navigatorObservers: [_miniPlayerObserver],
         // fluent_ui 的 NavigationView 等桌面组件需要 FluentLocalizations;
         // 追加此委托即可(Material/Cupertino 的默认本地化仍由 MaterialApp 兜底)。
         localizationsDelegates: const [FluentLocalizations.delegate],
@@ -645,32 +639,25 @@ class _MyAppState extends State<MyApp>
               child: Stack(
                 children: [
                   frame,
-                  // 全局迷你播放器层：同样挂在 Navigator 之上。放在外壳的
-                  // Scaffold 里时，push 出来的页面（歌单详情、搜索…）会整块
-                  // 把它盖掉；提到这一层后任何路由都盖不住。排在 toast 之前，
-                  // 让 toast 仍然压在它上面。
-                  MiniPlayerLayer(
-                    playback: _dependencies.playback,
-                    audioSources: _dependencies.audioSources,
-                    account: _dependencies.account,
-                    observer: _miniPlayerObserver,
-                    navigatorKey: _navigatorKey,
-                  ),
+                  // 迷你播放器不在这一层——它跟底部标签栏同住外壳里（见
+                  // MusicAppShell._buildMobile）。挂到 Navigator 之上会连启动
+                  // 过渡页和引导页都盖住。
                   // 全局 toast 层：挂在 Navigator 之上，任何路由都能弹出。
-                  if (!probeNoToast) Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: SafeArea(
-                      child: Padding(
-                        padding: const EdgeInsets.only(bottom: 92),
-                        child: MiuixSnackbarHost(
-                          state: CyreneToast.hostState,
-                          blurSigma: 30,
+                  if (!probeNoToast)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: SafeArea(
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 92),
+                          child: MiuixSnackbarHost(
+                            state: CyreneToast.hostState,
+                            blurSigma: 30,
+                          ),
                         ),
                       ),
                     ),
-                  ),
                 ],
               ),
             ),

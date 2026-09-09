@@ -17,8 +17,7 @@ import '../features/announcements/announcement_dialog.dart';
 import '../features/discover/discover_page.dart';
 import '../features/home/now_listening_page.dart';
 import '../features/more/more_menu_drawer.dart';
-import '../features/player/mini_player_layer.dart'
-    show kFullscreenPlayerRouteName;
+import '../features/player/mini_player.dart';
 import '../features/player/mobile/mobile_player_page.dart';
 import '../features/player/mobile/mobile_fullscreen_player_host.dart';
 import '../features/player/desktop_fullscreen_player_host.dart';
@@ -156,9 +155,26 @@ class _MusicAppShellState extends State<MusicAppShell> {
                 ),
               ],
             ),
-            // 迷你播放器不在这里——它已提到 Navigator 之上（见 MiniPlayerLayer
-            // 与 main.dart 的 MaterialApp.builder）。留在外壳 Scaffold 里的话，
-            // 任何 push 出来的页面（歌单详情、搜索…）都会整块把它盖掉。
+            // 迷你播放器与底部标签栏同层：它曾被提到 Navigator 之上（想让二级页
+            // 也盖不住它），代价是连启动过渡页与引导页都会被它压住——那两个页面
+            // 属于 AppGate，本就不该有播放器。所以放回外壳里，跟标签栏一起被
+            // push 出来的路由整块盖掉，二者进退一致。
+            //
+            // 用集合 if 而不是让子组件返回 SizedBox.shrink()：Stack 里的非定位空
+            // 子节点会参与尺寸计算，是踩过的坑。
+            if (widget.playback.state.currentTrack != null)
+              Positioned(
+                left: 16,
+                right: 16,
+                // 标签栏之上。二级页没有标签栏，但迷你播放器也一起被盖住，
+                // 不存在切页时上下跳的问题。
+                bottom: 104,
+                child: MiniPlayer(
+                  playback: widget.playback,
+                  audioSources: widget.audioSources,
+                  account: widget.account,
+                ),
+              ),
             Positioned(
               left: 0,
               right: 0,
@@ -313,8 +329,6 @@ class _MusicAppShellState extends State<MusicAppShell> {
     }
     Navigator.of(context).push(
       CupertinoPageRoute<void>(
-        // 标记成全屏播放器路由，好让全局迷你播放器层在它打开时收起自己。
-        settings: const RouteSettings(name: kFullscreenPlayerRouteName),
         builder: (_) => MobilePlayerPage(
           playback: widget.playback,
           audioSources: widget.audioSources,

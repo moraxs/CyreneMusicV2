@@ -698,15 +698,8 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
           )
         else
           SliverPadding(
-            // 底部留白要能让开浮在 Navigator 之上的迷你播放器（MiniPlayerLayer
-            // 固定在 bottom:104，自身约 68 高），否则最后一首会被它压住点不到。
-            // 没在播放时不用留这么多。
-            padding: EdgeInsets.fromLTRB(
-              16,
-              4,
-              16,
-              widget.playback.state.currentTrack != null ? 188 : 32,
-            ),
+            // 迷你播放器已放回外壳、被本页整块盖住，不再需要为它额外留白。
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
             sliver: SliverList.separated(
               itemCount: tracks.length,
               separatorBuilder: (_, _) => const SizedBox(height: 10),
