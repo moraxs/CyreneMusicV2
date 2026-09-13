@@ -1,6 +1,5 @@
 import 'package:cyrene_music_reborn/features/player/mobile/widgets/apple_music/apple_music_media_button.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// [AppleMusicMediaButton] 的行为约束。
@@ -38,8 +37,15 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
 
-    final semantics = tester.getSemantics(find.byType(AppleMusicMediaButton));
-    expect(semantics.hasFlag(SemanticsFlag.isEnabled), isFalse);
+    final semantics = tester.widget<Semantics>(
+      find
+          .descendant(
+            of: find.byType(AppleMusicMediaButton),
+            matching: find.byType(Semantics),
+          )
+          .first,
+    );
+    expect(semantics.properties.enabled, isFalse);
   });
 
   testWidgets('按下时出现圆形底色，松手后退去', (tester) async {
