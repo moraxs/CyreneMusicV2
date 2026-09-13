@@ -5,10 +5,8 @@ import 'compat/player_service.dart';
 import 'compat/lyric_line.dart';
 import 'compat/song_detail.dart';
 import 'compat/lyric_parser.dart';
-import 'components/mobile_player_background.dart';
 import 'components/mobile_player_control_center.dart';
 import 'components/mobile_player_fluid_cloud_layout.dart';
-import 'components/mobile_player_classic_layout.dart';
 import 'components/mobile_player_dialogs.dart';
 import 'compat/lyric_style_service.dart';
 import '../../../application/audio_sources/audio_source_preferences_controller.dart';
@@ -426,20 +424,18 @@ class _MobilePlayerPageState extends State<MobilePlayerPage> with TickerProvider
       );
     }
 
-    // 构建主要内容
-    final lyricStyleService = LyricStyleService();
-    // 流体云布局条件：全屏播放器样式设置为流体云（沉浸样式未移植，同样走流体云）
-    // AMLL 样式复用流体云的整体布局，只替换歌词面板本身
-    final useFluidCloudLayout =
-        lyricStyleService.currentStyle == LyricStyle.fluidCloud ||
-        lyricStyleService.currentStyle == LyricStyle.immersive ||
-        lyricStyleService.currentStyle == LyricStyle.amll;
+    // 构建主要内容。
+    //
+    // 本页只有流体云一种布局 —— 用户在外观设置里看到的「经典」播放器就是它
+    // （「SuperCyrene」走 MobileFullscreenPlayerHost，根本进不到这里）。
+    // LyricStyleService 已把样式钉死在 fluidCloud（setStyle 无条件写回、
+    // _loadStyle 迁移历史值），所以这里不再按样式分发。
 
-    // 动态处理状态栏：流体云样式下的横屏隐藏状态栏
+    // 动态处理状态栏：横屏隐藏状态栏
     const isImmersive = false;
     final isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
-    
-    if (isImmersive || (useFluidCloudLayout && isLandscape)) {
+
+    if (isImmersive || isLandscape) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     } else {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -451,21 +447,8 @@ class _MobilePlayerPageState extends State<MobilePlayerPage> with TickerProvider
       backgroundColor: Colors.transparent,
       body: Stack(
             children: [
-              // 流体云布局模式：完全接管背景和 Safe Area（手机形态）
-              if (useFluidCloudLayout)
-                _buildAppleMusicStyleLayout(context, const BoxConstraints())
-              else ...[
-                // 标准布局模式：原有背景 + Safe Area
-                const MobilePlayerBackground(),
-                SafeArea(
-                  child: MobilePlayerClassicLayout(
-                    lyrics: _lyrics,
-                    currentLyricIndex: _currentLyricIndex,
-                    onBackPressed: () => Navigator.pop(context),
-                    onPlaylistPressed: () => MobilePlayerDialogs.showPlaylistBottomSheet(context),
-                  ),
-                ),
-              ],
+              // 流体云布局：完全接管背景和 Safe Area（手机形态）
+              _buildAppleMusicStyleLayout(context, const BoxConstraints()),
 
           // 一起听图层：房间胶囊 + 弹幕 + 发言入口。没在一起听时是空盒子。
           const TogetherPlayerOverlay(),

@@ -37,6 +37,7 @@ class MoreMenuDrawer extends StatelessWidget {
     final action = await showCyreneSheet<VoidCallback>(
       context: context,
       title: '更多',
+      animateResultDismissal: false,
       builder: (_, dismiss) => MoreMenuDrawer(
         account: account,
         audioSources: audioSources,
@@ -44,7 +45,7 @@ class MoreMenuDrawer extends StatelessWidget {
         dismiss: dismiss,
       ),
     );
-    action?.call();
+    if (context.mounted) action?.call();
   }
 
   @override
@@ -91,6 +92,7 @@ class MoreMenuDrawer extends StatelessWidget {
     final navigator = Navigator.of(context);
     // 先关抽屉；跳转动作作为结果带出，由 show() 在抽屉完全关闭后执行。
     dismiss(() {
+      if (!navigator.mounted) return;
       navigator.push(CupertinoPageRoute<void>(builder: (_) => page));
     });
   }

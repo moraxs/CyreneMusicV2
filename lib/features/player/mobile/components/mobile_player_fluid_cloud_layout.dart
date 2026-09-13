@@ -9,10 +9,10 @@ import '../compat/playlist_service.dart';
 import '../compat/download_service.dart';
 import '../compat/wiki_services.dart';
 import '../compat/lyric_line.dart';
-import '../compat/lyric_style_service.dart';
 import '../../../../domain/models/track.dart';
 import '../../../../domain/models/music_source.dart';
-import '../../amll/amll_lyric_panel.dart';
+import '../../amll_v2/amll_v2_lyric_panel.dart';
+import '../../mini_player_expand_route.dart';
 import 'mobile_player_fluid_cloud_lyric_panel.dart';
 import 'mobile_player_fluid_cloud_song_wiki_panel.dart';
 import 'mobile_player_dialogs.dart';
@@ -24,6 +24,52 @@ import '../compat/audio_services.dart';
 import '../compat/toast_utils.dart';
 import '../compat/song_detail.dart';
 import '../widgets/dynamic_cover_widget.dart';
+
+/// 迷你播放器封面 ↔ 全屏大封面之间那一帧「飞行中的封面」。
+///
+/// 不复用 [DynamicCoverWidget]：那是个 StatefulWidget，飞行期间重新挂载会另起
+/// 一路视频封面。这里只画静态图，用 PlayerService 现成的 ImageProvider（跟两端
+/// 同源、已在图片缓存里），所以起飞落地都不会闪。
+///
+/// 圆角与投影跟着尺寸一起插值：小的时候是迷你播放器那套（r=10、浅投影），
+/// 大了就是大封面那套（r=16、厚投影）。shuttle 的 [animation] 无论进场退场都
+/// 是 0→1（起点→终点），所以要按 [direction] 决定往哪边插。
+Widget _playerCoverFlightShuttle(
+  BuildContext flightContext,
+  Animation<double> animation,
+  HeroFlightDirection direction,
+  BuildContext fromHeroContext,
+  BuildContext toHeroContext,
+) {
+  final isPush = direction == HeroFlightDirection.push;
+  final provider = PlayerService().currentCoverImageProvider;
+
+  return AnimatedBuilder(
+    animation: animation,
+    builder: (context, _) {
+      final grow = isPush ? animation.value : 1.0 - animation.value;
+      return Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(10 + 6 * grow),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.3 + 0.1 * grow),
+              blurRadius: 10 + 30 * grow,
+              offset: Offset(0, 4 + 16 * grow),
+            ),
+          ],
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: provider == null
+            ? Container(
+                color: Colors.grey[900],
+                child: const Icon(Icons.music_note, color: Colors.white54),
+              )
+            : Image(image: provider, fit: BoxFit.cover, gaplessPlayback: true),
+      );
+    },
+  );
+}
 
 /// 移动端流体云播放器布局
 /// 参考 HTML 设计：统一在同一页面显示歌曲信息、歌词、控制按钮
@@ -259,11 +305,19 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
       onVerticalDragEnd: _onVerticalDragEnd,
       child: Transform.translate(
         offset: Offset(0, _dragOffset),
-        child: ClipRRect(
-          // 仅在向下拖动时显示圆角，全屏状态无圆角
-          borderRadius: _dragOffset > 0
-              ? const BorderRadius.vertical(top: Radius.circular(32))
-              : BorderRadius.zero,
+        // 仅在向下拖动时显示圆角，全屏状态无圆角。
+        //
+        // 圆角取整机弧度并随下拉距离渐入（前 80px 涨满），跟点返回时那段
+        // 「窗口缩回迷你播放器」的收起动画同一套曲率（见
+        // MiniPlayerExpandRoute）——两种退出方式不该长得不一样。同理用超椭圆
+        // 而不是圆弧角。
+        child: ClipRSuperellipse(
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(
+              screenCornerRadiusFor(MediaQuery.sizeOf(context)) *
+                  (_dragOffset / 80).clamp(0.0, 1.0),
+            ),
+          ),
           child: Stack(
             children: [
               // 0. 背景层 (现在作为布局的一部分，以便同步平移)
@@ -355,6 +409,11 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
                 ),
 
               // 3. 浮动封面 (顶层，负责动画，仅在竖屏启用)
+              //
+              // 外面那层 Hero 是「迷你播放器 → 全屏播放器」的共享元素：进场时
+              // 封面从底部小方块一路飞放到这儿，退场原路飞回（见
+              // MiniPlayerExpandRoute）。飞行途中 Hero 会把这里替换成等尺寸占
+              // 位，AnimatedPositioned 的布局不受影响。
               if (!isLandscape)
                 AnimatedPositioned(
                   duration: const Duration(milliseconds: 500),
@@ -368,30 +427,34 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
                       // 点击切换模式
                       setState(() => _showCoverMode = !_showCoverMode);
                     },
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 500),
-                      curve: Curves.fastLinearToSlowEaseIn,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(_showCoverMode ? 16 : 8),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: _showCoverMode ? 0.4 : 0.3),
-                            blurRadius: _showCoverMode ? 40 : 10,
-                            offset: Offset(0, _showCoverMode ? 20 : 4),
-                          ),
-                        ],
-                      ),
-                      clipBehavior: Clip.antiAlias,
-                      child: imageUrl.isNotEmpty
-                          ? _buildCoverImage(imageUrl)
-                          : Container(
-                              color: Colors.grey[900],
-                              child: Icon(
-                                Icons.music_note, 
-                                color: Colors.white54,
-                                size: _showCoverMode ? 120 : 30,
-                              ),
+                    child: Hero(
+                      tag: kPlayerCoverHeroTag,
+                      flightShuttleBuilder: _playerCoverFlightShuttle,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 500),
+                        curve: Curves.fastLinearToSlowEaseIn,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(_showCoverMode ? 16 : 8),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: _showCoverMode ? 0.4 : 0.3),
+                              blurRadius: _showCoverMode ? 40 : 10,
+                              offset: Offset(0, _showCoverMode ? 20 : 4),
                             ),
+                          ],
+                        ),
+                        clipBehavior: Clip.antiAlias,
+                        child: imageUrl.isNotEmpty
+                            ? _buildCoverImage(imageUrl)
+                            : Container(
+                                color: Colors.grey[900],
+                                child: Icon(
+                                  Icons.music_note,
+                                  color: Colors.white54,
+                                  size: _showCoverMode ? 120 : 30,
+                                ),
+                              ),
+                      ),
                     ),
                   ),
                 ),
@@ -958,18 +1021,18 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
     );
   }
 
-  /// 按当前歌词样式选择歌词面板实现。
+  /// 歌词面板：一律用 AMLL v2。
+  ///
+  /// 这个布局就是外观设置里「播放器样式 → 经典」实际渲染的那一个 —— 文件名叫
+  /// 「流体云」是历史包袱，移动端的「经典」= 本布局，「SuperCyrene」走
+  /// `MobileFullscreenPlayerHost`。
+  /// 原来这里按 `LyricStyleService.currentStyle` 在流体云与 AMLL 之间分发，
+  /// 但该字段被 `LyricStyleService` 锁死成 `fluidCloud`，AMLL 分支永远走不到；
+  /// 现在不再分发，直接上 v2。[MobilePlayerFluidCloudLyricsPanel] 本身保留，
+  /// 其它调用点（如 `MobilePlayerFluidCloudLyric`）不受影响。
   Widget _buildLyricPanel({required int visibleLineCount}) {
-    if (LyricStyleService().currentStyle == LyricStyle.amll) {
-      return AmllLyricPanel(
-        lyrics: widget.lyrics,
-        showTranslation: widget.showTranslation,
-        visibleLineCount: visibleLineCount,
-      );
-    }
-    return MobilePlayerFluidCloudLyricsPanel(
+    return AmllV2LyricPanel(
       lyrics: widget.lyrics,
-      currentLyricIndex: widget.currentLyricIndex,
       showTranslation: widget.showTranslation,
       visibleLineCount: visibleLineCount,
     );

@@ -48,12 +48,10 @@ class _TogetherLobbyPageState extends State<TogetherLobbyPage> {
   Widget build(BuildContext context) => CyrenePage(
     title: '一起听大厅',
     actions: [
-      MiuixIconButton(
+      CyreneBarButton(
         onPressed: _loading ? null : _load,
-        child: MiuixIcon(
-          vector: MiuixIcons.extended.byName('refresh')!,
-          size: 20,
-        ),
+        tooltip: '刷新',
+        child: MiuixIcon(vector: MiuixIcons.os4.refresh, size: 24),
       ),
     ],
     bodyBuilder: (context, topPadding) => ListenableBuilder(

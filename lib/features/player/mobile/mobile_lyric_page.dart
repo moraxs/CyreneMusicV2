@@ -7,7 +7,7 @@ import 'compat/lyric_style_service.dart';
 import 'compat/lyric_line.dart';
 import 'compat/lyric_parser.dart';
 import 'components/mobile_player_fluid_cloud_lyric.dart';
-import '../amll/amll_lyric_panel.dart';
+import '../amll_v2/amll_v2_lyric_panel.dart';
 import '../../../domain/models/media_url.dart';
 
 /// 移动端全屏滚动歌词页面
@@ -294,7 +294,7 @@ class _MobileLyricPageState extends State<MobileLyricPage> {
 
     // Apple Music 样式
     if (style == LyricStyle.amll) {
-      return AmllLyricPanel(
+      return AmllV2LyricPanel(
         lyrics: _lyrics,
         showTranslation: _showTranslation && _shouldShowTranslationButton(),
       );

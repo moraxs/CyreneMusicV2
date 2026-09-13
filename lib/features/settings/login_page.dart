@@ -379,7 +379,7 @@ class _RegisterForm extends StatefulWidget {
   State<_RegisterForm> createState() => _RegisterFormState();
 }
 
-enum _RegField { qq, username, password, confirm, code }
+enum _RegField { qq, username, password, confirm, code, invite }
 
 class _RegisterFormState extends State<_RegisterForm> {
   final _qqController = TextEditingController();
@@ -387,11 +387,13 @@ class _RegisterFormState extends State<_RegisterForm> {
   final _passwordController = TextEditingController();
   final _confirmController = TextEditingController();
   final _codeController = TextEditingController();
+  final _inviteController = TextEditingController();
 
   final _usernameFocus = FocusNode();
   final _passwordFocus = FocusNode();
   final _confirmFocus = FocusNode();
   final _codeFocus = FocusNode();
+  final _inviteFocus = FocusNode();
 
   String? _qqError;
   String? _usernameError;
@@ -429,10 +431,12 @@ class _RegisterFormState extends State<_RegisterForm> {
     _passwordController.dispose();
     _confirmController.dispose();
     _codeController.dispose();
+    _inviteController.dispose();
     _usernameFocus.dispose();
     _passwordFocus.dispose();
     _confirmFocus.dispose();
     _codeFocus.dispose();
+    _inviteFocus.dispose();
     super.dispose();
   }
 
@@ -535,6 +539,8 @@ class _RegisterFormState extends State<_RegisterForm> {
       username,
       password,
       code,
+      // 大小写不敏感，统一成大写再送后端，省得用户手抄成小写被判无效。
+      inviteCode: _inviteController.text.trim().toUpperCase(),
     );
     if (!mounted) return;
     if (!result.success) {
@@ -573,6 +579,9 @@ class _RegisterFormState extends State<_RegisterForm> {
         if (_confirmError != null) setState(() => _confirmError = null);
       case _RegField.code:
         if (_codeError != null) setState(() => _codeError = null);
+      case _RegField.invite:
+        // 邀请码是选填项，本地不做格式校验；填错由后端在提交时告知。
+        if (_errorMessage != null) setState(() => _errorMessage = null);
     }
   }
 
@@ -756,9 +765,9 @@ class _RegisterFormState extends State<_RegisterForm> {
                     ),
                   ),
                   keyboardType: TextInputType.number,
-                  textInputAction: TextInputAction.done,
+                  textInputAction: TextInputAction.next,
                   onChanged: (_) => _clearFieldError(_RegField.code),
-                  onSubmitted: (_) => _register(),
+                  onSubmitted: (_) => _inviteFocus.requestFocus(),
                 ),
               ),
               const SizedBox(width: 10),
@@ -780,6 +789,28 @@ class _RegisterFormState extends State<_RegisterForm> {
           ),
         ),
         if (_codeError != null) _FieldError(_codeError!),
+        const SizedBox(height: 12),
+        // 邀请码选填：填了就在注册成功后绑定邀请人（邀请有礼）。
+        // 填错只会被后端 400 挡下，邮箱验证码不会被消耗，改一下就能重试。
+        MiuixTextField(
+          key: const Key('register-invite-field'),
+          controller: _inviteController,
+          focusNode: _inviteFocus,
+          enabled: canType,
+          label: '邀请码（选填）',
+          singleLine: true,
+          leadingIcon: _FieldIcon(
+            child: MiuixIcon(
+              vector: MiuixIcons.extended.byName('promotions')!,
+              size: 20,
+              tint: colors.onSecondaryContainer,
+            ),
+          ),
+          textCapitalization: TextCapitalization.characters,
+          textInputAction: TextInputAction.done,
+          onChanged: (_) => _clearFieldError(_RegField.invite),
+          onSubmitted: (_) => _register(),
+        ),
         const SizedBox(height: 20),
         _RegisterButton(
           isRegistering: _registering,

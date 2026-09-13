@@ -268,16 +268,13 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
     return CyrenePage(
       title: '本地音乐',
       actions: [
-        MiuixIconButton(
+        CyreneBarButton(
           key: const Key('refresh-local-music-button'),
           enabled: !_isLoading && !_isImporting,
           onPressed: _load,
-          child: MiuixIcon(
-            vector: MiuixIcons.extended.byName('refresh')!,
-            size: 20,
-          ),
+          tooltip: '重新扫描',
+          child: MiuixIcon(vector: MiuixIcons.os4.refresh, size: 24),
         ),
-        const SizedBox(width: 8),
       ],
       body: Column(
         children: [

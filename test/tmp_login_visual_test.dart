@@ -23,8 +23,9 @@ class _StubAuth implements AuthRepository {
     String email,
     String username,
     String password,
-    String code,
-  ) async => const AuthResponse(success: false);
+    String code, {
+    String? inviteCode,
+  }) async => const AuthResponse(success: false);
 
   @override
   Future<AuthResponse> sendRegisterCode(String email, String username) async =>

@@ -3,11 +3,18 @@ import 'package:flutter_miuix/miuix.dart';
 
 /// 标准页面骨架：MiuixScaffold + HyperOS 风格大标题可折叠顶栏。
 ///
-/// [largeTitle] 为 true（默认）时使用 [MiuixTopAppBar]：展开显示大标题、
-/// 上滑先折叠为小标题再滚动内容（HyperOS 系统设置的标志性布局）；为 false
-/// 时退回静态小标题顶栏。内容自行处理滚动；顶栏高度与安全区以 padding.top
-/// 应用到内容根部。页面底色走 MiuixScaffold 默认 `colors.surface`
-/// （浅色 #F7F7F7 灰），卡片用 `surfaceContainer`（白），即 HyperOS 灰底白卡。
+/// [largeTitle] 为 true（默认）时使用 HyperOS 4 的玻璃顶栏
+/// [MiuixGlassTopAppBar]：展开显示大标题、上滑先折叠为小标题再滚动内容
+/// （HyperOS 系统设置的标志性布局），且内容离开顶部时顶栏才浮出玻璃材质、
+/// 回到顶部化回全透明；为 false 时退回静态小标题顶栏 [MiuixSmallTopAppBar]
+/// （组件库没有对应的玻璃小标题栏，这几页维持原样）。内容自行处理滚动；
+/// 顶栏高度与安全区以 padding.top 应用到内容根部。页面底色走 MiuixScaffold
+/// 默认 `colors.surface`（浅色 #F7F7F7 灰），卡片用 `surfaceContainer`（白），
+/// 即 HyperOS 灰底白卡。
+///
+/// 顶栏里的按钮请用 [CyreneBarButton]（返回键走 [CyreneBackButton]）：玻璃
+/// 顶栏会把自己的材质与显隐进度下发给它们，普通 [MiuixIconButton] 放进去只有
+/// 一个扁平图标，与 OS4 的玻璃胶囊按钮对不上。
 class CyrenePage extends StatefulWidget {
   const CyrenePage({
     super.key,
@@ -37,7 +44,10 @@ class CyrenePage extends StatefulWidget {
   final bool showBackButton;
   final bool largeTitle;
 
-  /// 顶栏毛玻璃色调不透明度 [0,1]，仅 [largeTitle] 为 true 时生效。
+  /// 顶栏毛玻璃色调不透明度 [0,1]，仅旧 [MiuixTopAppBar] 路径（桌面端透明
+  /// surface，见 [containerColor]）生效；OS4 玻璃顶栏的浓淡由滚动位置决定，
+  /// 不吃这个参数。
+  ///
   /// 不传时走 [MiuixTopAppBar] 默认 0.55；登录页等需要让背景渐变/光斑
   /// 透到栏内、栏与内容区连成一片时传 0 即可得到「栏完全透明、只有模糊」。
   ///
@@ -57,21 +67,71 @@ class CyrenePage extends StatefulWidget {
 class _CyrenePageState extends State<CyrenePage> {
   final _scrollBehavior = MiuixExitUntilCollapsedScrollBehavior();
 
+  /// OS4 玻璃顶栏要模糊的是「自己身后滚过的内容」，而玻璃本身不能采样到自己
+  /// （否则是反馈回路）。内容侧包一层 [MiuixLayerBackdropCapture] 逐帧录快照
+  /// 喂进来，顶栏作为它的兄弟节点消费。
+  final _backdrop = MiuixLayerBackdrop();
+
+  /// 内容是否已离开顶部——玻璃材质只在这时浮现，回到顶部即化掉。
+  ///
+  /// 必须显式喂给 [MiuixGlassTopAppBar]：它内置的兜底读的是
+  /// `scrollBehavior.state.contentOffset.isNegative`（Kotlin 那边 contentOffset
+  /// 往负数累计），而本移植里 contentOffset 记的是滚动位置（非负），兜底会
+  /// 恒判成「未滚动」，玻璃永远不出现。
+  bool _contentScrolled = false;
+
+  @override
+  void dispose() {
+    _scrollBehavior.state.dispose();
+    _backdrop.dispose();
+    super.dispose();
+  }
+
+  /// 只认页面主滚动体的竖向滚动：页内嵌套的横向/内层列表（depth > 0）不得
+  /// 驱动顶栏材质（与 [MiuixExitUntilCollapsedScrollBehavior] 的折叠判据一致）。
+  bool _handleScroll(ScrollNotification n) {
+    if (n.depth != 0 || n.metrics.axis != Axis.vertical) return false;
+    final scrolled = n.metrics.pixels > n.metrics.minScrollExtent + 0.5;
+    if (scrolled != _contentScrolled) {
+      setState(() => _contentScrolled = scrolled);
+    }
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final canPop = Navigator.of(context).canPop();
-    final navigationIcon = widget.showBackButton && canPop
-        ? CyreneBackButton(onPressed: () => Navigator.maybePop(context))
-        : null;
-    final actions = widget.actions.isEmpty ? null : widget.actions;
+    final colors = MiuixTheme.of(context).colors;
     // 桌面端外壳把 MiuixTheme.surface 覆写为透明（为透出系统 Mica）。顶栏毛
     // 玻璃若仍按默认 0.55 叠色调，Colors.transparent（黑 + alpha 0）会被
     // withValues(alpha:) 替换成 55% 黑 → 大标题区变成整条深色遮罩。surface
     // 透明即“无底色”，色调应同步为 0（栏完全透明、只有模糊，见 topBarTintAlpha）。
-    final noSurfaceTint = MiuixTheme.of(context).colors.surface.a == 0.0;
+    final noSurfaceTint = colors.surface.a == 0.0;
+    // OS4 玻璃顶栏只用在移动端的大标题页：桌面走 fluent 自己的标题栏体系，
+    // 且页面底色透明——捕获到的快照没有像素可糊，玻璃只会退化成实色遮罩，
+    // 不如维持原来的 BackdropFilter 毛玻璃栏。
+    final glass = widget.largeTitle && !noSurfaceTint;
+
+    final canPop = Navigator.of(context).canPop();
+    final navigationIcon = widget.showBackButton && canPop
+        ? CyreneBackButton(
+            glass: glass,
+            onPressed: () => Navigator.maybePop(context),
+          )
+        : null;
+    final actions = widget.actions.isEmpty ? null : widget.actions;
+
     return MiuixScaffold(
       containerColor: widget.containerColor,
-      topBar: widget.largeTitle
+      topBar: glass
+          ? MiuixGlassTopAppBar(
+              title: widget.title,
+              backdrop: _backdrop,
+              scrollBehavior: _scrollBehavior,
+              isContentScrolled: _contentScrolled,
+              navigationIcon: navigationIcon,
+              actions: widget.actions,
+            )
+          : widget.largeTitle
           ? MiuixTopAppBar(
               title: widget.title,
               navigationIcon: navigationIcon,
@@ -92,7 +152,7 @@ class _CyrenePageState extends State<CyrenePage> {
         final child = widget.bodyBuilder != null
             ? Builder(builder: (context) => widget.bodyBuilder!(context, inset))
             : Padding(padding: inset, child: widget.body);
-        return Material(
+        Widget content = Material(
           type: MaterialType.transparency,
           child: widget.largeTitle
               ? MiuixScrollBehaviorListener(
@@ -101,22 +161,86 @@ class _CyrenePageState extends State<CyrenePage> {
                 )
               : child,
         );
+        if (glass) {
+          // 捕获节点只包内容，顶栏是它的兄弟节点（MiuixScaffold 把栏画在 body
+          // 之上），玻璃才不会采样到自己。脚手架的 containerColor 画在捕获树
+          // 之外，捕获到的是透明底，故这里补一层同样的页面底色——否则玻璃糊
+          // 的是一张透明图，出不来材质。
+          content = MiuixLayerBackdropCapture(
+            backdrop: _backdrop,
+            child: ColoredBox(
+              color: widget.containerColor ?? colors.surface,
+              child: content,
+            ),
+          );
+        }
+        return NotificationListener<ScrollNotification>(
+          onNotification: _handleScroll,
+          child: content,
+        );
       },
     );
   }
 }
 
-/// 顶栏返回按钮。
-class CyreneBackButton extends StatelessWidget {
-  const CyreneBackButton({super.key, this.onPressed});
+/// OS4 顶栏按钮：HyperOS 4 的玻璃胶囊图标按钮。
+///
+/// 放进 [MiuixGlassTopAppBar] 的 navigationIcon / actions 时会自动继承顶栏的
+/// 玻璃材质、背景快照与显隐进度（内容在顶部时按钮跟着栏一起化掉，滚起来才
+/// 浮出胶囊）；放在别处则退化为不采样背景的实色胶囊。
+///
+/// 禁用走 [enabled]：[MiuixGlassIconButton] 只认 `onPressed: null`，而调用方
+/// 习惯的是 [MiuixIconButton] 的 `enabled` 参数。
+class CyreneBarButton extends StatelessWidget {
+  const CyreneBarButton({
+    super.key,
+    required this.onPressed,
+    required this.child,
+    this.enabled = true,
+    this.tooltip,
+  });
 
   final VoidCallback? onPressed;
+  final Widget child;
+  final bool enabled;
+  final String? tooltip;
 
   @override
-  Widget build(BuildContext context) => MiuixIconButton(
-    onPressed: onPressed ?? () => Navigator.maybePop(context),
-    child: MiuixIcon(vector: MiuixIcons.extended.byName('back')!, size: 24),
+  Widget build(BuildContext context) => MiuixGlassIconButton(
+    onPressed: enabled ? onPressed : null,
+    tooltip: tooltip,
+    child: child,
   );
+}
+
+/// 顶栏返回按钮。
+///
+/// [glass] 为 true 时是 OS4 的玻璃胶囊（[CyreneBarButton]）；为 false 时保持
+/// 原来的扁平 [MiuixIconButton]——静态小标题栏与歌单页浮在封面上的那颗返回键
+/// 都不在玻璃栏里，套上胶囊反而突兀。
+class CyreneBackButton extends StatelessWidget {
+  const CyreneBackButton({super.key, this.onPressed, this.glass = false});
+
+  final VoidCallback? onPressed;
+  final bool glass;
+
+  @override
+  Widget build(BuildContext context) {
+    final action = onPressed ?? () => Navigator.maybePop(context);
+    return glass
+        ? CyreneBarButton(
+            onPressed: action,
+            tooltip: '返回',
+            child: MiuixIcon(vector: MiuixIcons.os4.back, size: 24),
+          )
+        : MiuixIconButton(
+            onPressed: action,
+            child: MiuixIcon(
+              vector: MiuixIcons.extended.byName('back')!,
+              size: 24,
+            ),
+          );
+  }
 }
 
 class CyreneSectionTitle extends StatelessWidget {

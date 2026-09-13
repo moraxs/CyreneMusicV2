@@ -49,9 +49,10 @@ dependencies:
   url_launcher: ^6.3.0
   liquid_glass_widgets: ^0.22.1
   shared_preferences: ^2.5.5
-  # HyperOS 风格组件库（依赖 pub.dev，已移除本地 ../flutter_miuix 覆盖）。
-  # >=1.0.7 含下拉刷新头 RenderFlex 溢出断言修复；^1.0.9 当前解析到 1.1.1。
-  flutter_miuix: ^1.0.9
+  # HyperOS 风格组件库。>=1.0.7 含下拉刷新头 RenderFlex 溢出断言修复；
+  # >=1.2.0 起才有 HyperOS 4 的 MiuixGlass* / MiuixIcons.os4（顶栏走玻璃材质）。
+  # 当前由 dependency_overrides 指到本地 ../flutter_miuix 源码。
+  flutter_miuix: ^1.2.0
   # 原版移动播放器移植所需：背景取色（image）与背景设置的取色器。
   image: ^4.3.0
   flutter_colorpicker: ^1.1.0
@@ -92,6 +93,10 @@ dependency_overrides:
     path: packages/media_kit_libs_macos_audio
   media_kit_libs_ios_audio:
     path: packages/media_kit_libs_ios_audio
+  # OS4 玻璃材质调试期：走本地源码，改完组件库直接热重载验证。
+  # 定稿后删掉这条、回到 pub.dev 的 flutter_miuix。
+  flutter_miuix:
+    path: ../flutter_miuix
 
 dev_dependencies:
   flutter_test:

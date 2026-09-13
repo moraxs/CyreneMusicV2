@@ -51,6 +51,8 @@ Future<T?> showCyreneSheet<T>({
   Widget? startAction,
   Widget? endAction,
   bool allowDismiss = true,
+  bool animateResultDismissal = true,
+
   /// 内容水平内边距；null 走 [MiuixOverlayBottomSheet] 默认 24。
   /// 内容较密集的设置面板可传更小值（如 16）收紧两侧留白。
   double? insideMargin,
@@ -65,6 +67,7 @@ Future<T?> showCyreneSheet<T>({
       pageBuilder: (context, _, _) => _CyreneOverlayPage<T>(
         builder: builder,
         barrierDismissible: allowDismiss,
+        animateResultDismissal: animateResultDismissal,
         overlayBuilder: (state, content) => MiuixOverlayBottomSheet(
           show: state.show,
           title: title,
@@ -83,6 +86,78 @@ Future<T?> showCyreneSheet<T>({
   );
 }
 
+/// 命令式弹出 OS4 普通玻璃菜单（`MiuixGlassPopup`）。
+///
+/// 菜单只承载选项本身：不传 [title] / [endAction] 时没有标题栏，条目由调用方
+/// 用 `MiuixGlassPopupItem` 给出。参数面板这类需要标题与重置按钮的弹层再传
+/// [title] / [endAction]。
+Future<T?> showCyreneGlassMenu<T>({
+  required BuildContext context,
+  required Rect anchorBounds,
+  required MiuixBackdrop backdrop,
+  String? title,
+  Widget? endAction,
+  required CyreneOverlayBuilder<T> builder,
+}) => Navigator.of(context, rootNavigator: true).push<T>(
+  PageRouteBuilder<T>(
+    opaque: false,
+    transitionDuration: Duration.zero,
+    reverseTransitionDuration: Duration.zero,
+    pageBuilder: (context, _, _) => _CyreneOverlayPage<T>(
+      builder: builder,
+      barrierDismissible: true,
+      overlayBuilder: (state, content) => MiuixGlassPopup(
+        show: state.show,
+        anchorBounds: anchorBounds,
+        backdrop: backdrop,
+        sizing: const MiuixGlassPopupSizing(
+          // 普通玻璃菜单是贴在触发行右侧的一小块面板，别铺满屏宽。
+          minWidth: 200,
+          maxWidth: 240,
+          maxHeight: 520,
+        ),
+        onDismissRequest: state.dismiss,
+        onDismissFinished: state.onDismissFinished,
+        child: title == null && endAction == null
+            ? content
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+                    child: Row(
+                      children: [
+                        if (title != null)
+                          Expanded(
+                            child: Semantics(
+                              header: true,
+                              namesRoute: true,
+                              child: Text(
+                                title,
+                                style: MiuixTheme.of(
+                                  state.context,
+                                ).textStyles.subtitle,
+                              ),
+                            ),
+                          )
+                        else
+                          const Spacer(),
+                        if (endAction != null) ...[
+                          const SizedBox(width: 8),
+                          endAction,
+                        ],
+                      ],
+                    ),
+                  ),
+                  content,
+                ],
+              ),
+      ),
+    ),
+  ),
+);
+
 /// 透明路由页：托管一个声明式 Miuix 弹层的完整生命周期。
 ///
 /// 进入后下一帧把 `show` 置 true 触发入场动画；`dismiss` 只把 `show` 置 false，
@@ -92,12 +167,14 @@ class _CyreneOverlayPage<T> extends StatefulWidget {
     required this.builder,
     required this.overlayBuilder,
     required this.barrierDismissible,
+    this.animateResultDismissal = true,
   });
 
   final CyreneOverlayBuilder<T> builder;
   final Widget Function(_CyreneOverlayPageState<T> state, Widget content)
   overlayBuilder;
   final bool barrierDismissible;
+  final bool animateResultDismissal;
 
   @override
   State<_CyreneOverlayPage<T>> createState() => _CyreneOverlayPageState<T>();
@@ -119,6 +196,10 @@ class _CyreneOverlayPageState<T> extends State<_CyreneOverlayPage<T>> {
   void dismiss([T? result]) {
     if (_popped || !show) return;
     _result = result;
+    if (result != null && !widget.animateResultDismissal) {
+      onDismissFinished();
+      return;
+    }
     setState(() => show = false);
   }
 

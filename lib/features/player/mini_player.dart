@@ -9,6 +9,7 @@ import '../../application/auth/account_session_controller.dart';
 import '../../application/playback/playback_controller.dart';
 import '../../domain/models/track.dart';
 import '../../domain/playback/playback_state.dart';
+import 'mini_player_expand_route.dart';
 import 'mobile/mobile_fullscreen_player_host.dart';
 import 'mobile/mobile_player_page.dart';
 import 'track_artwork.dart';
@@ -24,11 +25,17 @@ class MiniPlayer extends StatefulWidget {
     required this.playback,
     required this.audioSources,
     required this.account,
+    this.anchorKey,
   });
 
   final PlaybackController playback;
   final AudioSourcePreferencesController audioSources;
   final AccountSessionController account;
+
+  /// 挂到液态玻璃面板上的 key，用来量出「展开成全屏播放器」动画的起点矩形。
+  /// 外壳也拿着同一个 key——首页那张「正在播放」卡片进播放器时，用的是同一段
+  /// 动画、同一个起点。传 null 时内部自己建一个。
+  final GlobalKey? anchorKey;
 
   @override
   State<MiniPlayer> createState() => _MiniPlayerState();
@@ -41,6 +48,8 @@ class _MiniPlayerState extends State<MiniPlayer> {
 
   Timer? _collapseTimer;
   var _collapsed = false;
+
+  late final GlobalKey _anchorKey = widget.anchorKey ?? GlobalKey();
 
   @override
   void initState() {
@@ -81,15 +90,23 @@ class _MiniPlayerState extends State<MiniPlayer> {
       );
       return;
     }
-    navigator.push(
-      CupertinoPageRoute<void>(
-        builder: (_) => MobilePlayerPage(
-          playback: widget.playback,
-          audioSources: widget.audioSources,
-          account: widget.account,
-        ),
-      ),
-    );
+    // 全屏页开着的时候不许自己折叠：折叠会挪走封面 Hero 并改变面板矩形，
+    // 返回时的收缩动画就会落到一个跟出发时不一样的地方。
+    _collapseTimer?.cancel();
+    navigator
+        .push(
+          MiniPlayerExpandRoute<void>(
+            originRect: () => globalRectOfKey(_anchorKey),
+            builder: (_) => MobilePlayerPage(
+              playback: widget.playback,
+              audioSources: widget.audioSources,
+              account: widget.account,
+            ),
+          ),
+        )
+        .whenComplete(() {
+          if (mounted) _restartCollapseTimer();
+        });
   }
 
   @override
@@ -106,6 +123,7 @@ class _MiniPlayerState extends State<MiniPlayer> {
           if (!_collapsed) _restartCollapseTimer();
         },
         child: GlassContainer(
+          key: _anchorKey,
           shape: const LiquidRoundedSuperellipse(borderRadius: 20),
           clipBehavior: Clip.antiAlias,
           child: LayoutBuilder(
@@ -118,12 +136,15 @@ class _MiniPlayerState extends State<MiniPlayer> {
               crossFadeState: _collapsed
                   ? CrossFadeState.showFirst
                   : CrossFadeState.showSecond,
-              firstChild: _buildCollapsed(track),
+              // AnimatedCrossFade 两个子树同时挂在树上，封面 Hero 只能给当下
+              // 可见的那个，否则起飞时会撞上「同 tag 多个 Hero」断言。
+              firstChild: _buildCollapsed(track, hero: _collapsed),
               secondChild: _buildExpanded(
                 context,
                 state,
                 track,
                 constraints.maxWidth,
+                hero: !_collapsed,
               ),
             ),
           ),
@@ -132,7 +153,14 @@ class _MiniPlayerState extends State<MiniPlayer> {
     );
   }
 
-  Widget _buildCollapsed(Track track) => Semantics(
+  /// 封面。[hero] 为 true 时挂上共享元素标签，进/出全屏播放器时它会自己
+  /// 飞到大封面的位置（见 [MiniPlayerExpandRoute]）。
+  Widget _buildArtwork(Track track, {required bool hero}) {
+    final image = TrackArtwork(track: track, size: 48, borderRadius: 10);
+    return hero ? Hero(tag: kPlayerCoverHeroTag, child: image) : image;
+  }
+
+  Widget _buildCollapsed(Track track, {required bool hero}) => Semantics(
     button: true,
     label: '展开迷你播放器：${track.name}',
     child: GestureDetector(
@@ -140,9 +168,7 @@ class _MiniPlayerState extends State<MiniPlayer> {
       onTap: _expand,
       child: SizedBox.square(
         dimension: _height,
-        child: Center(
-          child: TrackArtwork(track: track, size: 48, borderRadius: 10),
-        ),
+        child: Center(child: _buildArtwork(track, hero: hero)),
       ),
     ),
   );
@@ -151,8 +177,9 @@ class _MiniPlayerState extends State<MiniPlayer> {
     BuildContext context,
     PlaybackState state,
     Track track,
-    double fullWidth,
-  ) {
+    double fullWidth, {
+    required bool hero,
+  }) {
     final theme = MiuixTheme.of(context);
     final colors = theme.colors;
     return Semantics(
@@ -174,7 +201,7 @@ class _MiniPlayerState extends State<MiniPlayer> {
               padding: const EdgeInsets.only(left: 10, right: 4),
               child: Row(
                 children: [
-                  TrackArtwork(track: track, size: 48, borderRadius: 10),
+                  _buildArtwork(track, hero: hero),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(

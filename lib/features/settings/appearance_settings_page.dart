@@ -44,7 +44,7 @@ class AppearanceSettingsPage extends StatelessWidget {
 ///
 /// 独立成组件是为了让桌面端的合并设置页直接嵌这一份——主题色、播放器样式、
 /// 背景这些项各自挂着弹窗与预览，照抄一份出去必然分叉。
-class AppearanceSettingsBody extends StatelessWidget {
+class AppearanceSettingsBody extends StatefulWidget {
   const AppearanceSettingsBody({
     super.key,
     required this.account,
@@ -55,6 +55,60 @@ class AppearanceSettingsBody extends StatelessWidget {
   final AccountSessionController account;
   final EdgeInsets topPadding;
   final bool embedded;
+
+  @override
+  State<AppearanceSettingsBody> createState() => _AppearanceSettingsBodyState();
+}
+
+class _AppearanceSettingsBodyState extends State<AppearanceSettingsBody> {
+  AccountSessionController get account => widget.account;
+  EdgeInsets get topPadding => widget.topPadding;
+  bool get embedded => widget.embedded;
+
+  final _backdrop = MiuixLayerBackdrop();
+  final _anchors = <String, GlobalKey>{};
+  bool _menuOpen = false;
+
+  GlobalKey _anchorKey(String title) =>
+      _anchors.putIfAbsent(title, () => GlobalKey(debugLabel: title));
+
+  Rect? _anchorBounds(String title) {
+    final box = _anchors[title]?.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.attached || !box.hasSize) return null;
+    return MatrixUtils.transformRect(
+      box.getTransformTo(null),
+      Offset.zero & box.size,
+    );
+  }
+
+  /// 在 [anchor] 对应的设置行旁弹出玻璃菜单。
+  ///
+  /// 菜单里只有选项本身（`MiuixGlassPopupItem`），不带标题与描述。
+  Future<void> _showMenu({
+    required BuildContext context,
+    required String anchor,
+    required CyreneOverlayBuilder<void> builder,
+  }) async {
+    final bounds = _anchorBounds(anchor);
+    if (_menuOpen || bounds == null || !mounted) return;
+    _menuOpen = true;
+    try {
+      await showCyreneGlassMenu<void>(
+        context: context,
+        anchorBounds: bounds,
+        backdrop: _backdrop,
+        builder: builder,
+      );
+    } finally {
+      _menuOpen = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _backdrop.dispose();
+    super.dispose();
+  }
 
   static const _iconBlue = Color(0xFF3482FF);
   static const _iconGreen = Color(0xFF3CC756);
@@ -99,41 +153,34 @@ class AppearanceSettingsBody extends StatelessWidget {
   /// 播放器样式选择（经典 / SuperCyrene）。
   Future<void> _choosePlayerStyle(BuildContext context) async {
     final store = FullscreenSettingsStore.instance;
-    await showCyreneSheet<void>(
+    await _showMenu(
       context: context,
-      title: '播放器样式',
+      anchor: '播放器样式',
       builder: (context, dismiss) => ListenableBuilder(
         listenable: store,
         builder: (context, _) {
           final current = store.superCyrenePlayerEnabled;
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (final (enabled, iconName, name, desc) in const [
-                  (false, 'album', '经典', '黑胶唱片 + 音臂 + 右侧歌词面板'),
-                  (true, 'play', 'SuperCyrene', '沉浸式旋转封面背景 + 多主题歌词'),
-                ])
-                  CyreneMenuRow(
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final (enabled, iconName, name) in const [
+                (false, 'album', '经典'),
+                (true, 'play', 'SuperCyrene'),
+              ])
+                MiuixGlassPopupItem(
+                  icon: MiuixIcon(
                     vector: MiuixIcons.extended.byName(iconName)!,
-                    title: name,
-                    subtitle: desc,
-                    trailing: current == enabled
-                        ? MiuixIcon(
-                            vector: MiuixIcons.basic.check,
-                            size: 20,
-                            tint: MiuixTheme.of(context).colors.primary,
-                          )
-                        : const SizedBox(width: 20),
-                    onTap: () {
-                      store.setSuperCyrenePlayerEnabled(enabled);
-                      dismiss();
-                    },
+                    size: 24,
                   ),
-              ],
-            ),
+                  text: name,
+                  selected: current == enabled,
+                  onPressed: () {
+                    store.setSuperCyrenePlayerEnabled(enabled);
+                    dismiss();
+                  },
+                ),
+            ],
           );
         },
       ),
@@ -148,41 +195,34 @@ class AppearanceSettingsBody extends StatelessWidget {
   /// SuperCyrene 背景样式选择。
   Future<void> _chooseSuperCyreneBackground(BuildContext context) async {
     final store = FullscreenSettingsStore.instance;
-    await showCyreneSheet<void>(
+    await _showMenu(
       context: context,
-      title: 'SuperCyrene 背景',
+      anchor: 'SuperCyrene 背景',
       builder: (context, dismiss) => ListenableBuilder(
         listenable: store,
         builder: (context, _) {
           final current = store.superCyreneBackgroundStyle;
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (final (style, iconName, name, desc) in const [
-                  ('default', 'layers', '默认', 'AMLL 动态多层旋转流动背景'),
-                  ('textured_glass', 'image', '纹理玻璃', '长虹/瓦楞玻璃柱面折射与晶莹立体光泽'),
-                ])
-                  CyreneMenuRow(
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final (style, iconName, name) in const [
+                ('default', 'layers', '默认'),
+                ('textured_glass', 'image', '纹理玻璃'),
+              ])
+                MiuixGlassPopupItem(
+                  icon: MiuixIcon(
                     vector: MiuixIcons.extended.byName(iconName)!,
-                    title: name,
-                    subtitle: desc,
-                    trailing: current == style
-                        ? MiuixIcon(
-                            vector: MiuixIcons.basic.check,
-                            size: 20,
-                            tint: MiuixTheme.of(context).colors.primary,
-                          )
-                        : const SizedBox(width: 20),
-                    onTap: () {
-                      store.setSuperCyreneBackgroundStyle(style);
-                      dismiss();
-                    },
+                    size: 24,
                   ),
-              ],
-            ),
+                  text: name,
+                  selected: current == style,
+                  onPressed: () {
+                    store.setSuperCyreneBackgroundStyle(style);
+                    dismiss();
+                  },
+                ),
+            ],
           );
         },
       ),
@@ -264,280 +304,301 @@ class AppearanceSettingsBody extends StatelessWidget {
   /// 选择任务栏播放器在空白区里的对齐方式。
   Future<void> _chooseTaskbarAlignment(BuildContext context) async {
     final store = FullscreenSettingsStore.instance;
-    await showCyreneSheet<void>(
+    await _showMenu(
       context: context,
-      title: '任务栏位置',
+      anchor: '任务栏位置',
       builder: (context, dismiss) => ListenableBuilder(
         listenable: store,
-        builder: (context, _) => Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              for (final alignment in TaskbarPlayerAlignment.values)
-                CyreneMenuRow(
+        builder: (context, _) => Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final alignment in TaskbarPlayerAlignment.values)
+              MiuixGlassPopupItem(
+                icon: MiuixIcon(
                   vector: MiuixIcons.extended.byName('sort')!,
-                  title: alignment.label,
-                  subtitle: alignment.subtitle,
-                  trailing: store.taskbarPlayerAlignment == alignment
-                      ? MiuixIcon(
-                          vector: MiuixIcons.basic.check,
-                          size: 20,
-                          tint: MiuixTheme.of(context).colors.primary,
-                        )
-                      : const SizedBox(width: 20),
-                  onTap: () {
-                    store.setTaskbarPlayerAlignment(alignment);
-                    // 播放器开着时立即生效；没开着则下次开启时按新值定位。
-                    TaskbarPlayerController.instance.setAlignment(alignment);
-                    dismiss();
-                  },
+                  size: 24,
                 ),
-            ],
-          ),
+                text: alignment.label,
+                selected: store.taskbarPlayerAlignment == alignment,
+                onPressed: () {
+                  store.setTaskbarPlayerAlignment(alignment);
+                  // 播放器开着时立即生效；没开着则下次开启时按新值定位。
+                  TaskbarPlayerController.instance.setAlignment(alignment);
+                  dismiss();
+                },
+              ),
+          ],
         ),
       ),
     );
   }
 
   @override
-  Widget build(BuildContext context) => SettingsBody(
-    topPadding: topPadding,
-    embedded: embedded,
-    children: [
-      const MiuixSmallTitle(
-        '主题',
-        insideMargin: EdgeInsets.fromLTRB(16, 8, 16, 8),
-      ),
-      ListenableBuilder(
-        listenable: AppearanceSettingsStore.instance,
-        builder: (context, _) {
-          final store = AppearanceSettingsStore.instance;
-          // 窗口材质仅 Windows 桌面端（>=900 断点）展示：云母/亚克力是
-          // Windows 专属窗口效果，移动端/安卓平板横屏不出现。
-          final isWindowsDesktop =
-              Platform.isWindows && isDesktopLayout(context);
-          return CyreneMenuGroup(
-            children: [
-              CyreneMenuRow(
-                vector: MiuixIcons.extended.byName('background')!,
-                iconBackground: _iconPurple,
-                title: '深色模式',
-                subtitle: '页面明暗外观',
-                value: _themeModeName(store.themeMode),
-                onTap: () => _chooseThemeMode(context),
-              ),
-              CyreneMenuRow(
-                vector: MiuixIcons.extended.byName('theme')!,
-                iconBackground: _iconBlue,
-                title: '跟随系统主题色',
-                subtitle: store.followSystemColor
-                    ? '自动获取 Material You 动态颜色 (Android 12+)'
-                    : '手动选择主题色',
-                trailing: MiuixSwitch(
-                  value: store.followSystemColor,
-                  onChanged: store.setFollowSystemColor,
-                ),
-                onTap: () =>
-                    store.setFollowSystemColor(!store.followSystemColor),
-              ),
-              CyreneMenuRow(
-                vector: MiuixIcons.extended.byName('image')!,
-                iconBackground: _iconOrange,
-                title: '主题色',
-                value: _themeColorName(store),
-                trailing: store.followSystemColor
-                    ? MiuixIcon(
-                        vector: MiuixIcons.extended.byName('lock')!,
-                        size: 18,
-                        tint: MiuixTheme.of(
-                          context,
-                        ).colors.onSurfaceVariantActions,
-                      )
-                    : null,
-                onTap: () => store.followSystemColor
-                    ? CyreneToast.show('已跟随系统主题色，如需手动选择请先关闭上方开关')
-                    : _chooseThemeColor(context),
-              ),
-              // 窗口材质（仅 Windows 桌面端）：默认不透明 / 云母 / 亚克力。
-              if (isWindowsDesktop)
-                ListenableBuilder(
-                  listenable: WindowMaterialSettingsStore.instance,
-                  builder: (context, _) {
-                    final material =
-                        WindowMaterialSettingsStore.instance.material;
-                    return CyreneMenuRow(
-                      vector: MiuixIcons.extended.byName('filter')!,
-                      iconBackground: _iconTeal,
-                      title: '窗口材质',
-                      subtitle: material.subtitle,
-                      value: material.label,
-                      onTap: () => _chooseWindowMaterial(context),
-                    );
-                  },
-                ),
-            ],
-          );
-        },
-      ),
-      const SizedBox(height: 12),
-      const MiuixSmallTitle(
-        '播放器',
-        insideMargin: EdgeInsets.fromLTRB(16, 8, 16, 8),
-      ),
-      ListenableBuilder(
-        listenable: FullscreenSettingsStore.instance,
-        builder: (context, _) {
-          final store = FullscreenSettingsStore.instance;
-          final isWindowsDesktop =
-              Platform.isWindows && isDesktopLayout(context);
-          return CyreneMenuGroup(
-            children: [
-              // 播放器样式（经典 / SuperCyrene）
-              CyreneMenuRow(
-                vector: MiuixIcons.extended.byName('play')!,
-                iconBackground: _iconPurple,
-                title: '播放器样式',
-                subtitle: '全屏播放器的整体布局',
-                value: _playerStyleName(store.superCyrenePlayerEnabled),
-                onTap: () => _choosePlayerStyle(context),
-              ),
-              if (store.superCyrenePlayerEnabled)
-                CyreneMenuRow(
-                  vector: MiuixIcons.extended.byName('layers')!,
-                  iconBackground: _iconTeal,
-                  title: 'SuperCyrene 背景',
-                  subtitle: '全屏播放器背景样式',
-                  value: _superCyreneBackgroundName(
-                    store.superCyreneBackgroundStyle,
-                  ),
-                  onTap: () => _chooseSuperCyreneBackground(context),
-                ),
-              if (store.superCyrenePlayerEnabled &&
-                  store.superCyreneBackgroundStyle == 'textured_glass')
-                CyreneMenuRow(
-                  vector: MiuixIcons.extended.byName('filter')!,
-                  iconBackground: _iconOrange,
-                  title: '纹理玻璃参数',
-                  subtitle: '条纹宽度、折射、光泽与色散',
-                  onTap: () => showSuperCyreneTexturedGlassParamsSheet(context),
-                ),
-              // 歌词字体
-              ListenableBuilder(
-                listenable: LyricFontService(),
-                builder: (context, _) => CyreneMenuRow(
-                  vector: MiuixIcons.extended.byName('notes')!,
-                  iconBackground: _iconGreen,
-                  title: '歌词字体',
-                  value: LyricFontService().currentFontName,
-                  onTap: () => _chooseLyricFont(context),
-                ),
-              ),
-              // 播放器背景
-              ListenableBuilder(
-                listenable: PlayerBackgroundService(),
-                builder: (context, _) => CyreneMenuRow(
-                  vector: MiuixIcons.extended.byName('background')!,
-                  iconBackground: _iconBlue,
-                  title: '播放器背景',
-                  subtitle: PlayerBackgroundService()
-                      .getBackgroundTypeDescription(),
-                  value: PlayerBackgroundService().getBackgroundTypeName(),
-                  onTap: () => _chooseBackground(context),
-                ),
-              ),
-              // 桌面播放器（壁纸层歌词，仅 Windows 桌面端）
-              if (isWindowsDesktop)
-                CyreneMenuRow(
-                  vector: MiuixIcons.extended.byName('layers')!,
-                  iconBackground: _iconTeal,
-                  title: '桌面播放器',
-                  subtitle: store.wallpaperPlayerEnabled
-                      ? '歌词已渲染到桌面壁纸层'
-                      : '将歌词显示在桌面壁纸之上、图标之下',
-                  trailing: MiuixSwitch(
-                    value: store.wallpaperPlayerEnabled,
-                    onChanged: (_) => _toggleWallpaperPlayer(context),
-                  ),
-                ),
-              // 任务栏播放器（仅 Windows 桌面端）
-              if (isWindowsDesktop) ...[
-                CyreneMenuRow(
-                  vector: MiuixIcons.extended.byName('play')!,
-                  iconBackground: _iconGreen,
-                  title: '任务栏播放器',
-                  subtitle: switch ((
-                    store.taskbarPlayerEnabled,
-                    store.taskbarPlayerMode,
-                  )) {
-                    (false, _) => '在任务栏的空白区域显示迷你播放控制条',
-                    (true, TaskbarPlayerMode.floating) => '已拖出为悬浮窗，拖回任务栏可重新吸附',
-                    (true, _) => '已固定在任务栏空白处，拖动标题可移出',
-                  },
-                  trailing: MiuixSwitch(
-                    value: store.taskbarPlayerEnabled,
-                    onChanged: (_) => _toggleTaskbarPlayer(context),
-                  ),
-                ),
-                // 对齐方式只在固定形态下有意义：悬浮时位置归用户。
-                if (store.taskbarPlayerEnabled &&
-                    store.taskbarPlayerMode == TaskbarPlayerMode.pinned)
+  Widget build(BuildContext context) => MiuixLayerBackdropCapture(
+    backdrop: _backdrop,
+    pixelRatio: 1,
+    // 捕获树里必须自带一层不透明页面底色：脚手架的 containerColor 画在这层
+    // 捕获之外，只录正文的话快照是张透明图，玻璃菜单糊出来就是「半透明、
+    // 没有模糊」。与 CyrenePage 里顶栏那份捕获同理。
+    child: ColoredBox(
+      color: MiuixTheme.of(context).colors.surface,
+      child: SettingsBody(
+        topPadding: topPadding,
+        embedded: embedded,
+        children: [
+          const MiuixSmallTitle(
+            '主题',
+            insideMargin: EdgeInsets.fromLTRB(16, 8, 16, 8),
+          ),
+          ListenableBuilder(
+            listenable: AppearanceSettingsStore.instance,
+            builder: (context, _) {
+              final store = AppearanceSettingsStore.instance;
+              // 窗口材质仅 Windows 桌面端（>=900 断点）展示：云母/亚克力是
+              // Windows 专属窗口效果，移动端/安卓平板横屏不出现。
+              final isWindowsDesktop =
+                  Platform.isWindows && isDesktopLayout(context);
+              return CyreneMenuGroup(
+                children: [
                   CyreneMenuRow(
-                    vector: MiuixIcons.extended.byName('sort')!,
-                    iconBackground: _iconOrange,
-                    title: '任务栏位置',
-                    subtitle: store.taskbarPlayerAlignment.subtitle,
-                    value: store.taskbarPlayerAlignment.label,
-                    onTap: () => _chooseTaskbarAlignment(context),
+                    key: _anchorKey('深色模式'),
+                    vector: MiuixIcons.extended.byName('background')!,
+                    iconBackground: _iconPurple,
+                    title: '深色模式',
+                    subtitle: '页面明暗外观',
+                    value: _themeModeName(store.themeMode),
+                    onTap: () => _chooseThemeMode(context),
                   ),
-              ],
-            ],
-          );
-        },
+                  CyreneMenuRow(
+                    vector: MiuixIcons.extended.byName('theme')!,
+                    iconBackground: _iconBlue,
+                    title: '跟随系统主题色',
+                    subtitle: store.followSystemColor
+                        ? '自动获取 Material You 动态颜色 (Android 12+)'
+                        : '手动选择主题色',
+                    trailing: MiuixSwitch(
+                      value: store.followSystemColor,
+                      onChanged: store.setFollowSystemColor,
+                    ),
+                    onTap: () =>
+                        store.setFollowSystemColor(!store.followSystemColor),
+                  ),
+                  CyreneMenuRow(
+                    key: _anchorKey('主题色'),
+                    vector: MiuixIcons.extended.byName('image')!,
+                    iconBackground: _iconOrange,
+                    title: '主题色',
+                    value: _themeColorName(store),
+                    trailing: store.followSystemColor
+                        ? MiuixIcon(
+                            vector: MiuixIcons.extended.byName('lock')!,
+                            size: 18,
+                            tint: MiuixTheme.of(
+                              context,
+                            ).colors.onSurfaceVariantActions,
+                          )
+                        : null,
+                    onTap: () => store.followSystemColor
+                        ? CyreneToast.show('已跟随系统主题色，如需手动选择请先关闭上方开关')
+                        : _chooseThemeColor(context),
+                  ),
+                  // 窗口材质（仅 Windows 桌面端）：默认不透明 / 云母 / 亚克力。
+                  if (isWindowsDesktop)
+                    ListenableBuilder(
+                      listenable: WindowMaterialSettingsStore.instance,
+                      builder: (context, _) {
+                        final material =
+                            WindowMaterialSettingsStore.instance.material;
+                        return CyreneMenuRow(
+                          key: _anchorKey('窗口材质'),
+                          vector: MiuixIcons.extended.byName('filter')!,
+                          iconBackground: _iconTeal,
+                          title: '窗口材质',
+                          subtitle: material.subtitle,
+                          value: material.label,
+                          onTap: () => _chooseWindowMaterial(context),
+                        );
+                      },
+                    ),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          const MiuixSmallTitle(
+            '播放器',
+            insideMargin: EdgeInsets.fromLTRB(16, 8, 16, 8),
+          ),
+          ListenableBuilder(
+            listenable: FullscreenSettingsStore.instance,
+            builder: (context, _) {
+              final store = FullscreenSettingsStore.instance;
+              final isWindowsDesktop =
+                  Platform.isWindows && isDesktopLayout(context);
+              return CyreneMenuGroup(
+                children: [
+                  // 播放器样式（经典 / SuperCyrene）
+                  CyreneMenuRow(
+                    key: _anchorKey('播放器样式'),
+                    vector: MiuixIcons.extended.byName('play')!,
+                    iconBackground: _iconPurple,
+                    title: '播放器样式',
+                    subtitle: '全屏播放器的整体布局',
+                    value: _playerStyleName(store.superCyrenePlayerEnabled),
+                    onTap: () => _choosePlayerStyle(context),
+                  ),
+                  if (store.superCyrenePlayerEnabled)
+                    CyreneMenuRow(
+                      key: _anchorKey('SuperCyrene 背景'),
+                      vector: MiuixIcons.extended.byName('layers')!,
+                      iconBackground: _iconTeal,
+                      title: 'SuperCyrene 背景',
+                      subtitle: '全屏播放器背景样式',
+                      value: _superCyreneBackgroundName(
+                        store.superCyreneBackgroundStyle,
+                      ),
+                      onTap: () => _chooseSuperCyreneBackground(context),
+                    ),
+                  if (store.superCyrenePlayerEnabled &&
+                      store.superCyreneBackgroundStyle == 'textured_glass')
+                    CyreneMenuRow(
+                      key: _anchorKey('纹理玻璃参数'),
+                      vector: MiuixIcons.extended.byName('filter')!,
+                      iconBackground: _iconOrange,
+                      title: '纹理玻璃参数',
+                      subtitle: '条纹宽度、折射、光泽与色散',
+                      onTap: () => _chooseTexturedGlassParams(context),
+                    ),
+                  // 歌词字体
+                  ListenableBuilder(
+                    listenable: LyricFontService(),
+                    builder: (context, _) => CyreneMenuRow(
+                      key: _anchorKey('歌词字体'),
+                      vector: MiuixIcons.extended.byName('notes')!,
+                      iconBackground: _iconGreen,
+                      title: '歌词字体',
+                      value: LyricFontService().currentFontName,
+                      onTap: () => _chooseLyricFont(context),
+                    ),
+                  ),
+                  // 播放器背景
+                  ListenableBuilder(
+                    listenable: PlayerBackgroundService(),
+                    builder: (context, _) => CyreneMenuRow(
+                      key: _anchorKey('播放器背景'),
+                      vector: MiuixIcons.extended.byName('background')!,
+                      iconBackground: _iconBlue,
+                      title: '播放器背景',
+                      subtitle: PlayerBackgroundService()
+                          .getBackgroundTypeDescription(),
+                      value: PlayerBackgroundService().getBackgroundTypeName(),
+                      onTap: () => _chooseBackground(context),
+                    ),
+                  ),
+                  // 桌面播放器（壁纸层歌词，仅 Windows 桌面端）
+                  if (isWindowsDesktop)
+                    CyreneMenuRow(
+                      vector: MiuixIcons.extended.byName('layers')!,
+                      iconBackground: _iconTeal,
+                      title: '桌面播放器',
+                      subtitle: store.wallpaperPlayerEnabled
+                          ? '歌词已渲染到桌面壁纸层'
+                          : '将歌词显示在桌面壁纸之上、图标之下',
+                      trailing: MiuixSwitch(
+                        value: store.wallpaperPlayerEnabled,
+                        onChanged: (_) => _toggleWallpaperPlayer(context),
+                      ),
+                    ),
+                  // 任务栏播放器（仅 Windows 桌面端）
+                  if (isWindowsDesktop) ...[
+                    CyreneMenuRow(
+                      vector: MiuixIcons.extended.byName('play')!,
+                      iconBackground: _iconGreen,
+                      title: '任务栏播放器',
+                      subtitle: switch ((
+                        store.taskbarPlayerEnabled,
+                        store.taskbarPlayerMode,
+                      )) {
+                        (false, _) => '在任务栏的空白区域显示迷你播放控制条',
+                        (true, TaskbarPlayerMode.floating) =>
+                          '已拖出为悬浮窗，拖回任务栏可重新吸附',
+                        (true, _) => '已固定在任务栏空白处，拖动标题可移出',
+                      },
+                      trailing: MiuixSwitch(
+                        value: store.taskbarPlayerEnabled,
+                        onChanged: (_) => _toggleTaskbarPlayer(context),
+                      ),
+                    ),
+                    // 对齐方式只在固定形态下有意义：悬浮时位置归用户。
+                    if (store.taskbarPlayerEnabled &&
+                        store.taskbarPlayerMode == TaskbarPlayerMode.pinned)
+                      CyreneMenuRow(
+                        key: _anchorKey('任务栏位置'),
+                        vector: MiuixIcons.extended.byName('sort')!,
+                        iconBackground: _iconOrange,
+                        title: '任务栏位置',
+                        subtitle: store.taskbarPlayerAlignment.subtitle,
+                        value: store.taskbarPlayerAlignment.label,
+                        onTap: () => _chooseTaskbarAlignment(context),
+                      ),
+                  ],
+                ],
+              );
+            },
+          ),
+        ],
       ),
-    ],
+    ),
   );
+
+  Future<void> _chooseTexturedGlassParams(BuildContext context) async {
+    final bounds = _anchorBounds('纹理玻璃参数');
+    if (_menuOpen || bounds == null || !mounted) return;
+    _menuOpen = true;
+    try {
+      await showSuperCyreneTexturedGlassParamsSheet(
+        context,
+        anchorBounds: bounds,
+        backdrop: _backdrop,
+      );
+    } finally {
+      _menuOpen = false;
+    }
+  }
 
   // ==================== 深色模式 ====================
 
   Future<void> _chooseThemeMode(BuildContext context) async {
-    await showCyreneSheet<void>(
+    await _showMenu(
       context: context,
-      title: '深色模式',
+      anchor: '深色模式',
       builder: (context, dismiss) => ListenableBuilder(
         listenable: AppearanceSettingsStore.instance,
         builder: (context, _) {
           final store = AppearanceSettingsStore.instance;
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (final (mode, iconName, name, desc) in const [
-                  (ThemeMode.system, 'theme', '跟随系统', '与系统深色模式保持一致'),
-                  (ThemeMode.light, 'show', '亮色', '始终使用浅色外观'),
-                  (ThemeMode.dark, 'hide', '暗色', '始终使用深色外观'),
-                ])
-                  CyreneMenuRow(
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final (mode, iconName, name) in const [
+                (ThemeMode.system, 'theme', '跟随系统'),
+                (ThemeMode.light, 'show', '亮色'),
+                (ThemeMode.dark, 'hide', '暗色'),
+              ])
+                MiuixGlassPopupItem(
+                  icon: MiuixIcon(
                     vector: MiuixIcons.extended.byName(iconName)!,
-                    title: name,
-                    subtitle: desc,
-                    trailing: store.themeMode == mode
-                        ? MiuixIcon(
-                            vector: MiuixIcons.basic.check,
-                            size: 20,
-                            tint: MiuixTheme.of(context).colors.primary,
-                          )
-                        : const SizedBox(width: 20),
-                    onTap: () {
-                      store.setThemeMode(mode);
-                      dismiss();
-                    },
+                    size: 24,
                   ),
-              ],
-            ),
+                  text: name,
+                  selected: store.themeMode == mode,
+                  onPressed: () {
+                    store.setThemeMode(mode);
+                    dismiss();
+                  },
+                ),
+            ],
           );
         },
       ),
@@ -547,39 +608,31 @@ class AppearanceSettingsBody extends StatelessWidget {
   // ==================== 窗口材质 ====================
 
   Future<void> _chooseWindowMaterial(BuildContext context) async {
-    await showCyreneSheet<void>(
+    await _showMenu(
       context: context,
-      title: '窗口材质',
+      anchor: '窗口材质',
       builder: (context, dismiss) => ListenableBuilder(
         listenable: WindowMaterialSettingsStore.instance,
         builder: (context, _) {
           final store = WindowMaterialSettingsStore.instance;
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (final material in WindowMaterialType.values)
-                  CyreneMenuRow(
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final material in WindowMaterialType.values)
+                MiuixGlassPopupItem(
+                  icon: MiuixIcon(
                     vector: MiuixIcons.extended.byName('filter')!,
-                    iconBackground: _iconTeal,
-                    title: material.label,
-                    subtitle: material.subtitle,
-                    trailing: store.material == material
-                        ? MiuixIcon(
-                            vector: MiuixIcons.basic.check,
-                            size: 20,
-                            tint: MiuixTheme.of(context).colors.primary,
-                          )
-                        : const SizedBox(width: 20),
-                    onTap: () {
-                      store.setMaterial(material);
-                      dismiss();
-                    },
+                    size: 24,
                   ),
-              ],
-            ),
+                  text: material.label,
+                  selected: store.material == material,
+                  onPressed: () {
+                    store.setMaterial(material);
+                    dismiss();
+                  },
+                ),
+            ],
           );
         },
       ),
@@ -589,9 +642,9 @@ class AppearanceSettingsBody extends StatelessWidget {
   // ==================== 主题色 ====================
 
   Future<void> _chooseThemeColor(BuildContext context) async {
-    await showCyreneSheet<void>(
+    await _showMenu(
       context: context,
-      title: '主题色',
+      anchor: '主题色',
       builder: (context, dismiss) => ListenableBuilder(
         listenable: AppearanceSettingsStore.instance,
         builder: (context, _) {
@@ -600,7 +653,7 @@ class AppearanceSettingsBody extends StatelessWidget {
           // 「默认」色块用 HyperOS 静态配色的主色示意。
           final defaultColor = lightColorScheme().primary;
           return Padding(
-            padding: const EdgeInsets.fromLTRB(4, 4, 4, 12),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
             child: Wrap(
               spacing: 18,
               runSpacing: 14,
@@ -650,9 +703,9 @@ class AppearanceSettingsBody extends StatelessWidget {
   // ==================== 歌词字体 ====================
 
   Future<void> _chooseLyricFont(BuildContext context) async {
-    await showCyreneSheet<void>(
+    await _showMenu(
       context: context,
-      title: '歌词字体',
+      anchor: '歌词字体',
       builder: (context, dismiss) => ListenableBuilder(
         listenable: LyricFontService(),
         builder: (context, _) {
@@ -664,46 +717,34 @@ class AppearanceSettingsBody extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 380),
-                child: ListView(
-                  shrinkWrap: true,
-                  physics: const BouncingScrollPhysics(),
-                  children: [
-                    if (usingCustom)
-                      CyreneMenuRow(
-                        vector: MiuixIcons.extended.byName('file')!,
-                        title: service.currentFontName,
-                        subtitle: '本机导入的字体文件',
-                        trailing: MiuixIcon(
-                          vector: MiuixIcons.basic.check,
-                          size: 20,
-                          tint: theme.colors.primary,
-                        ),
-                      ),
-                    for (final font in LyricFontService.platformFonts)
-                      CyreneMenuRow(
-                        vector: MiuixIcons.extended.byName('notes')!,
-                        title: font.name,
-                        subtitle: font.description,
-                        trailing:
-                            !usingCustom && service.presetFontId == font.id
-                            ? MiuixIcon(
-                                vector: MiuixIcons.basic.check,
-                                size: 20,
-                                tint: theme.colors.primary,
-                              )
-                            : const SizedBox(width: 20),
-                        onTap: () => service.setPresetFont(font.id),
-                      ),
-                  ],
+              if (usingCustom)
+                MiuixGlassPopupItem(
+                  icon: MiuixIcon(
+                    vector: MiuixIcons.extended.byName('file')!,
+                    size: 24,
+                  ),
+                  text: service.currentFontName,
+                  selected: true,
+                  onPressed: () {},
                 ),
-              ),
+              for (final font in LyricFontService.platformFonts)
+                MiuixGlassPopupItem(
+                  icon: MiuixIcon(
+                    vector: MiuixIcons.extended.byName('notes')!,
+                    size: 24,
+                  ),
+                  text: font.name,
+                  selected: !usingCustom && service.presetFontId == font.id,
+                  onPressed: () => service.setPresetFont(font.id),
+                ),
               const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: MiuixButton(
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    MiuixButton(
                       onPressed: () => _pickCustomFont(context),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -718,15 +759,16 @@ class AppearanceSettingsBody extends StatelessWidget {
                         ],
                       ),
                     ),
-                  ),
-                  if (usingCustom) ...[
-                    const SizedBox(width: 10),
-                    MiuixButton(
-                      onPressed: () => service.clearCustomFont(),
-                      child: MiuixText('恢复预设', style: theme.textStyles.button),
-                    ),
+                    if (usingCustom)
+                      MiuixButton(
+                        onPressed: () => service.clearCustomFont(),
+                        child: MiuixText(
+                          '恢复预设',
+                          style: theme.textStyles.button,
+                        ),
+                      ),
                   ],
-                ],
+                ),
               ),
               const SizedBox(height: 8),
             ],
@@ -744,9 +786,9 @@ class AppearanceSettingsBody extends StatelessWidget {
   // ==================== 播放器背景 ====================
 
   Future<void> _chooseBackground(BuildContext context) async {
-    await showCyreneSheet<void>(
+    await _showMenu(
       context: context,
-      title: '播放器背景',
+      anchor: '播放器背景',
       builder: (context, dismiss) => ListenableBuilder(
         listenable: Listenable.merge([
           PlayerBackgroundService(),
@@ -756,115 +798,92 @@ class AppearanceSettingsBody extends StatelessWidget {
         builder: (context, _) {
           final background = PlayerBackgroundService();
           final theme = MiuixTheme.of(context);
-          // 图片/视频背景为赞助用户专属权益：Cyrene Premium（买断）与
-          // 上墙赞助（Sponsor）任一成立即可解锁。
-          final isSponsor = account.state.user?.hasSponsorPrivileges ?? false;
           final current = background.backgroundType;
-
-          Widget checkFor(PlayerBackgroundType type) => current == type
-              ? MiuixIcon(
-                  vector: MiuixIcons.basic.check,
-                  size: 20,
-                  tint: theme.colors.primary,
-                )
-              : const SizedBox(width: 20);
 
           return Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 460),
-                child: ListView(
-                  shrinkWrap: true,
-                  physics: const BouncingScrollPhysics(),
-                  children: [
-                    CyreneMenuRow(
-                      vector: MiuixIcons.extended.byName('theme')!,
-                      title: '自适应',
-                      subtitle: '基于专辑封面提取颜色',
-                      trailing: checkFor(PlayerBackgroundType.adaptive),
-                      onTap: () => background.setBackgroundType(
-                        PlayerBackgroundType.adaptive,
-                      ),
-                    ),
-                    // 与原版一致：仅自适应背景 + 非流体云样式时提供渐变开关。
-                    // AMLL 样式共用流体云背景，同样不提供该开关。
-                    if (background.isAdaptive &&
-                        LyricStyleService().currentStyle !=
-                            LyricStyle.fluidCloud &&
-                        LyricStyleService().currentStyle != LyricStyle.amll)
-                      CyreneMenuRow(
-                        vector: MiuixIcons.extended.byName('layers')!,
-                        title: '封面渐变效果',
-                        subtitle: '专辑封面位于顶部，向下渐变到主题色',
-                        trailing: MiuixSwitch(
-                          value: background.enableGradient,
-                          onChanged: background.setEnableGradient,
-                        ),
-                        onTap: () => background.setEnableGradient(
-                          !background.enableGradient,
-                        ),
-                      ),
-                    CyreneMenuRow(
-                      vector: MiuixIcons.extended.byName('cloudFill')!,
-                      title: '动态背景',
-                      subtitle: '基于封面的动态渐变效果',
-                      trailing: checkFor(PlayerBackgroundType.dynamic),
-                      onTap: () => background.setBackgroundType(
-                        PlayerBackgroundType.dynamic,
-                      ),
-                    ),
-                    CyreneMenuRow(
-                      vector: MiuixIcons.extended.byName('background')!,
-                      title: '纯色背景',
-                      subtitle: '使用自定义纯色',
-                      trailing: checkFor(PlayerBackgroundType.solidColor),
-                      onTap: () => background.setBackgroundType(
-                        PlayerBackgroundType.solidColor,
-                      ),
-                    ),
-                    if (background.isSolidColor)
-                      CyreneMenuRow(
-                        vector: MiuixIcons.extended.byName('edit')!,
-                        title: '选择颜色',
-                        trailing: Container(
-                          width: 22,
-                          height: 22,
-                          decoration: BoxDecoration(
-                            color: background.solidColor,
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: theme.colors.onSurfaceVariantActions,
-                            ),
-                          ),
-                        ),
-                        onTap: () => _pickSolidColor(context),
-                      ),
-                    CyreneMenuRow(
-                      vector: MiuixIcons.extended.byName('image')!,
-                      title: '图片背景',
-                      subtitle:
-                          background.mediaPath != null && background.isImage
-                          ? '自定义图片'
-                          : '未设置图片',
-                      value: isSponsor ? null : '赞助专属',
-                      trailing: checkFor(PlayerBackgroundType.image),
-                      onTap: () => _selectMediaBackground(isVideo: false),
-                    ),
-                    CyreneMenuRow(
-                      vector: MiuixIcons.extended.byName('photos')!,
-                      title: '视频背景',
-                      subtitle:
-                          background.mediaPath != null && background.isVideo
-                          ? '自定义视频'
-                          : '未设置视频',
-                      value: isSponsor ? null : '赞助专属',
-                      trailing: checkFor(PlayerBackgroundType.video),
-                      onTap: () => _selectMediaBackground(isVideo: true),
-                    ),
-                  ],
+              MiuixGlassPopupItem(
+                icon: MiuixIcon(
+                  vector: MiuixIcons.extended.byName('theme')!,
+                  size: 24,
                 ),
+                text: '自适应',
+                selected: current == PlayerBackgroundType.adaptive,
+                onPressed: () =>
+                    background.setBackgroundType(PlayerBackgroundType.adaptive),
+              ),
+              // 与原版一致：仅自适应背景 + 非流体云样式时提供渐变开关。
+              // AMLL 样式共用流体云背景，同样不提供该开关。
+              if (background.isAdaptive &&
+                  LyricStyleService().currentStyle != LyricStyle.fluidCloud &&
+                  LyricStyleService().currentStyle != LyricStyle.amll)
+                CyreneMenuRow(
+                  vector: MiuixIcons.extended.byName('layers')!,
+                  title: '封面渐变效果',
+                  trailing: MiuixSwitch(
+                    value: background.enableGradient,
+                    onChanged: background.setEnableGradient,
+                  ),
+                  onTap: () =>
+                      background.setEnableGradient(!background.enableGradient),
+                ),
+              MiuixGlassPopupItem(
+                icon: MiuixIcon(
+                  vector: MiuixIcons.extended.byName('cloudFill')!,
+                  size: 24,
+                ),
+                text: '动态背景',
+                selected: current == PlayerBackgroundType.dynamic,
+                onPressed: () =>
+                    background.setBackgroundType(PlayerBackgroundType.dynamic),
+              ),
+              MiuixGlassPopupItem(
+                icon: MiuixIcon(
+                  vector: MiuixIcons.extended.byName('background')!,
+                  size: 24,
+                ),
+                text: '纯色背景',
+                selected: current == PlayerBackgroundType.solidColor,
+                onPressed: () => background.setBackgroundType(
+                  PlayerBackgroundType.solidColor,
+                ),
+              ),
+              if (background.isSolidColor)
+                CyreneMenuRow(
+                  vector: MiuixIcons.extended.byName('edit')!,
+                  title: '选择颜色',
+                  trailing: Container(
+                    width: 22,
+                    height: 22,
+                    decoration: BoxDecoration(
+                      color: background.solidColor,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: theme.colors.onSurfaceVariantActions,
+                      ),
+                    ),
+                  ),
+                  onTap: () => _pickSolidColor(context),
+                ),
+              MiuixGlassPopupItem(
+                icon: MiuixIcon(
+                  vector: MiuixIcons.extended.byName('image')!,
+                  size: 24,
+                ),
+                text: '图片背景',
+                selected: current == PlayerBackgroundType.image,
+                onPressed: () => _selectMediaBackground(isVideo: false),
+              ),
+              MiuixGlassPopupItem(
+                icon: MiuixIcon(
+                  vector: MiuixIcons.extended.byName('photos')!,
+                  size: 24,
+                ),
+                text: '视频背景',
+                selected: current == PlayerBackgroundType.video,
+                onPressed: () => _selectMediaBackground(isVideo: true),
               ),
               const SizedBox(height: 8),
             ],

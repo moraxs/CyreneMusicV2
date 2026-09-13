@@ -70,16 +70,13 @@ class _HistoryPageState extends State<HistoryPage> {
   Widget build(BuildContext context) => CyrenePage(
     title: '播放历史',
     actions: [
-      MiuixIconButton(
+      CyreneBarButton(
         key: const Key('refresh-history-button'),
         enabled: !_isLoading,
         onPressed: _load,
-        child: MiuixIcon(
-          vector: MiuixIcons.extended.byName('refresh')!,
-          size: 20,
-        ),
+        tooltip: '刷新',
+        child: MiuixIcon(vector: MiuixIcons.os4.refresh, size: 24),
       ),
-      const SizedBox(width: 8),
     ],
     bodyBuilder: (context, topPadding) => _buildBody(topPadding),
   );

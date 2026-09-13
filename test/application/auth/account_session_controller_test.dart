@@ -110,8 +110,9 @@ class _FakeAuthRepository implements AuthRepository {
     String email,
     String username,
     String password,
-    String code,
-  ) async => const AuthResponse(success: true);
+    String code, {
+    String? inviteCode,
+  }) async => const AuthResponse(success: true);
 
   @override
   Future<AuthResponse> sendRegisterCode(String email, String username) async =>

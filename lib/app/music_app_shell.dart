@@ -1,7 +1,6 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart' hide SearchController;
 import 'package:flutter_miuix/miuix.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../application/announcements/announcement_controller.dart';
 import '../application/audio_sources/audio_source_preferences_controller.dart';
@@ -18,6 +17,7 @@ import '../features/discover/discover_page.dart';
 import '../features/home/now_listening_page.dart';
 import '../features/more/more_menu_drawer.dart';
 import '../features/player/mini_player.dart';
+import '../features/player/mini_player_expand_route.dart';
 import '../features/player/mobile/mobile_player_page.dart';
 import '../features/player/mobile/mobile_fullscreen_player_host.dart';
 import '../features/player/desktop_fullscreen_player_host.dart';
@@ -56,6 +56,13 @@ class MusicAppShell extends StatefulWidget {
 
 class _MusicAppShellState extends State<MusicAppShell> {
   var _selectedIndex = 0;
+
+  /// 迷你播放器面板的锚点：首页那张「正在播放」卡片进全屏播放器时，起点动画
+  /// 也从底部这块面板长出来，跟直接点迷你播放器完全一致。
+  final _miniPlayerKey = GlobalKey();
+
+  final _navigationBackdrop = MiuixLayerBackdrop();
+  bool _moreMenuOpen = false;
 
   @override
   void initState() {
@@ -108,6 +115,12 @@ class _MusicAppShellState extends State<MusicAppShell> {
   }
 
   @override
+  void dispose() {
+    _navigationBackdrop.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.playback,
     builder: (context, _) => isDesktopLayout(context)
@@ -126,34 +139,41 @@ class _MusicAppShellState extends State<MusicAppShell> {
         bottom: false,
         child: Stack(
           children: [
-            Column(
-              children: [
-                _SearchHeader(onOpenSearch: _openSearch),
-                const MiuixHorizontalDivider(),
-                Expanded(
-                  child: IndexedStack(
-                    index: _selectedIndex,
-                    children: [
-                      NowListeningPage(
-                        account: widget.account,
-                        home: widget.home,
-                        playback: widget.playback,
-                        onOpenPlayer: _openPlayer,
-                        onOpenPlaylist: _openHomePlaylist,
+            MiuixLayerBackdropCapture(
+              backdrop: _navigationBackdrop,
+              pixelRatio: 1,
+              child: ColoredBox(
+                color: theme.colors.surface,
+                child: Column(
+                  children: [
+                    _SearchHeader(onOpenSearch: _openSearch),
+                    const MiuixHorizontalDivider(),
+                    Expanded(
+                      child: IndexedStack(
+                        index: _selectedIndex,
+                        children: [
+                          NowListeningPage(
+                            account: widget.account,
+                            home: widget.home,
+                            playback: widget.playback,
+                            onOpenPlayer: _openPlayer,
+                            onOpenPlaylist: _openHomePlaylist,
+                          ),
+                          DiscoverPage(
+                            discover: widget.discover,
+                            onOpenPlaylist: _openDiscoverPlaylist,
+                          ),
+                          ProfilePage(
+                            accountSessionController: widget.account,
+                            playback: widget.playback,
+                            playlists: widget.playlists,
+                          ),
+                        ],
                       ),
-                      DiscoverPage(
-                        discover: widget.discover,
-                        onOpenPlaylist: _openDiscoverPlaylist,
-                      ),
-                      ProfilePage(
-                        accountSessionController: widget.account,
-                        playback: widget.playback,
-                        playlists: widget.playlists,
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
             // 迷你播放器与底部标签栏同层：它曾被提到 Navigator 之上（想让二级页
             // 也盖不住它），代价是连启动过渡页与引导页都会被它压住——那两个页面
@@ -162,52 +182,76 @@ class _MusicAppShellState extends State<MusicAppShell> {
             //
             // 用集合 if 而不是让子组件返回 SizedBox.shrink()：Stack 里的非定位空
             // 子节点会参与尺寸计算，是踩过的坑。
-            if (widget.playback.state.currentTrack != null)
-              Positioned(
-                left: 16,
-                right: 16,
-                // 标签栏之上。二级页没有标签栏，但迷你播放器也一起被盖住，
-                // 不存在切页时上下跳的问题。
-                bottom: 104,
-                child: MiniPlayer(
-                  playback: widget.playback,
-                  audioSources: widget.audioSources,
-                  account: widget.account,
-                ),
-              ),
             Positioned(
-              left: 0,
-              right: 0,
+              left: 16,
+              right: 16,
               bottom: 0,
-              child: GlassTabBar.bottom(
-                tabs: const [
-                  GlassTab(
-                    icon: Icon(CupertinoIcons.house),
-                    activeIcon: Icon(CupertinoIcons.house_fill),
-                    label: '首页',
-                    semanticLabel: '首页',
+              child: SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // 标签栏之上。二级页没有标签栏，但迷你播放器也一起被盖住，
+                      // 不存在切页时上下跳的问题。
+                      if (widget.playback.state.currentTrack != null) ...[
+                        MiniPlayer(
+                          playback: widget.playback,
+                          audioSources: widget.audioSources,
+                          account: widget.account,
+                          anchorKey: _miniPlayerKey,
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                      Center(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 520),
+                          child: MiuixGlassNavigationBar(
+                            key: const Key('mobile-navigation-bar'),
+                            backdrop: _navigationBackdrop,
+                            selectedIndex: _selectedIndex,
+                            onSelect: _onTabSelected,
+                            items: [
+                              MiuixGlassNavigationItem(
+                                icon: MiuixIcon(
+                                  vector: MiuixIcons.extended.byName('home')!,
+                                  size: 28,
+                                ),
+                                label: '首页',
+                                contentDescription: '首页',
+                              ),
+                              MiuixGlassNavigationItem(
+                                icon: MiuixIcon(
+                                  vector: MiuixIcons.os4.gridView,
+                                  size: 28,
+                                ),
+                                label: '发现',
+                                contentDescription: '发现',
+                              ),
+                              MiuixGlassNavigationItem(
+                                icon: MiuixIcon(
+                                  vector: MiuixIcons.os4.contactsCircle,
+                                  size: 28,
+                                ),
+                                label: '我的',
+                                contentDescription: '我的',
+                              ),
+                              MiuixGlassNavigationItem(
+                                icon: MiuixIcon(
+                                  vector: MiuixIcons.os4.more,
+                                  size: 28,
+                                ),
+                                label: '更多',
+                                contentDescription: '更多',
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                  GlassTab(
-                    icon: Icon(CupertinoIcons.compass),
-                    activeIcon: Icon(CupertinoIcons.compass_fill),
-                    label: '发现',
-                    semanticLabel: '发现',
-                  ),
-                  GlassTab(
-                    icon: Icon(CupertinoIcons.person),
-                    activeIcon: Icon(CupertinoIcons.person_fill),
-                    label: '我的',
-                    semanticLabel: '我的',
-                  ),
-                  GlassTab(
-                    icon: Icon(CupertinoIcons.ellipsis),
-                    activeIcon: Icon(CupertinoIcons.ellipsis_circle_fill),
-                    label: '更多',
-                    semanticLabel: '更多',
-                  ),
-                ],
-                selectedIndex: _selectedIndex,
-                onTabSelected: _onTabSelected,
+                ),
               ),
             ),
           ],
@@ -247,14 +291,20 @@ class _MusicAppShellState extends State<MusicAppShell> {
     );
   }
 
-  void _onTabSelected(int index) {
+  Future<void> _onTabSelected(int index) async {
+    if (_moreMenuOpen || index == _selectedIndex) return;
     if (index == 3) {
-      MoreMenuDrawer.show(
-        context,
-        account: widget.account,
-        audioSources: widget.audioSources,
-        playback: widget.playback,
-      );
+      _moreMenuOpen = true;
+      try {
+        await MoreMenuDrawer.show(
+          context,
+          account: widget.account,
+          audioSources: widget.audioSources,
+          playback: widget.playback,
+        );
+      } finally {
+        _moreMenuOpen = false;
+      }
       return;
     }
     setState(() => _selectedIndex = index);
@@ -328,7 +378,8 @@ class _MusicAppShellState extends State<MusicAppShell> {
       return;
     }
     Navigator.of(context).push(
-      CupertinoPageRoute<void>(
+      MiniPlayerExpandRoute<void>(
+        originRect: () => globalRectOfKey(_miniPlayerKey),
         builder: (_) => MobilePlayerPage(
           playback: widget.playback,
           audioSources: widget.audioSources,

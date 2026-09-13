@@ -134,8 +134,15 @@ class AccountSessionController extends ChangeNotifier {
     String email,
     String username,
     String password,
-    String code,
-  ) => _repository.register(email, username, password, code);
+    String code, {
+    String? inviteCode,
+  }) => _repository.register(
+    email,
+    username,
+    password,
+    code,
+    inviteCode: inviteCode,
+  );
 
   Future<AuthResponse> sendRegisterCode(String email, String username) =>
       _repository.sendRegisterCode(email, username);

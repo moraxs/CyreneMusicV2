@@ -29,3 +29,9 @@
 
 - 酷狗取流可用性：直接对 `gateway.kugou.com/v5/url` 用概念版签名发 GET（参考 `backend/temp_test_anon.mjs` 的写法），或调线上 `https://music.nekofun.top/kugou/song?hash=<HASH>&api_key=<KEY>`。
 - 拿到 URL 后务必用 **http** 协议 HEAD 验证（`curl.exe -I http://fs.youthandroid*.kugou.com/...`），不要用 https。
+
+## Flutter 验证
+
+- 单文件 widget/unit 测试：`flutter test --no-pub test/<path>/<name>_test.dart`（依赖已拉过时 `--no-pub` 跳过 pub get，更快）。
+- 局部静态检查：`dart analyze <文件...>`；格式化改动文件：`dart format <文件...>`。
+- widget 测试里设视窗：`tester.view.physicalSize = const Size(390, 844); tester.view.devicePixelRatio = 1.0;` + `addTearDown(tester.view.reset)`；用 `SharedPreferences.setMockInitialValues({})` 隔离偏好；返回导航用 `tester.binding.handlePopRoute()`（Miuix 页面无 Material 返回键，`tester.pageBack()` 不适用）。

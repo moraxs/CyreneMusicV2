@@ -9,11 +9,12 @@ import '../../infrastructure/services/sponsor_admin_service.dart';
 import '../../presentation/cyrene/cyrene_overlays.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
 import '../../presentation/cyrene/cyrene_toast.dart';
+import 'withdrawal_admin_page.dart';
 
 /// 订阅与赞助管理页（开发者工具）。
 ///
 /// 搜索用户，进入详情后可手动开关订阅（Cyrene Premium）与赞助状态、
-/// 添加/删除赞助金额记录。
+/// 添加/删除赞助金额记录；顶部另挂「提现管理」入口（邀请有礼的积分提现）。
 class SponsorAdminPage extends StatefulWidget {
   const SponsorAdminPage({super.key, required this.token});
 
@@ -73,6 +74,14 @@ class _SponsorAdminPageState extends State<SponsorAdminPage> {
     _debounce = Timer(const Duration(milliseconds: 400), _search);
   }
 
+  void _openWithdrawalAdmin() {
+    Navigator.of(context).push(
+      CupertinoPageRoute<void>(
+        builder: (_) => WithdrawalAdminPage(token: widget.token),
+      ),
+    );
+  }
+
   Future<void> _openDetail(AdminUser user) async {
     await Navigator.of(context).push(
       CupertinoPageRoute<void>(
@@ -93,14 +102,34 @@ class _SponsorAdminPageState extends State<SponsorAdminPage> {
       bodyBuilder: (context, topPadding) => Column(
         children: [
           Padding(
-            padding: topPadding + const EdgeInsets.fromLTRB(16, 4, 16, 8),
-            child: MiuixTextField(
-              controller: _searchController,
-              label: '搜索用户（ID / 用户名 / 邮箱）',
-              singleLine: true,
-              textInputAction: TextInputAction.search,
-              onChanged: _onChanged,
-              onSubmitted: (_) => _search(),
+            padding: topPadding + const EdgeInsets.fromLTRB(12, 4, 12, 8),
+            child: Column(
+              children: [
+                CyreneMenuGroup(
+                  children: [
+                    CyreneMenuRow(
+                      key: const Key('open-withdrawal-admin'),
+                      vector: MiuixIcons.extended.byName('bankCards')!,
+                      iconBackground: const Color(0xFFFF9F0A),
+                      title: '提现管理',
+                      subtitle: '审核邀请积分提现、手动打款后改状态',
+                      onTap: _openWithdrawalAdmin,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: MiuixTextField(
+                    controller: _searchController,
+                    label: '搜索用户（ID / 用户名 / 邮箱）',
+                    singleLine: true,
+                    textInputAction: TextInputAction.search,
+                    onChanged: _onChanged,
+                    onSubmitted: (_) => _search(),
+                  ),
+                ),
+              ],
             ),
           ),
           Expanded(child: _buildList()),

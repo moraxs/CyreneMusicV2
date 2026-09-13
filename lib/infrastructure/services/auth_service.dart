@@ -75,19 +75,26 @@ class AuthService implements AuthRepository {
     String email,
     String username,
     String password,
-    String code,
-  ) async {
+    String code, {
+    String? inviteCode,
+  }) async {
     try {
+      final payload = <String, Object?>{
+        'email': email,
+        'username': username,
+        'password': password,
+        'code': code,
+      };
+      // 邀请码选填：为空时不下发字段，避免后端把空串当成「填了个不存在的码」而 400。
+      final trimmedInvite = inviteCode?.trim();
+      if (trimmedInvite != null && trimmedInvite.isNotEmpty) {
+        payload['inviteCode'] = trimmedInvite;
+      }
       final response = await _apiClient.apiFetch(
         '${_urls.baseUrl}/auth/register',
         method: 'POST',
         headers: _headers(),
-        body: jsonEncode({
-          'email': email,
-          'username': username,
-          'password': password,
-          'code': code,
-        }),
+        body: jsonEncode(payload),
       );
       final data = _decode(response);
       return AuthResponse(

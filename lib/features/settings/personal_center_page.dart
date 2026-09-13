@@ -4,9 +4,11 @@ import 'package:flutter_miuix/miuix.dart';
 
 import '../../application/auth/account_session_controller.dart';
 import '../../domain/models/user.dart';
+import '../../infrastructure/services/invite_service.dart';
 import '../../presentation/cyrene/cyrene_overlays.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
 import '../../presentation/cyrene/cyrene_user_hero_card.dart';
+import 'invite_page.dart';
 import 'third_party_accounts_page.dart';
 
 /// 个人中心（账号聚焦）：顶部复用「我的」页同款沉浸式用户卡片，
@@ -74,6 +76,12 @@ class PersonalCenterPage extends StatelessWidget {
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 12),
+                _InviteSection(
+                  account: account,
+                  onOpenInvitePage: () =>
+                      _openPage(context, InvitePage(account: account)),
                 ),
                 const SizedBox(height: 12),
                 CyreneMenuGroup(
@@ -188,6 +196,107 @@ class PersonalCenterPage extends StatelessWidget {
       },
     );
     if (confirmed == true) await account.logout();
+  }
+}
+
+/// 邀请有礼段落：进邀请页的入口 + 手动填写邀请码。
+///
+/// 单独做成有状态组件而不是塞进 [PersonalCenterPage] 的 build：这一段要拉一次
+/// `/invite/summary` 才能显示邀请码与积分，不该把整个个人中心变成 StatefulWidget。
+/// 拉取失败时退化成「不带摘要的入口行」——邀请入口本身不该因为网络抖动而消失。
+class _InviteSection extends StatefulWidget {
+  const _InviteSection({required this.account, required this.onOpenInvitePage});
+
+  final AccountSessionController account;
+  final VoidCallback onOpenInvitePage;
+
+  @override
+  State<_InviteSection> createState() => _InviteSectionState();
+}
+
+class _InviteSectionState extends State<_InviteSection> {
+  static const _iconOrange = Color(0xFFFF9F0A);
+  static const _iconGreen = Color(0xFF3CC756);
+
+  var _loading = true;
+  InviteSummary? _summary;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final token = widget.account.token;
+    if (token == null || token.isEmpty) {
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
+    final summary = await InviteService.instance.getSummary(token);
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _summary = summary;
+    });
+  }
+
+  Future<void> _bind() async {
+    final token = widget.account.token;
+    if (token == null || token.isEmpty) return;
+    final bound = await showBindInviteCodeDialog(context, token: token);
+    if (bound && mounted) await _load();
+  }
+
+  String get _inviteSubtitle {
+    if (_loading) return '加载中…';
+    final summary = _summary;
+    if (summary == null) return '邀请好友得积分，可提现到支付宝';
+    if (summary.code == null || summary.code!.isEmpty) {
+      return '生成邀请码，邀请好友得积分';
+    }
+    return '邀请码 ${summary.code} · 可提现 ${summary.points} 积分';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final summary = _summary;
+    final bound = summary?.hasBoundInviter ?? false;
+    return CyreneMenuGroup(
+      children: [
+        CyreneMenuRow(
+          key: const Key('open-invite-page'),
+          vector: MiuixIcons.extended.byName('promotions')!,
+          iconBackground: _iconOrange,
+          title: '邀请有礼',
+          subtitle: _inviteSubtitle,
+          onTap: () async {
+            widget.onOpenInvitePage();
+            // 移动端是路由跳转，回来时积分/邀请码可能已变；桌面端是内容区替换，
+            // 这次刷新无害。等一帧再拉，避免跳转动画期间的无谓请求。
+            await Future<void>.delayed(const Duration(milliseconds: 300));
+            if (mounted) await _load();
+          },
+        ),
+        if (bound)
+          CyreneMenuRow(
+            vector: MiuixIcons.extended.byName('contactsCircle')!,
+            iconBackground: _iconGreen,
+            title: '我的邀请人',
+            value: summary!.inviterName,
+            trailing: const SizedBox.shrink(),
+          )
+        else
+          CyreneMenuRow(
+            key: const Key('bind-invite-code'),
+            vector: MiuixIcons.extended.byName('edit')!,
+            iconBackground: _iconGreen,
+            title: '填写邀请码',
+            subtitle: '朋友推荐你来的？填上他的邀请码',
+            onTap: _loading ? null : _bind,
+          ),
+      ],
+    );
   }
 }
 

@@ -41,14 +41,11 @@ class PlayerScreen extends StatelessWidget {
     return CyrenePage(
       title: '正在播放',
       actions: [
-        MiuixIconButton(
+        CyreneBarButton(
           onPressed: () => QueueSheet.show(context, playback),
-          child: MiuixIcon(
-            vector: MiuixIcons.extended.byName('playlist')!,
-            size: 20,
-          ),
+          tooltip: '播放队列',
+          child: MiuixIcon(vector: MiuixIcons.os4.playlist, size: 24),
         ),
-        const SizedBox(width: 8),
       ],
       body: LayoutBuilder(
         builder: (context, constraints) {
