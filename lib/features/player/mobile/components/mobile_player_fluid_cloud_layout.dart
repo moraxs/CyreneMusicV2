@@ -24,6 +24,7 @@ import '../compat/audio_services.dart';
 import '../compat/toast_utils.dart';
 import '../compat/song_detail.dart';
 import '../widgets/dynamic_cover_widget.dart';
+import '../widgets/apple_music/apple_music_progress_bar.dart';
 
 /// 迷你播放器封面 ↔ 全屏大封面之间那一帧「飞行中的封面」。
 ///
@@ -788,10 +789,9 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
 
             return SizedBox(
               width: width,
-              height: 24, // 增加点击热区
-              child: _AppleMusicSlider(
+              child: AppleMusicProgressBar(
                 value: progress,
-                onChanged: (v) {
+                onSeek: (v) {
                   final pos = Duration(milliseconds: (v * durationMs).round());
                   player.seek(pos);
                 },
@@ -1058,19 +1058,16 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
                     final durationMs = player.duration.inMilliseconds.toDouble();
                     final value = (durationMs > 0) ? (position / durationMs).clamp(0.0, 1.0) : 0.0;
                     
-                    return SizedBox(
-                       height: 24, // 增加点击热区
-                       child: _AppleMusicSlider(
-                          value: value,
-                          onChanged: (v) {
-                            final pos = Duration(milliseconds: (v * durationMs).round());
-                            player.seek(pos);
-                          },
-                          durationMs: durationMs,
-                          activeColor: Colors.white,
-                          inactiveColor: const Color(0x1FFFFFFF),
-                          chorusTimes: chorusTimes,
-                        ),
+                    return AppleMusicProgressBar(
+                      value: value,
+                      onSeek: (v) {
+                        final pos = Duration(milliseconds: (v * durationMs).round());
+                        player.seek(pos);
+                      },
+                      durationMs: durationMs,
+                      activeColor: Colors.white,
+                      inactiveColor: const Color(0x1FFFFFFF),
+                      chorusTimes: chorusTimes,
                     );
                   },
                 );
@@ -1815,249 +1812,5 @@ class _DownloadButtonState extends State<_DownloadButton> {
       onPressed: _isDownloaded ? null : _startDownload,
       tooltip: _isDownloaded ? '已下载' : '下载',
     );
-  }
-}
-
-/// Apple Music 风格的 Slider 组件
-/// 1. 默认显示微弱滑块
-/// 2. 交互时激活轨道变亮
-/// 3. 使用圆形滑块，触摸拖动时放大
-class _AppleMusicSlider extends StatefulWidget {
-  final double value;
-  final double min;
-  final double max;
-  final ValueChanged<double>? onChanged;
-  final Color activeColor;
-  final Color inactiveColor;
-  final List<Map<String, int>>? chorusTimes;
-  final double? durationMs;
-
-  const _AppleMusicSlider({
-    required this.value,
-    required this.onChanged,
-    required this.activeColor,
-    required this.inactiveColor,
-    this.chorusTimes,
-    this.durationMs,
-  }) : min = 0.0,
-       max = 1.0;
-
-  @override
-  State<_AppleMusicSlider> createState() => _AppleMusicSliderState();
-}
-
-class _AppleMusicSliderState extends State<_AppleMusicSlider> with SingleTickerProviderStateMixin {
-  double? _dragValue; // 保存拖动过程中的临时进度
-  
-  late AnimationController _controller;
-  late Animation<double> _animation;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 200),
-    );
-    // 动画用于控制圆点大小和透明度
-    _animation = CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeOutCubic,
-    );
-  }
-  
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        // 未交互时，由于圆点完全隐藏，我们使用稍微不同的颜色方案
-        // 交互时，已播放轨道变得明显更亮，背景轨道也略微变亮
-        final currentActiveColor = Color.lerp(
-          widget.activeColor.withValues(alpha: 0.55), // 未交互时较淡
-          widget.activeColor.withValues(alpha: 0.9),  // 交互时较亮
-          _animation.value
-        ) ?? widget.activeColor;
-        
-        final currentInactiveColor = Color.lerp(
-          widget.inactiveColor, // 未交互时使用传入极低透明度
-          Colors.white.withValues(alpha: 0.25), // 交互时背景轨道显得更清晰一点
-          _animation.value
-        ) ?? widget.inactiveColor;
-
-        return SliderTheme(
-          data: SliderThemeData(
-            trackHeight: 6, 
-            trackShape: _ChorusSliderTrackShape(
-              chorusTimes: widget.chorusTimes,
-              durationMs: widget.durationMs ?? widget.max,
-            ),
-            thumbShape: _AppleMusicThumbShape(
-              scale: _animation.value, // 完全跟随动画，未交互时为 0 (隐藏)
-              opacity: _animation.value,
-            ),
-            overlayShape: SliderComponentShape.noOverlay,
-            activeTrackColor: currentActiveColor,
-            inactiveTrackColor: currentInactiveColor,
-          ),
-          child: Slider(
-            value: _dragValue ?? widget.value,
-            onChanged: (v) {
-              setState(() {
-                _dragValue = v; // 立即更新本地值以确保拖动流畅
-              });
-              if (widget.onChanged != null) widget.onChanged!(v);
-            },
-            onChangeStart: (_) {
-              setState(() {
-                _dragValue = widget.value;
-              });
-              _controller.forward();
-            },
-            onChangeEnd: (_) {
-              setState(() {
-                _dragValue = null; // 释放拖动，恢复跟随外部进度
-              });
-              _controller.reverse();
-            },
-            min: widget.min,
-            max: widget.max,
-          ),
-        );
-      }
-    );
-  }
-}
-
-/// 自定义轨道，支持渲染副歌高亮区间
-class _ChorusSliderTrackShape extends RoundedRectSliderTrackShape {
-  final List<Map<String, int>>? chorusTimes;
-  final double durationMs;
-
-  const _ChorusSliderTrackShape({
-    this.chorusTimes,
-    required this.durationMs,
-  });
-
-  @override
-  void paint(
-    PaintingContext context,
-    Offset offset, {
-    required RenderBox parentBox,
-    required SliderThemeData sliderTheme,
-    required Animation<double> enableAnimation,
-    required TextDirection textDirection,
-    required Offset thumbCenter,
-    Offset? secondaryOffset,
-    bool isDiscrete = false,
-    bool isEnabled = false,
-    double additionalActiveTrackHeight = 2.0,
-  }) {
-    // 1. 绘制原始的背景轨和已播放轨
-    super.paint(
-      context,
-      offset,
-      parentBox: parentBox,
-      sliderTheme: sliderTheme,
-      enableAnimation: enableAnimation,
-      textDirection: textDirection,
-      thumbCenter: thumbCenter,
-      secondaryOffset: secondaryOffset,
-      isDiscrete: isDiscrete,
-      isEnabled: isEnabled,
-      additionalActiveTrackHeight: additionalActiveTrackHeight,
-    );
-
-    if (durationMs <= 0 || chorusTimes == null || chorusTimes!.isEmpty) return;
-
-    // 2. 在上方绘制副歌高亮区间
-    final Rect trackRect = getPreferredRect(
-      parentBox: parentBox,
-      offset: offset,
-      sliderTheme: sliderTheme,
-      isEnabled: isEnabled,
-      isDiscrete: isDiscrete,
-    );
-    
-    final Paint chorusPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.5)
-      ..style = PaintingStyle.fill;
-      
-    final double trackWidth = trackRect.width;
-
-    for (final chorus in chorusTimes!) {
-      final startTimeMs = chorus['startTime']?.toDouble() ?? 0.0;
-      final endTimeMs = chorus['endTime']?.toDouble() ?? 0.0;
-      if (startTimeMs >= endTimeMs) continue;
-
-      final startFraction = (startTimeMs / durationMs).clamp(0.0, 1.0);
-      final endFraction = (endTimeMs / durationMs).clamp(0.0, 1.0);
-      
-      final startX = trackRect.left + startFraction * trackWidth;
-      final endX = trackRect.left + endFraction * trackWidth;
-      
-      final chorusRect = RRect.fromRectAndRadius(
-        Rect.fromLTRB(startX, trackRect.top, endX, trackRect.bottom),
-        const Radius.circular(3.0),
-      );
-
-      context.canvas.drawRRect(chorusRect, chorusPaint);
-    }
-  }
-}
-
-/// 自定义圆形滑块，支持缩放和透明度动画
-class _AppleMusicThumbShape extends SliderComponentShape {
-  final double scale;
-  final double opacity;
-  final double maxRadius;
-
-  const _AppleMusicThumbShape({
-    required this.scale,
-    this.opacity = 1.0,
-  }) : maxRadius = 6.0;
-
-  @override
-  Size getPreferredSize(bool isEnabled, bool isDiscrete) {
-    return Size.fromRadius(maxRadius);
-  }
-
-  @override
-  void paint(
-    PaintingContext context,
-    Offset center, {
-    required Animation<double> activationAnimation,
-    required Animation<double> enableAnimation,
-    required bool isDiscrete,
-    required TextPainter labelPainter,
-    required RenderBox parentBox,
-    required SliderThemeData sliderTheme,
-    required TextDirection textDirection,
-    required double value,
-    required double textScaleFactor,
-    required Size sizeWithOverflow,
-  }) {
-    if (scale <= 0.01) return; // 隐藏不绘制
-
-    final Canvas canvas = context.canvas;
-    
-    // 绘制阴影
-    final path = Path()
-      ..addOval(Rect.fromCircle(center: center, radius: maxRadius * scale));
-    
-    canvas.drawShadow(path, Colors.black.withValues(alpha: 0.3 * opacity), 3.0, true);
-
-    // 绘制白色圆点
-    final Paint paint = Paint()
-      ..color = Colors.white.withValues(alpha: opacity)
-      ..style = PaintingStyle.fill;
-    
-    canvas.drawCircle(center, maxRadius * scale, paint);
   }
 }

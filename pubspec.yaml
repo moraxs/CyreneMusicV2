@@ -132,6 +132,22 @@ flutter:
     - assets/icons/icon_pause.svg
     - assets/icons/icon_play.svg
     - assets/icons/icon_rewind.svg
+    # Apple Music 化播放器用的图标，取自 AMLL（applemusic-like-lyrics）的
+    # react-full 包。播放/暂停/快退/快进上面已有，这批是随机、循环、歌词与
+    # 播放列表开关、收藏、更多菜单、AirPlay。
+    - assets/icons/icon_shuffle.svg
+    - assets/icons/icon_shuffle_active.svg
+    - assets/icons/icon_repeat.svg
+    - assets/icons/icon_repeat_active.svg
+    - assets/icons/icon_repeat_one_active.svg
+    - assets/icons/icon_lyrics_on.svg
+    - assets/icons/icon_lyrics_off.svg
+    - assets/icons/icon_playlist_on.svg
+    - assets/icons/icon_playlist_off.svg
+    - assets/icons/icon_star.svg
+    - assets/icons/icon_star_filled.svg
+    - assets/icons/icon_more.svg
+    - assets/icons/icon_airplay.svg
     - assets/icons/BxShuffle.svg
     - assets/icons/LucideRepeat.svg
     - assets/icons/MaterialSymbolsRepeatOneRounded.svg
