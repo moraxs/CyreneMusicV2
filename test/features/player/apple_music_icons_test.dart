@@ -29,6 +29,8 @@ void main() {
     'assets/icons/icon_star_filled.svg',
     'assets/icons/icon_more.svg',
     'assets/icons/icon_airplay.svg',
+    'assets/icons/icon_info.svg',
+    'assets/icons/icon_list_bullet.svg',
   ];
 
   for (final asset in icons) {

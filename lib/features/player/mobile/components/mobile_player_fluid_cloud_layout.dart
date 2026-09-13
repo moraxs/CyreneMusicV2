@@ -7,8 +7,6 @@ import 'package:flutter_miuix/miuix.dart';
 import '../../../../presentation/cyrene/cyrene_overlays.dart';
 import '../compat/player_service.dart';
 import '../compat/playlist_service.dart';
-import '../compat/download_service.dart';
-import '../compat/wiki_services.dart';
 import '../compat/lyric_line.dart';
 import '../../../../domain/models/track.dart';
 import '../../../../domain/models/music_source.dart';
@@ -1232,30 +1230,27 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
             },
           ),
           
-          // 2. 下载按钮
-          _buildNavButton(
-            icon: track != null
-                ? _DownloadButton(track: track)
-                : MiuixIcon(
-                    vector: MiuixIcons.extended.byName('download')!,
-                    size: 24,
-                    tint: Colors.white.withValues(alpha: 0.3),
-                  ),
-            visible: !_showCoverMode && track != null,
-            placeholder: true,
-          ),
-          
-          // 3. 歌曲信息按钮 (仅网易云歌曲显示)
+          // 下载按钮已移除：DownloadService 自始至终是占位层（isDownloaded 恒
+          // false、downloadSong 恒 false），点了只会弹一句失败提示。留着一个
+          // 永远不工作的按钮，不如不要。真要做下载时连按钮带服务一起补。
+
+          // 2. 歌曲信息按钮 (仅网易云歌曲显示)。
+          //
+          // 用 AMLL 的 info.svg（圆圈 + i）。AMLL 没有 "notes" 那种展开态图标，
+          // 也没必要 —— 它自己的开关态就是靠亮度区分，这里照做：打开面板时全白，
+          // 平时白 70%。
           _buildNavButton(
             icon: IconButton(
-              icon: MiuixIcon(
-                vector: _showSongWikiPanel
-                    ? MiuixIcons.extended.byName('notes')!
-                    : MiuixIcons.extended.byName('info')!,
-                size: 22,
-                tint: _showSongWikiPanel
-                    ? Colors.white
-                    : Colors.white.withValues(alpha: 0.7),
+              icon: SvgPicture.asset(
+                'assets/icons/icon_info.svg',
+                width: 24,
+                height: 24,
+                colorFilter: ColorFilter.mode(
+                  _showSongWikiPanel
+                      ? Colors.white
+                      : Colors.white.withValues(alpha: 0.7),
+                  BlendMode.srcIn,
+                ),
               ),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
@@ -1267,12 +1262,20 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
             placeholder: true,
           ),
 
-          // 4. 播放列表按钮
+          // 3. 播放列表按钮。
+          //
+          // 取 AMLL ToggleIconButton 的 playlist_off（纯字形）。不要用
+          // playlist_on —— 那个带一块填充的圆角方底，是「开关已打开」的态，
+          // 而这个按钮只是打开歌单弹窗，不是开关。
           IconButton(
-            icon: MiuixIcon(
-              vector: MiuixIcons.extended.byName('playlist')!,
-              size: 26,
-              tint: Colors.white.withValues(alpha: 0.8),
+            icon: SvgPicture.asset(
+              'assets/icons/icon_playlist_off.svg',
+              width: 26,
+              height: 26,
+              colorFilter: ColorFilter.mode(
+                Colors.white.withValues(alpha: 0.8),
+                BlendMode.srcIn,
+              ),
             ),
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(),
@@ -1634,232 +1637,6 @@ class _FavoriteButtonState extends State<_FavoriteButton> {
         }
       },
       tooltip: tooltip,
-    );
-  }
-}
-
-/// 下载按钮组件
-class _DownloadButton extends StatefulWidget {
-  final Track track;
-
-  const _DownloadButton({required this.track});
-
-  @override
-  State<_DownloadButton> createState() => _DownloadButtonState();
-}
-
-class _DownloadButtonState extends State<_DownloadButton> {
-  bool _isDownloaded = false;
-  bool _isDownloading = false;
-  bool _isLoading = true;
-  double _progress = 0.0;
-
-  @override
-  void initState() {
-    super.initState();
-    _checkDownloadStatus();
-    DownloadService().addListener(_onDownloadChanged);
-  }
-
-  @override
-  void dispose() {
-    DownloadService().removeListener(_onDownloadChanged);
-    super.dispose();
-  }
-
-  @override
-  void didUpdateWidget(_DownloadButton oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.track.id != widget.track.id ||
-        oldWidget.track.source != widget.track.source) {
-      _checkDownloadStatus();
-    }
-  }
-
-  void _onDownloadChanged() {
-    if (!mounted) return;
-    
-    final downloadService = DownloadService();
-    final trackId = '${widget.track.source.name}_${widget.track.id}';
-    final tasks = downloadService.downloadTasks;
-    final task = tasks[trackId];
-    
-    if (task != null) {
-      setState(() {
-        _isDownloading = !task.isCompleted && !task.isFailed;
-        _progress = task.progress;
-        if (task.isCompleted) {
-          _isDownloaded = true;
-          _isDownloading = false;
-        }
-      });
-    }
-  }
-
-  Future<void> _checkDownloadStatus() async {
-    setState(() => _isLoading = true);
-    
-    final isDownloaded = await DownloadService().isDownloaded(widget.track);
-    
-    if (mounted) {
-      setState(() {
-        _isDownloaded = isDownloaded;
-        _isLoading = false;
-      });
-    }
-  }
-
-  Future<void> _startDownload() async {
-    if (_isDownloading || _isDownloaded) return;
-    
-    setState(() {
-      _isDownloading = true;
-      _progress = 0.0;
-    });
-    
-    try {
-      // 获取歌曲详情
-      final songDetail = PlayerService().currentSong;
-      if (songDetail == null) {
-        // 如果当前没有歌曲详情，尝试获取
-        final detail = await MusicService().fetchSongDetail(
-          songId: widget.track.id.toString(),
-          source: widget.track.source,
-        );
-        
-        if (detail == null) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('获取歌曲信息失败')),
-            );
-            setState(() => _isDownloading = false);
-          }
-          return;
-        }
-        
-        final success = await DownloadService().downloadSong(
-          widget.track,
-          detail,
-          onProgress: (progress) {
-            if (mounted) {
-              setState(() => _progress = progress);
-            }
-          },
-        );
-        
-        if (mounted) {
-          if (success) {
-            setState(() {
-              _isDownloaded = true;
-              _isDownloading = false;
-            });
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('${widget.track.name} 下载完成')),
-            );
-          } else {
-            setState(() => _isDownloading = false);
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('下载失败')),
-            );
-          }
-        }
-      } else {
-        final success = await DownloadService().downloadSong(
-          widget.track,
-          songDetail,
-          onProgress: (progress) {
-            if (mounted) {
-              setState(() => _progress = progress);
-            }
-          },
-        );
-        
-        if (mounted) {
-          if (success) {
-            setState(() {
-              _isDownloaded = true;
-              _isDownloading = false;
-            });
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('${widget.track.name} 下载完成')),
-            );
-          } else {
-            setState(() => _isDownloading = false);
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('下载失败或文件已存在')),
-            );
-          }
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isDownloading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('下载失败: $e')),
-        );
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_isLoading) {
-      return const SizedBox(
-        width: 48,
-        height: 48,
-        child: Center(
-          child: MiuixCircularProgressIndicator(
-            size: 24,
-            strokeWidth: 2,
-            colors: MiuixProgressIndicatorColors(
-              foregroundColor: Colors.white54,
-              disabledForegroundColor: Colors.white54,
-              backgroundColor: Colors.transparent,
-            ),
-          ),
-        ),
-      );
-    }
-
-    if (_isDownloading) {
-      return SizedBox(
-        width: 48,
-        height: 48,
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            MiuixCircularProgressIndicator(
-              progress: _progress,
-              size: 48,
-              strokeWidth: 2,
-              colors: const MiuixProgressIndicatorColors(
-                foregroundColor: Colors.white,
-                disabledForegroundColor: Colors.white,
-                backgroundColor: Colors.white24,
-              ),
-            ),
-            Text(
-              '${(_progress * 100).toInt()}%',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 10,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return IconButton(
-      icon: MiuixIcon(
-        vector: _isDownloaded
-            ? MiuixIcons.basic.check
-            : MiuixIcons.extended.byName('download')!,
-        size: 24,
-        tint: _isDownloaded ? Colors.green : Colors.white.withValues(alpha: 0.8),
-      ),
-      onPressed: _isDownloaded ? null : _startDownload,
-      tooltip: _isDownloaded ? '已下载' : '下载',
     );
   }
 }
