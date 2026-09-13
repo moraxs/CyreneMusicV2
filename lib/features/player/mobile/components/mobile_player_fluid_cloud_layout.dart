@@ -27,6 +27,7 @@ import '../compat/song_detail.dart';
 import '../widgets/dynamic_cover_widget.dart';
 import '../widgets/apple_music/apple_music_progress_bar.dart';
 import '../widgets/apple_music/apple_music_media_button.dart';
+import '../widgets/apple_music/apple_music_info_stagger.dart';
 
 /// 迷你播放器封面 ↔ 全屏大封面之间那一帧「飞行中的封面」。
 ///
@@ -137,6 +138,37 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
       ),
     );
   }
+
+  // 信息栏错位交叉淡入的算法见 [AppleMusicInfoStagger]（含 AMLL 对照说明）。
+
+  // ── 暂停时封面缩小 ────────────────────────────────────────────────
+  //
+  // 1 = 播放中，0 = 已暂停。AMLL 的 Cover CSS 在 `.musicPaused` 下同时收三样：
+  // 缩放、投影的 y 偏移（1em → 0.8em）、投影模糊半径（1.2em → 0.8em）。
+  // 之前这里只缩了尺寸，投影没跟着收，而且是直接按 isPlaying 取值、没有过渡，
+  // 暂停瞬间封面会「啪」地跳一下。
+  //
+  // 两个方向的曲线也不同：恢复播放 0.5s cubic-bezier(0.3, 0.2, 0.2, 1.4)
+  // （末段 1.4 是有意的过冲，弹一下），暂停 0.6s cubic-bezier(0.4, 0.2, 0.1, 1)
+  // （纯减速，稳稳收住）。
+  late final AnimationController _pauseAnim = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 500),
+    value: PlayerService().isPlaying ? 1.0 : 0.0,
+  )..addListener(() => setState(() {}));
+
+  static const _resumeCurve = Cubic(0.3, 0.2, 0.2, 1.4);
+  static const _pauseCurve = Cubic(0.4, 0.2, 0.1, 1);
+
+  void _animatePause(bool isPlaying) {
+    if (isPlaying) {
+      _pauseAnim.duration = const Duration(milliseconds: 500);
+      _pauseAnim.animateTo(1.0, curve: _resumeCurve);
+    } else {
+      _pauseAnim.duration = const Duration(milliseconds: 600);
+      _pauseAnim.animateTo(0.0, curve: _pauseCurve);
+    }
+  }
   // 歌曲信息面板
   bool _showSongWikiPanel = false;
 
@@ -179,6 +211,7 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
     AutoCollapseService().removeListener(_onSettingsChanged);
     _snapController.dispose();
     _coverAnim.dispose();
+    _pauseAnim.dispose();
     super.dispose();
   }
 
@@ -200,9 +233,9 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
     final isPlaying = PlayerService().isPlaying;
     if (isPlaying != _wasPlaying) {
       _wasPlaying = isPlaying;
-      
-      // Trigger rebuild for cover animation
-      if (mounted) setState(() {});
+
+      // 驱动封面的暂停缩放/投影收缩（带过渡，不再瞬间跳变）
+      if (mounted) _animatePause(isPlaying);
 
       if (AutoCollapseService().isAutoCollapseEnabled) {
         if (isPlaying) {
@@ -324,9 +357,10 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
     final smallCoverTop = safePadding.top + 24.0;
     final smallCoverLeft = 16.0;
 
-    // Animation Logic: Shrink by 10% when paused in Cover Mode
-    final bool isPlaying = player.isPlaying;
-    final effectiveBigSize = isPlaying ? bigCoverSize : bigCoverSize * 0.9;
+    // 暂停时封面缩到 90%，由 _pauseAnim 过渡（1 = 播放中，0 = 暂停）。
+    // 之前是按 isPlaying 直接取值，暂停瞬间会跳一下。
+    final pausedT = _pauseAnim.value;
+    final effectiveBigSize = bigCoverSize * lerpDouble(0.9, 1.0, pausedT)!;
     
     // 弹簧进度：1 = 封面模式，0 = 歌词模式。封面的位置/尺寸、两侧内容的
     // 淡入淡出都从这一个值插出来，保证严格同步。
@@ -334,6 +368,13 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
     // 这里不夹紧到 [0,1]：弹簧阻尼比约 1.06（轻微过阻尼）本就不会过冲，
     // 留着原值让「切换途中再次切换」能从当前速度平滑接管。
     final t = _coverAnim.value;
+
+    // 信息栏错位交叉淡入：离场用加速曲线，入场用减速曲线，位移 25vh。
+    // 两块朝同一方向走 —— 歌词→封面双双下沉，封面→歌词双双上浮。
+    final smallPresence = AppleMusicInfoStagger.smallPresence(t);
+    final bigPresence = AppleMusicInfoStagger.bigPresence(t);
+    final smallInfoDy = AppleMusicInfoStagger.smallOffsetY(t, screenHeight);
+    final bigInfoDy = AppleMusicInfoStagger.bigOffsetY(t, screenHeight);
 
     final bigTop = bigCoverTop + (bigCoverSize - effectiveBigSize) / 2;
     final bigLeft = (screenWidth - effectiveBigSize) / 2;
@@ -371,8 +412,8 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
               else
                 SafeArea(
                   child: Opacity(
-                    // 跟着封面弹簧一起淡出，不再自走一条 300ms 曲线。
-                    opacity: (1.0 - t).clamp(0.0, 1.0),
+                    // 错位：本层先让位，封面层后进场，中间不会两层都半透明糊在一起。
+                    opacity: smallPresence,
                     child: IgnorePointer(
                       ignoring: _showCoverMode,
                       child: GestureDetector(
@@ -380,9 +421,19 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
                         behavior: HitTestBehavior.translucent,
                         child: Column(
                           children: [
-                            // 顶部歌曲信息 (仅在歌词模式渲染内容)
-                            if (!_showCoverMode)
-                              _buildSongInfoSection(context, song, track, imageUrl, isGhost: true),
+                            // 顶部歌曲信息。
+                            // 让位时整块下沉 25vh，和封面层的信息块同向。
+                            //
+                            // 条件用「在场度」而不是 _showCoverMode：后者在点下去
+                            // 的那一帧就翻转了，会把信息块整个摘掉，离场动画根本
+                            // 没机会渲染。留到在场度归零再撤。
+                            if (smallPresence > 0.001)
+                              Transform.translate(
+                                offset: Offset(0, smallInfoDy),
+                                child: _buildSongInfoSection(
+                                    context, song, track, imageUrl,
+                                    isGhost: true),
+                              ),
                                 
                             // 中间区域：歌词或歌曲信息面板
                             Expanded(
@@ -430,7 +481,7 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
               if (!isLandscape)
                 SafeArea(
                   child: Opacity(
-                    opacity: t.clamp(0.0, 1.0),
+                    opacity: bigPresence,
                     child: IgnorePointer(
                       ignoring: !_showCoverMode,
                       child: _buildCoverModeLayout(
@@ -442,6 +493,7 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
                         coverSize: bigCoverSize,
                         topSpacing: bigCoverTop - safePadding.top - topBarHeight, // 传递准确的间距
                         isGhost: true,
+                        infoDy: bigInfoDy,
                       ),
                     ),
                   ),
@@ -477,8 +529,16 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
                             BoxShadow(
                               color: Colors.black
                                   .withValues(alpha: lerpDouble(0.3, 0.4, t)!),
-                              blurRadius: lerpDouble(10, 40, t)!,
-                              offset: Offset(0, lerpDouble(4, 20, t)!),
+                              // 暂停时投影同步收拢：AMLL 的 y 由 1em 收到
+                              // 0.8em、模糊半径由 1.2em 收到 0.8em，这里按同
+                              // 样比例缩。只在封面模式生效（按 t 加权）。
+                              blurRadius: lerpDouble(10, 40, t)! *
+                                  lerpDouble(1.0, lerpDouble(0.8 / 1.2, 1.0, pausedT)!, t)!,
+                              offset: Offset(
+                                0,
+                                lerpDouble(4, 20, t)! *
+                                    lerpDouble(1.0, lerpDouble(0.8, 1.0, pausedT)!, t)!,
+                              ),
                             ),
                           ],
                         ),
@@ -540,6 +600,8 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
     required double coverSize,
     required double topSpacing,
     bool isGhost = false,
+    /// 信息块的纵向位移：入场途中从上方 -25vh 落到 0。
+    double infoDy = 0,
   }) {
     return Column(
       key: const ValueKey('CoverModeLayout'),
@@ -588,40 +650,50 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
               children: [
                 const Spacer(),
                 
-                // 歌曲信息 (标题和歌手) - 左对齐
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 32),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              song?.name ?? track?.name ?? '未知歌曲',
-                              style: const TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
+                // 歌曲信息 (标题和歌手) - 左对齐。
+                // 入场时从上方 -25vh 落下，与歌词模式那块同向。
+                // 字重/透明度/字距同样照 AMLL 的 MusicInfo CSS，与歌词模式那块保持一致。
+                Transform.translate(
+                  offset: Offset(0, infoDy),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                song?.name ?? track?.name ?? '未知歌曲',
+                                style: TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w500,
+                                  letterSpacing: 0.4,
+                                  height: 1.25,
+                                  color: Colors.white.withValues(alpha: 0.9),
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              song?.arName ?? track?.artists ?? '未知艺术家',
-                              style: TextStyle(
-                                fontSize: 18,
-                                color: Colors.white.withValues(alpha: 0.7),
+                              const SizedBox(height: 4),
+                              Text(
+                                song?.arName ?? track?.artists ?? '未知艺术家',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w400,
+                                  letterSpacing: 0.4,
+                                  height: 1.25,
+                                  color: Colors.white.withValues(alpha: 0.45),
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                      if (track != null) _FavoriteButton(track: track),
-                    ],
+                        if (track != null) _FavoriteButton(track: track),
+                      ],
+                    ),
                   ),
                 ),
                 
