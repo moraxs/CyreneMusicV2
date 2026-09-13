@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 // 只取进度指示器：原版文件按逐行移植保留，避免 miuix 全量导入与原版符号撞名。
 // 额外取 MiuixIcon / MiuixIcons：底部工具栏的下载/信息/列表按钮改用 miuix 矢量图标。
 import 'package:flutter_miuix/miuix.dart';
@@ -18,6 +19,8 @@ import 'mobile_player_fluid_cloud_song_wiki_panel.dart';
 import 'mobile_player_dialogs.dart';
 import 'mobile_player_settings_sheet.dart';
 import 'dart:async';
+import 'dart:ui' show lerpDouble;
+import 'package:flutter/physics.dart' show SpringDescription, SpringSimulation;
 import 'mobile_player_background.dart';
 import '../compat/auto_collapse_service.dart';
 import '../compat/audio_services.dart';
@@ -25,6 +28,7 @@ import '../compat/toast_utils.dart';
 import '../compat/song_detail.dart';
 import '../widgets/dynamic_cover_widget.dart';
 import '../widgets/apple_music/apple_music_progress_bar.dart';
+import '../widgets/apple_music/apple_music_media_button.dart';
 
 /// 迷你播放器封面 ↔ 全屏大封面之间那一帧「飞行中的封面」。
 ///
@@ -102,6 +106,39 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
   bool _wasPlaying = false;
   // 封面模式 (经典模式)
   bool _showCoverMode = true;
+
+  /// 封面模式 ↔ 歌词模式的过渡进度：1 = 封面模式，0 = 歌词模式。
+  ///
+  /// 封面位置、两侧内容的淡入淡出全部由它驱动 —— 之前封面走 500ms 的
+  /// `fastLinearToSlowEaseIn`、两侧内容各走 300ms 的 easeInOut，三者不同步，
+  /// 看着就散。现在同源，且换成 AMLL `vertical.tsx` 里那条弹簧：
+  /// framer-motion 的 `{ type: "spring", stiffness: 200, damping: 30 }`。
+  /// 阻尼比约 1.06，属轻微过阻尼，不会过冲。
+  late final AnimationController _coverAnim = AnimationController.unbounded(
+    vsync: this,
+    value: 1.0,
+  )..addListener(() => setState(() {}));
+
+  static const _coverSpring = SpringDescription(
+    mass: 1,
+    stiffness: 200,
+    damping: 30,
+  );
+
+  /// 切换封面/歌词模式。所有切换都必须走这里，别直接写 `_showCoverMode`，
+  /// 否则弹簧不会动，封面会瞬移。
+  void _setCoverMode(bool showCover) {
+    if (_showCoverMode == showCover) return;
+    setState(() => _showCoverMode = showCover);
+    _coverAnim.animateWith(
+      SpringSimulation(
+        _coverSpring,
+        _coverAnim.value,
+        showCover ? 1.0 : 0.0,
+        _coverAnim.velocity,
+      ),
+    );
+  }
   // 歌曲信息面板
   bool _showSongWikiPanel = false;
 
@@ -143,6 +180,7 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
     PlayerService().removeListener(_onPlayerStateChanged);
     AutoCollapseService().removeListener(_onSettingsChanged);
     _snapController.dispose();
+    _coverAnim.dispose();
     super.dispose();
   }
 
@@ -292,14 +330,19 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
     final bool isPlaying = player.isPlaying;
     final effectiveBigSize = isPlaying ? bigCoverSize : bigCoverSize * 0.9;
     
-    final targetSize = _showCoverMode ? effectiveBigSize : smallCoverSize;
-    // When shrinking, keep centered relative to the original bigCover box
-    final targetTop = _showCoverMode 
-        ? bigCoverTop + (bigCoverSize - effectiveBigSize) / 2 
-        : smallCoverTop;
-    final targetLeft = _showCoverMode 
-        ? (screenWidth - effectiveBigSize) / 2 
-        : smallCoverLeft;
+    // 弹簧进度：1 = 封面模式，0 = 歌词模式。封面的位置/尺寸、两侧内容的
+    // 淡入淡出都从这一个值插出来，保证严格同步。
+    //
+    // 这里不夹紧到 [0,1]：弹簧阻尼比约 1.06（轻微过阻尼）本就不会过冲，
+    // 留着原值让「切换途中再次切换」能从当前速度平滑接管。
+    final t = _coverAnim.value;
+
+    final bigTop = bigCoverTop + (bigCoverSize - effectiveBigSize) / 2;
+    final bigLeft = (screenWidth - effectiveBigSize) / 2;
+
+    final targetSize = lerpDouble(smallCoverSize, effectiveBigSize, t)!;
+    final targetTop = lerpDouble(smallCoverTop, bigTop, t)!;
+    final targetLeft = lerpDouble(smallCoverLeft, bigLeft, t)!;
 
     return GestureDetector(
       onVerticalDragUpdate: _onVerticalDragUpdate,
@@ -329,10 +372,9 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
                 _buildLandscapeLayout(context, player, song, track, imageUrl)
               else
                 SafeArea(
-                  child: AnimatedOpacity(
-                    duration: const Duration(milliseconds: 300),
-                    opacity: _showCoverMode ? 0.0 : 1.0,
-                    curve: Curves.easeInOut,
+                  child: Opacity(
+                    // 跟着封面弹簧一起淡出，不再自走一条 300ms 曲线。
+                    opacity: (1.0 - t).clamp(0.0, 1.0),
                     child: IgnorePointer(
                       ignoring: _showCoverMode,
                       child: GestureDetector(
@@ -389,10 +431,8 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
               // 2. 封面模式布局 (仅在竖屏存在)
               if (!isLandscape)
                 SafeArea(
-                  child: AnimatedOpacity(
-                    duration: const Duration(milliseconds: 300),
-                    opacity: _showCoverMode ? 1.0 : 0.0,
-                    curve: Curves.easeInOut,
+                  child: Opacity(
+                    opacity: t.clamp(0.0, 1.0),
                     child: IgnorePointer(
                       ignoring: !_showCoverMode,
                       child: _buildCoverModeLayout(
@@ -416,9 +456,7 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
               // MiniPlayerExpandRoute）。飞行途中 Hero 会把这里替换成等尺寸占
               // 位，AnimatedPositioned 的布局不受影响。
               if (!isLandscape)
-                AnimatedPositioned(
-                  duration: const Duration(milliseconds: 500),
-                  curve: Curves.fastLinearToSlowEaseIn,
+                Positioned(
                   top: targetTop,
                   left: targetLeft,
                   width: targetSize,
@@ -426,21 +464,23 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
                   child: GestureDetector(
                     onTap: () {
                       // 点击切换模式
-                      setState(() => _showCoverMode = !_showCoverMode);
+                      _setCoverMode(!_showCoverMode);
                     },
                     child: Hero(
                       tag: kPlayerCoverHeroTag,
                       flightShuttleBuilder: _playerCoverFlightShuttle,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 500),
-                        curve: Curves.fastLinearToSlowEaseIn,
+                      child: Container(
+                        // 圆角与投影跟着同一条弹簧连续插值：小封面 r=8/浅投影，
+                        // 大封面 r=16/厚投影，中途不会有跳变。
                         decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(_showCoverMode ? 16 : 8),
+                          borderRadius:
+                              BorderRadius.circular(lerpDouble(8, 16, t)!),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withValues(alpha: _showCoverMode ? 0.4 : 0.3),
-                              blurRadius: _showCoverMode ? 40 : 10,
-                              offset: Offset(0, _showCoverMode ? 20 : 4),
+                              color: Colors.black
+                                  .withValues(alpha: lerpDouble(0.3, 0.4, t)!),
+                              blurRadius: lerpDouble(10, 40, t)!,
+                              offset: Offset(0, lerpDouble(4, 20, t)!),
                             ),
                           ],
                         ),
@@ -452,7 +492,7 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
                                 child: Icon(
                                   Icons.music_note,
                                   color: Colors.white54,
-                                  size: _showCoverMode ? 120 : 30,
+                                  size: lerpDouble(30, 120, t)!,
                                 ),
                               ),
                       ),
@@ -534,7 +574,7 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
           // 大封面占位
           GestureDetector(
             onTap: () {
-               if (!isGhost) setState(() => _showCoverMode = false);
+               if (!isGhost) _setCoverMode(false);
             },
             child: Container(
               width: coverSize,
@@ -839,32 +879,29 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
                  return Row(
                    mainAxisSize: MainAxisSize.min,
                    children: [
-                     // 上一首
-                     IconButton(
-                       icon: const Icon(CupertinoIcons.backward_fill), // iOS 风格粗图标
-                       color: Colors.white,
-                       iconSize: 36, // 图标加大
+                     AppleMusicMediaButton(
+                       asset: 'assets/icons/icon_rewind.svg',
+                       semanticLabel: '上一首',
+                       size: 56,
+                       iconSize: 30,
                        onPressed: player.hasPrevious ? player.playPrevious : null,
                      ),
-                     const SizedBox(width: 16),
-                     
-                     // 播放/暂停
-                     IconButton(
-                       icon: Icon(
-                         player.isPlaying ? CupertinoIcons.pause_fill : CupertinoIcons.play_fill,
-                         color: Colors.white,
-                       ),
-                       iconSize: 56, // 加大图标尺寸，保持醒目
-                       padding: EdgeInsets.zero,
+                     const SizedBox(width: 8),
+                     AppleMusicMediaButton(
+                       asset: player.isPlaying
+                           ? 'assets/icons/icon_pause.svg'
+                           : 'assets/icons/icon_play.svg',
+                       semanticLabel: player.isPlaying ? '暂停' : '播放',
+                       size: 68,
+                       iconSize: 38,
                        onPressed: player.togglePlayPause,
                      ),
-                     const SizedBox(width: 16),
-                     
-                     // 下一首
-                     IconButton(
-                       icon: const Icon(CupertinoIcons.forward_fill), // iOS 风格粗图标
-                       color: Colors.white,
-                       iconSize: 36, // 图标加大
+                     const SizedBox(width: 8),
+                     AppleMusicMediaButton(
+                       asset: 'assets/icons/icon_forward.svg',
+                       semanticLabel: '下一首',
+                       size: 56,
+                       iconSize: 30,
                        onPressed: player.hasNext ? player.playNext : null,
                      ),
                    ],
@@ -920,7 +957,7 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
           // 专辑封面占位 (实际封面由顶层 Stack 处理)
           GestureDetector(
             onTap: () {
-               if (!isGhost) setState(() => _showCoverMode = true);
+               if (!isGhost) _setCoverMode(true);
             },
             child: Container(
               width: 56,
@@ -936,24 +973,34 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
+                // 字重/透明度/字距照 AMLL 的 MusicInfo CSS：
+                // 歌名 weight 500 + opacity 0.9，艺术家 weight 400 +
+                // opacity 0.45，两者 letter-spacing 0.4px；行高固定 1.25
+                // 以免换歌时文字高度跳动。
+                //
+                // 不要再写死 fontFamily —— 原先是 'Microsoft YaHei'，安卓/iOS
+                // 上根本没有这个字体，只会静默回落。全局字体是 MiSans，留空即可。
                 Text(
                   name,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white,
-                    fontFamily: 'Microsoft YaHei',
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: 0.4,
+                    height: 1.25,
+                    color: Colors.white.withValues(alpha: 0.9),
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 2),
                 Text(
                   artists,
                   style: TextStyle(
                     fontSize: 14,
-                    color: Colors.white.withValues(alpha: 0.7),
-                    fontFamily: 'Microsoft YaHei',
+                    fontWeight: FontWeight.w400,
+                    letterSpacing: 0.4,
+                    height: 1.25,
+                    color: Colors.white.withValues(alpha: 0.45),
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -969,11 +1016,17 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
               // 收藏按钮
               if (track != null)
                 _FavoriteButton(track: track),
-              // 更多选项 - 弹出设置侧边栏
+              // 更多选项 - 弹出设置侧边栏。
+              // 用 AMLL 的横向三点：Apple Music 是「⋯」，不是 Material 的竖向。
               IconButton(
-                icon: Icon(
-                  Icons.more_vert,
-                  color: Colors.white.withValues(alpha: 0.8),
+                icon: SvgPicture.asset(
+                  'assets/icons/icon_more.svg',
+                  width: 22,
+                  height: 22,
+                  colorFilter: ColorFilter.mode(
+                    Colors.white.withValues(alpha: 0.8),
+                    BlendMode.srcIn,
+                  ),
                 ),
                 onPressed: () {
                   MobilePlayerSettingsSheet.show(context, currentTrack: track);
@@ -1118,39 +1171,35 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
 
           const SizedBox(height: 40),
 
-          // 播放控制按钮 (iOS 风格)
+          // 播放控制按钮：AMLL 的图标 + 按下回弹动画。
+          // 三键宽度取 AMLL 的 `width: 18%`，播放键的图标比两侧大一圈。
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              // 上一首
-              IconButton(
-                icon: const Icon(CupertinoIcons.backward_fill),
-                color: Colors.white.withValues(alpha: 0.9),
-                iconSize: 42, 
+              AppleMusicMediaButton(
+                asset: 'assets/icons/icon_rewind.svg',
+                semanticLabel: '上一首',
+                size: 64,
+                iconSize: 34,
                 onPressed: player.hasPrevious ? player.playPrevious : null,
               ),
-              
-              // 播放/暂停（大图标，无圆形背景）
               AnimatedBuilder(
                 animation: player,
-                builder: (context, _) {
-                  return IconButton(
-                    icon: Icon(
-                      player.isPlaying ? CupertinoIcons.pause_fill : CupertinoIcons.play_fill,
-                      color: Colors.white,
-                    ),
-                    iconSize: 72, 
-                    padding: EdgeInsets.zero,
-                    onPressed: player.togglePlayPause,
-                  );
-                },
+                builder: (context, _) => AppleMusicMediaButton(
+                  asset: player.isPlaying
+                      ? 'assets/icons/icon_pause.svg'
+                      : 'assets/icons/icon_play.svg',
+                  semanticLabel: player.isPlaying ? '暂停' : '播放',
+                  size: 80,
+                  iconSize: 44,
+                  onPressed: player.togglePlayPause,
+                ),
               ),
-              
-              // 下一首
-              IconButton(
-                icon: const Icon(CupertinoIcons.forward_fill),
-                color: Colors.white.withValues(alpha: 0.9),
-                iconSize: 42, 
+              AppleMusicMediaButton(
+                asset: 'assets/icons/icon_forward.svg',
+                semanticLabel: '下一首',
+                size: 64,
+                iconSize: 34,
                 onPressed: player.hasNext ? player.playNext : null,
               ),
             ],
@@ -1179,7 +1228,7 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(),
             onPressed: () {
-              setState(() => _showCoverMode = !_showCoverMode);
+              _setCoverMode(!_showCoverMode);
             },
           ),
           
