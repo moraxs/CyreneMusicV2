@@ -89,7 +89,14 @@ class _ProfilePageState extends State<ProfilePage> {
         final state = widget.accountSessionController.state;
         return ListView(
           physics: const BouncingScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(16, 20, 16, 180),
+          // 移动端外壳注入了「状态栏 + 玻璃顶栏」的 MediaQuery.padding.top，
+          // 显式 padding 会绕过它，这里手动加回；桌面端 padding.top 为 0，无影响。
+          padding: EdgeInsets.fromLTRB(
+            16,
+            20 + MediaQuery.paddingOf(context).top,
+            16,
+            180,
+          ),
           children: [
             _AccountCard(state: state, onLogin: () => _openLogin(context)),
             const SizedBox(height: 24),
@@ -104,10 +111,8 @@ class _ProfilePageState extends State<ProfilePage> {
                   icon: Icons.download_rounded,
                   title: '本地与下载',
                   subtitle: '管理设备上的音乐',
-                  onTap: () => _open(
-                    context,
-                    LocalMusicPage(playback: widget.playback),
-                  ),
+                  onTap: () =>
+                      _open(context, LocalMusicPage(playback: widget.playback)),
                 ),
                 CyreneMenuRow(
                   icon: Icons.groups_rounded,
@@ -126,11 +131,11 @@ class _ProfilePageState extends State<ProfilePage> {
                   title: '听歌统计',
                   onTap: () => _open(
                     context,
-                  ListeningFootprintPage(
-                    account: widget.accountSessionController,
-                    playback: widget.playback,
-                    desktopLayout: widget.desktopLayout,
-                  ),
+                    ListeningFootprintPage(
+                      account: widget.accountSessionController,
+                      playback: widget.playback,
+                      desktopLayout: widget.desktopLayout,
+                    ),
                   ),
                 ),
               ],
@@ -326,10 +331,7 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   void _openLogin(BuildContext context) {
-    _open(
-      context,
-      LoginPage(account: widget.accountSessionController),
-    );
+    _open(context, LoginPage(account: widget.accountSessionController));
   }
 }
 

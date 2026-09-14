@@ -1,3 +1,4 @@
+import 'dart:math' show Random;
 import 'dart:ui' show ImageFilter;
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -36,6 +37,10 @@ class PlaylistDetailPage extends StatefulWidget {
     this.initialPlaylist,
     this.reloadable = true,
     this.heroTag,
+    this.initialTracks,
+    this.description = '',
+    this.tags = const [],
+    this.preserveTrackOrder = false,
   }) : isPersonal = false;
 
   /// 个人歌单模式：曲目走 Cyrene 后端 `/playlists/:id/tracks`（需 [token]）。
@@ -54,7 +59,34 @@ class PlaylistDetailPage extends StatefulWidget {
     this.initialPlaylist,
     this.reloadable = true,
     this.heroTag,
+    this.initialTracks,
+    this.description = '',
+    this.tags = const [],
+    this.preserveTrackOrder = false,
   }) : isPersonal = true;
+
+  /// 现成曲目模式：tracks 已由调用方提供，不请求歌单接口；
+  /// 封面随机取自有封面的曲目（调用方传空 coverUrl 即可触发）。
+  const PlaylistDetailPage.fromTracks({
+    super.key,
+    required List<Track> this.initialTracks,
+    required this.title,
+    required this.coverUrl,
+    required this.playback,
+    this.token,
+    this.desktopLayout = false,
+    this.creator,
+    this.description = '',
+    this.tags = const [],
+  }) : playlistId = 0,
+       trackCount = 0,
+       onOpenPlaylist = null,
+       source = MusicSource.netease,
+       isPersonal = false,
+       preserveTrackOrder = true,
+       reloadable = false,
+       initialPlaylist = null,
+       heroTag = null;
 
   final Object playlistId;
   final String title;
@@ -67,6 +99,20 @@ class PlaylistDetailPage extends StatefulWidget {
   final MusicSource source;
   final PlaylistDetail? initialPlaylist;
   final bool reloadable;
+
+  /// 现成曲目模式（fromTracks）直接提供的曲目列表；非 null 时不请求
+  /// 歌单接口，[initState] 直接组装详情并跳过加载。
+  final List<Track>? initialTracks;
+
+  /// 歌单描述（现成曲目模式等无接口描述的场景由调用方提供）。
+  final String description;
+
+  /// 歌单标签（现成曲目模式等无接口标签的场景由调用方提供）。
+  final List<String> tags;
+
+  /// 默认排序保持传入顺序不反转（如每日推荐已按推荐序给出）。
+  final bool preserveTrackOrder;
+
   /// 首页歌单卡共享元素过渡 tag；桌面端与个人歌单恒为 null（不参与动画）。
   final String? heroTag;
 
@@ -108,13 +154,50 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   final _searchFocusNode = FocusNode();
   final _scrollController = ScrollController();
 
+  // 歌曲卡片互不重叠，可以复用同一份模糊输入；不能与会盖到歌曲上的顶栏共用。
+  final _trackBackdropKey = BackdropKey();
+
+  List<Track>? _sortedTracksCache;
+  (List<Track>, String, PlaylistSortMode, bool, bool)? _sortedTracksCacheKey;
+
   /// 当前排序方式；默认保持歌单原始顺序。
   PlaylistSortMode _sortMode = PlaylistSortMode.defaultOrder;
 
   @override
   void initState() {
     super.initState();
-    _playlist = widget.initialPlaylist ??
+    if (widget.initialTracks != null) {
+      // 现成曲目模式：不请求歌单接口；封面随机取自有封面的曲目，
+      // 只抽一次，保证页面生命周期内封面稳定。
+      final covers = widget.initialTracks!
+          .map((t) => t.picUrl)
+          .where((u) => u.isNotEmpty)
+          .toList();
+      final cover = widget.coverUrl.isNotEmpty
+          ? widget.coverUrl
+          : (covers.isEmpty ? '' : covers[Random().nextInt(covers.length)]);
+      _playlist = PlaylistDetail(
+        id: 0,
+        name: widget.title,
+        coverImgUrl: cover,
+        description: widget.description,
+        tracks: const [],
+        source: widget.source,
+        playCount: 0,
+        creator: widget.creator ?? '',
+        trackCount: widget.initialTracks!.length,
+        createTime: 0,
+        updateTime: 0,
+        tags: widget.tags,
+      );
+      // 保留原始 Track 对象，duration/source/alternatives 不丢失。
+      _tracks = widget.initialTracks!;
+      _isLoading = false;
+      _triggerColorExtraction();
+      return;
+    }
+    _playlist =
+        widget.initialPlaylist ??
         PlaylistDetail(
           id: widget.playlistId is int
               ? widget.playlistId as int
@@ -172,10 +255,27 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   ///
   /// 其余排序模式按歌名升/降序。
   List<Track> get _sortedTracks {
+    final cacheKey = (
+      _tracks,
+      _searchQuery.trim().toLowerCase(),
+      _sortMode,
+      widget.isPersonal,
+      widget.preserveTrackOrder,
+    );
+    if (cacheKey == _sortedTracksCacheKey) return _sortedTracksCache!;
+
+    // 封面取色、同步状态等重建不改变列表，避免再次过滤 / 排序整个歌单。
+    final sorted = _computeSortedTracks();
+    _sortedTracksCacheKey = cacheKey;
+    _sortedTracksCache = sorted;
+    return sorted;
+  }
+
+  List<Track> _computeSortedTracks() {
     final filtered = _filteredTracks;
     if (filtered.isEmpty) return filtered;
     if (_sortMode == PlaylistSortMode.defaultOrder) {
-      return widget.isPersonal
+      return (widget.isPersonal || widget.preserveTrackOrder)
           ? filtered
           : filtered.reversed.toList(growable: false);
     }
@@ -234,6 +334,8 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   }
 
   Future<void> _load() async {
+    // 现成曲目模式无接口可拉，下拉刷新保持原列表即可。
+    if (widget.initialTracks != null) return;
     if (!widget.reloadable && widget.initialPlaylist != null) {
       setState(() {
         _playlist = widget.initialPlaylist;
@@ -266,21 +368,24 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
           final mergedCover = fetched.coverImgUrl.isNotEmpty
               ? fetched.coverImgUrl
               : widget.coverUrl;
-          final mergedCreator = (fetched.creator.isNotEmpty && fetched.creator != '酷狗音乐')
+          final mergedCreator =
+              (fetched.creator.isNotEmpty && fetched.creator != '酷狗音乐')
               ? fetched.creator
-              : (widget.creator?.isNotEmpty == true ? widget.creator! : fetched.creator);
+              : (widget.creator?.isNotEmpty == true
+                    ? widget.creator!
+                    : fetched.creator);
           final mergedTrackCount = fetched.trackCount > 0
               ? fetched.trackCount
               : (widget.trackCount > 0
-                  ? widget.trackCount
-                  : fetched.tracks.length);
+                    ? widget.trackCount
+                    : fetched.tracks.length);
 
           _playlist = PlaylistDetail(
             id: fetched.id != 0
                 ? fetched.id
                 : (widget.playlistId is int
-                    ? widget.playlistId as int
-                    : (int.tryParse(widget.playlistId.toString()) ?? 0)),
+                      ? widget.playlistId as int
+                      : (int.tryParse(widget.playlistId.toString()) ?? 0)),
             name: mergedName,
             coverImgUrl: mergedCover,
             description: fetched.description,
@@ -325,9 +430,9 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
     }
 
     final gen = _loadGeneration;
-    ColorExtractionService()
-        .extractColorsFromUrl(cover, sampleSize: 32)
-        .then((result) {
+    ColorExtractionService().extractColorsFromUrl(cover, sampleSize: 32).then((
+      result,
+    ) {
       if (!mounted || gen != _loadGeneration) return;
       if (result?.themeColor != null &&
           result!.themeColor != _extractedThemeColor) {
@@ -379,8 +484,9 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
             key: const Key('playlist-search-button'),
             onPressed: _toggleSearch,
             child: MiuixIcon(
-              vector:
-                  MiuixIcons.extended.byName(_searching ? 'close' : 'search')!,
+              vector: MiuixIcons.extended.byName(
+                _searching ? 'close' : 'search',
+              )!,
               size: 20,
             ),
           ),
@@ -489,10 +595,7 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
         description: _errorMessage!,
         action: MiuixButton(
           onPressed: _load,
-          child: MiuixText(
-            '重试',
-            style: theme.textStyles.button,
-          ),
+          child: MiuixText('重试', style: theme.textStyles.button),
         ),
       );
       if (isDesktop) return emptyState;
@@ -539,7 +642,8 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
                     ? null
                     : () => _play(tracks.first, tracks),
                 onSync:
-                    !widget.isPersonal &&
+                    widget.initialTracks == null &&
+                        !widget.isPersonal &&
                         widget.token?.isNotEmpty == true &&
                         !_isSyncing
                     ? () => _syncToAccount(context)
@@ -637,13 +741,16 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
       slivers: [
         // 移动端顶部透明留白与歌单元数据（滚动时向上推入）
         SliverToBoxAdapter(
-          child: _MobilePlaylistContentHeader(
-            playlist: playlist,
-            heroHeight: heroHeight,
-            extractedColor: _extractedThemeColor,
-            onPlayAll:
-                tracks.isEmpty ? null : () => _play(tracks.first, tracks),
-            onOpenPlaylist: widget.onOpenPlaylist,
+          child: RepaintBoundary(
+            child: _MobilePlaylistContentHeader(
+              playlist: playlist,
+              heroHeight: heroHeight,
+              extractedColor: _extractedThemeColor,
+              onPlayAll: tracks.isEmpty
+                  ? null
+                  : () => _play(tracks.first, tracks),
+              onOpenPlaylist: widget.onOpenPlaylist,
+            ),
           ),
         ),
 
@@ -705,20 +812,18 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
               separatorBuilder: (_, _) => const SizedBox(height: 10),
               itemBuilder: (context, index) {
                 final track = tracks[index];
-                return AnimatedBuilder(
-                  animation: widget.playback,
-                  builder: (context, _) => CyreneTrackTile(
+                return _MobilePlaylistTrackTile(
+                  // 在线歌单允许重复歌曲，行号避免相同曲目产生重复 key。
+                  key: ValueKey((track.key, index)),
+                  track: track,
+                  playback: widget.playback,
+                  backdropGroupKey: _trackBackdropKey,
+                  onPlay: () => _play(track, tracks),
+                  onShowMenu: () => showTrackActionMenu(
+                    context,
                     track: track,
-                    isGlass: true,
-                    isActive:
-                        widget.playback.state.currentTrack?.key == track.key,
-                    onPlay: () => _play(track, tracks),
-                    onShowMenu: () => showTrackActionMenu(
-                      context,
-                      track: track,
-                      playback: widget.playback,
-                      token: widget.token,
-                    ),
+                    playback: widget.playback,
+                    token: widget.token,
                   ),
                 );
               },
@@ -732,45 +837,38 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
       children: [
         // 0. 全屏主题色环境渐变背景（从封面提取色全屏自然铺满，自上而下沉浸式过渡）
         Positioned.fill(
-          child: _FullScreenThemeBackground(
-            extractedColor: _extractedThemeColor,
+          child: RepaintBoundary(
+            child: _FullScreenThemeBackground(
+              extractedColor: _extractedThemeColor,
+            ),
           ),
         ),
 
         // 1. 3D 视差分速滚动的 100% 宽度顶部专辑封面：
         // 下拉刷新时保持不动（offset <= 0 偏移锁定为 0），向上滑动时以 0.45x 较慢速度向上滑移并配合 3D 缩放，
         // 与下方 1.0x 正常速度滚动的主内容形成分层的 3D 视差景深感。
-        AnimatedBuilder(
-          animation: _scrollController,
-          builder: (context, _) {
-            final offset = _scrollController.hasClients
-                ? _scrollController.offset
-                : 0.0;
-            // 向上滑动时取 0.45x 视差上移，下拉刷新（offset < 0）时锁定为 0 保持绝对不动
-            final parallaxOffset = offset > 0 ? offset * 0.45 : 0.0;
-            final progress = (offset / heroHeight).clamp(0.0, 1.0);
-            final scale = 1.0 - progress * 0.05;
-
-            return Positioned(
-              top: -parallaxOffset,
-              left: 0,
-              right: 0,
-              height: heroHeight,
-              child: RepaintBoundary(
-                child: Transform.scale(
-                  scale: scale,
-                  alignment: Alignment.bottomCenter,
-                  child: _FixedMobileHeroCover(
-                    coverUrl: cover,
-                    topPadding: topSafeInset,
-                    heroHeight: heroHeight,
-                    extractedColor: _extractedThemeColor,
-                    heroTag: widget.heroTag,
-                  ),
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          height: heroHeight,
+          child: Flow(
+            delegate: _PlaylistCoverFlowDelegate(
+              scrollController: _scrollController,
+              heroHeight: heroHeight,
+            ),
+            children: [
+              RepaintBoundary(
+                child: _FixedMobileHeroCover(
+                  coverUrl: cover,
+                  topPadding: topSafeInset,
+                  heroHeight: heroHeight,
+                  extractedColor: _extractedThemeColor,
+                  heroTag: widget.heroTag,
                 ),
               ),
-            );
-          },
+            ],
+          ),
         ),
 
         // 2. 页面滚动区域与下拉刷新（内容在封面上方平滑滚动，下拉刷新不移动封面）
@@ -787,16 +885,20 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
           top: topSafeInset + 6,
           left: 16,
           right: 16,
-          child: _FloatingTopBar(
-            canPop: canPop,
-            onSync: !widget.isPersonal &&
-                    widget.token?.isNotEmpty == true &&
-                    !_isSyncing
-                ? () => _syncToAccount(context)
-                : null,
-            isSyncing: _isSyncing,
-            searching: _searching,
-            onToggleSearch: _toggleSearch,
+          child: RepaintBoundary(
+            child: _FloatingTopBar(
+              canPop: canPop,
+              onSync:
+                  widget.initialTracks == null &&
+                      !widget.isPersonal &&
+                      widget.token?.isNotEmpty == true &&
+                      !_isSyncing
+                  ? () => _syncToAccount(context)
+                  : null,
+              isSyncing: _isSyncing,
+              searching: _searching,
+              onToggleSearch: _toggleSearch,
+            ),
           ),
         ),
       ],
@@ -834,11 +936,8 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
       track,
       queue: queue,
       onFallbackRemap: isPersonal && token != null && token.isNotEmpty
-          ? (original, remapped) => _persistFallbackRemap(
-              token,
-              original,
-              remapped,
-            )
+          ? (original, remapped) =>
+                _persistFallbackRemap(token, original, remapped)
           : null,
     );
   }
@@ -868,6 +967,74 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
     if (!widget.isPersonal || widget.token == null) return;
     await _load();
   }
+}
+
+/// 只监听当前行的播放高亮。音量、暂停、时长等通知不重建封面和玻璃卡片。
+class _MobilePlaylistTrackTile extends StatefulWidget {
+  const _MobilePlaylistTrackTile({
+    super.key,
+    required this.track,
+    required this.playback,
+    required this.backdropGroupKey,
+    required this.onPlay,
+    required this.onShowMenu,
+  });
+
+  final Track track;
+  final PlaybackController playback;
+  final BackdropKey backdropGroupKey;
+  final VoidCallback onPlay;
+  final VoidCallback onShowMenu;
+
+  @override
+  State<_MobilePlaylistTrackTile> createState() =>
+      _MobilePlaylistTrackTileState();
+}
+
+class _MobilePlaylistTrackTileState extends State<_MobilePlaylistTrackTile> {
+  late bool _isActive;
+
+  bool get _currentTrackIsActive =>
+      widget.playback.state.currentTrack?.key == widget.track.key;
+
+  @override
+  void initState() {
+    super.initState();
+    _isActive = _currentTrackIsActive;
+    widget.playback.addListener(_onPlaybackChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant _MobilePlaylistTrackTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.playback != widget.playback) {
+      oldWidget.playback.removeListener(_onPlaybackChanged);
+      widget.playback.addListener(_onPlaybackChanged);
+    }
+    _isActive = _currentTrackIsActive;
+  }
+
+  void _onPlaybackChanged() {
+    final active = _currentTrackIsActive;
+    if (active == _isActive) return;
+    setState(() => _isActive = active);
+  }
+
+  @override
+  void dispose() {
+    widget.playback.removeListener(_onPlaybackChanged);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => CyreneTrackTile(
+    track: widget.track,
+    isGlass: true,
+    backdropGroupKey: widget.backdropGroupKey,
+    isActive: _isActive,
+    onPlay: widget.onPlay,
+    onShowMenu: widget.onShowMenu,
+  );
 }
 
 /// 桌面端专用的歌单头部：参考桌面音乐客户端的横向信息层级，大封面在左，
@@ -1275,11 +1442,44 @@ class _DesktopTrackRow extends StatelessWidget {
   }
 }
 
+/// 视差仅更新绘制矩阵，不让滚动触发封面 build 或整个 Stack 的重新布局。
+/// 封面自身是独立重绘层，ShaderMask / 图片可在平移和缩放时复用。
+class _PlaylistCoverFlowDelegate extends FlowDelegate {
+  _PlaylistCoverFlowDelegate({
+    required this.scrollController,
+    required this.heroHeight,
+  }) : super(repaint: scrollController);
+
+  final ScrollController scrollController;
+  final double heroHeight;
+
+  @override
+  void paintChildren(FlowPaintingContext context) {
+    final offset = scrollController.hasClients ? scrollController.offset : 0.0;
+    final parallaxOffset = offset > 0 ? offset * 0.45 : 0.0;
+    // 底边完全移出视口后不再提交图片和渐隐遮罩；回滚时仍自动恢复。
+    if (parallaxOffset >= heroHeight) return;
+
+    final progress = (offset / heroHeight).clamp(0.0, 1.0);
+    final scale = 1.0 - progress * 0.05;
+    final transform = Matrix4.diagonal3Values(scale, scale, 1.0)
+      ..setTranslationRaw(
+        context.size.width * (1.0 - scale) / 2,
+        heroHeight * (1.0 - scale) - parallaxOffset,
+        0,
+      );
+    context.paintChild(0, transform: transform);
+  }
+
+  @override
+  bool shouldRepaint(covariant _PlaylistCoverFlowDelegate oldDelegate) =>
+      scrollController != oldDelegate.scrollController ||
+      heroHeight != oldDelegate.heroHeight;
+}
+
 /// 移动端：全屏沉浸式主题色背景渐变层（从封面提取的主题色自顶向下自然铺展至底色）。
 class _FullScreenThemeBackground extends StatelessWidget {
-  const _FullScreenThemeBackground({
-    this.extractedColor,
-  });
+  const _FullScreenThemeBackground({this.extractedColor});
 
   final Color? extractedColor;
 
@@ -1353,14 +1553,12 @@ class _FixedMobileHeroCover extends StatelessWidget {
   final double topPadding;
   final double heroHeight;
   final Color? extractedColor;
+
   /// 非空时包上 Hero 共享元素：从首页歌单卡封面平滑放大到详情页头部。
   final String? heroTag;
 
   @override
   Widget build(BuildContext context) {
-    final colors = MiuixTheme.of(context).colors;
-    final themeSeed = extractedColor ?? colors.primary;
-
     final cover = SizedBox(
       width: double.infinity,
       height: heroHeight,
@@ -1442,29 +1640,30 @@ class _FloatingTopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        if (canPop)
+    return BackdropGroup(
+      child: Row(
+        children: [
+          if (canPop)
+            _FrostedCircleButton(
+              onPressed: () => Navigator.maybePop(context),
+              icon: MiuixIcons.extended.byName('back')!,
+            ),
+          const Spacer(),
+          if (onSync != null || isSyncing) ...[
+            _FrostedCircleButton(
+              onPressed: onSync ?? () {},
+              iconData: Icons.sync_rounded,
+              isLoading: isSyncing,
+            ),
+            const SizedBox(width: 10),
+          ],
           _FrostedCircleButton(
-            onPressed: () => Navigator.maybePop(context),
-            icon: MiuixIcons.extended.byName('back')!,
+            key: const Key('playlist-search-button'),
+            onPressed: onToggleSearch,
+            icon: MiuixIcons.extended.byName(searching ? 'close' : 'search')!,
           ),
-        const Spacer(),
-        if (onSync != null || isSyncing) ...[
-          _FrostedCircleButton(
-            onPressed: onSync ?? () {},
-            iconData: Icons.sync_rounded,
-            isLoading: isSyncing,
-          ),
-          const SizedBox(width: 10),
         ],
-        _FrostedCircleButton(
-          onPressed: onToggleSearch,
-          icon: MiuixIcons.extended.byName(
-            searching ? 'close' : 'search',
-          )!,
-        ),
-      ],
+      ),
     );
   }
 }
@@ -1721,8 +1920,7 @@ class _MobilePlaylistContentHeader extends StatelessWidget {
                 const SizedBox(height: 14),
                 Column(
                   children: [
-                    for (final child
-                        in _LinkedPlaylistRow.childrenOf(playlist))
+                    for (final child in _LinkedPlaylistRow.childrenOf(playlist))
                       _LinkedPlaylistRow(
                         playlist: child,
                         onTap: () => onOpenPlaylist!(
@@ -1740,7 +1938,7 @@ class _MobilePlaylistContentHeader extends StatelessWidget {
               ClipRRect(
                 borderRadius: BorderRadius.circular(24),
                 child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+                  filter: _playlistControlBlur,
                   child: MiuixHighlight(
                     highlight: Highlight.glassStrokeSmallDark,
                     shape: RoundedRectangleBorder(
@@ -1789,8 +1987,11 @@ class _MobilePlaylistContentHeader extends StatelessWidget {
   }
 }
 
+final _playlistControlBlur = ImageFilter.blur(sigmaX: 14, sigmaY: 14);
+
 class _FrostedCircleButton extends StatelessWidget {
   const _FrostedCircleButton({
+    super.key,
     required this.onPressed,
     this.icon,
     this.iconData,
@@ -1805,8 +2006,8 @@ class _FrostedCircleButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ClipOval(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+      child: BackdropFilter.grouped(
+        filter: _playlistControlBlur,
         child: MiuixHighlight(
           highlight: Highlight.glassStrokeSmallDark,
           shape: const CircleBorder(),
@@ -1826,17 +2027,18 @@ class _FrostedCircleButton extends StatelessWidget {
                           height: 18,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            valueColor:
-                                AlwaysStoppedAnimation<Color>(Colors.white),
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Colors.white,
+                            ),
                           ),
                         )
                       : (icon != null
-                          ? MiuixIcon(
-                              vector: icon!,
-                              size: 20,
-                              tint: Colors.white,
-                            )
-                          : Icon(iconData, size: 20, color: Colors.white)),
+                            ? MiuixIcon(
+                                vector: icon!,
+                                size: 20,
+                                tint: Colors.white,
+                              )
+                            : Icon(iconData, size: 20, color: Colors.white)),
                 ),
               ),
             ),
@@ -2233,8 +2435,7 @@ class _CoverImage extends StatelessWidget {
 
 String? _formatCreateDate(int timestamp) {
   if (timestamp <= 0) return null;
-  final milliseconds =
-      timestamp < 1000000000000 ? timestamp * 1000 : timestamp;
+  final milliseconds = timestamp < 1000000000000 ? timestamp * 1000 : timestamp;
   final date = DateTime.fromMillisecondsSinceEpoch(milliseconds);
   String twoDigits(int value) => value.toString().padLeft(2, '0');
   return '${date.year}-${twoDigits(date.month)}-${twoDigits(date.day)}';

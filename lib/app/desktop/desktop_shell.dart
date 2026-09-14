@@ -15,7 +15,6 @@ import '../../application/playback/playback_controller.dart';
 import '../../application/playlists/playlist_library_controller.dart';
 import '../../application/search/search_controller.dart';
 import '../../domain/models/discovery.dart';
-import '../../domain/models/music_source.dart';
 import '../../domain/models/playlist.dart';
 import '../../domain/models/search.dart';
 import '../../domain/models/search_playlist.dart';
@@ -283,74 +282,75 @@ class _DesktopShellState extends State<DesktopShell> {
       type: m.MaterialType.transparency,
       child: Column(
         children: [
-            Expanded(
-              child: FluentTheme(
-                // 与挂在根 Overlay 之上那层同一份主题(见
-                // DesktopRootFluentTheme):浮层与外壳本体的配色才不会两套。
-                data: desktopFluentTheme(context),
-                child: NavigationView(
-                  titleBar: DesktopTitleBar(
-                    title: _entries[_index].title,
-                    paneOpen: _paneOpen,
-                    onTogglePane: () => setState(() => _paneOpen = !_paneOpen),
-                    // 首页二级页导航栈驱动后退/前进;按钮常驻显示,栈状态只
-                    // 决定可点态。
-                    canGoBack: _activeSecondaryStack.canGoBack,
-                    canGoForward: _activeSecondaryStack.canGoForward,
-                    onBack: () =>
-                        setState(() => _activeSecondaryStack.back()),
-                    onForward: () =>
-                        setState(() => _activeSecondaryStack.forward()),
-                    // 正中搜索框提交 → 切到搜索页展示结果。
-                    onSubmitSearch: _onTitleBarSearch,
-                  ),
-                  pane: NavigationPane(
-                    selected: _index,
-                    onChanged: (index) => setState(() {
-                      _index = index;
-                      // 切走首页时清空二级页栈,避免回来后还是歌单详情。
-                      if (_index != 0) _homeStack.clear();
-                      // 发现页采用相同语义：切走后回到发现主页。
-                      if (_index != 1) _discoverStack.clear();
-                      // “我的”页切走后同样回到其主页面。
-                      if (_index != 2) _profileStack.clear();
-                      // 搜索页切走后回到搜索结果主页。
-                      if (_index != 3) _searchStack.clear();
-                      // 设置页切走后回到设置主页。
-                      if (_index != 6) _settingsStack.clear();
-                    }), // 固定 expanded,收展改由 size.openWidth 承担(理由见类文档)。
-                    displayMode: PaneDisplayMode.expanded,
-                    size: NavigationPaneSize(
-                      openWidth: _paneOpen
-                          ? kOpenNavigationPaneWidth
-                          : kCompactNavigationPaneWidth,
-                    ),
-                    items: [
-                      for (final entry in _mainEntries.take(4))
-                        _paneItem(entry),
-                      PaneItemSeparator(),
-                      for (final entry in _mainEntries.skip(4))
-                        _paneItem(entry),
-                    ],
-                    footerItems: [
-                      for (final entry in _footerEntries) _paneItem(entry),
-                    ],
-                  ),
-                  // 内容统一由这里给出,不走各 PaneItem 的 body(见类文档第 3 条)。
-                  paneBodyBuilder: (item, body) =>
-                      _buildBody(miuix.colors.surface),
+          Expanded(
+            child: FluentTheme(
+              // 与挂在根 Overlay 之上那层同一份主题(见
+              // DesktopRootFluentTheme):浮层与外壳本体的配色才不会两套。
+              data: desktopFluentTheme(context),
+              child: NavigationView(
+                titleBar: DesktopTitleBar(
+                  title: _entries[_index].title,
+                  paneOpen: _paneOpen,
+                  onTogglePane: () => setState(() => _paneOpen = !_paneOpen),
+                  // 首页二级页导航栈驱动后退/前进;按钮常驻显示,栈状态只
+                  // 决定可点态。
+                  canGoBack: _activeSecondaryStack.canGoBack,
+                  canGoForward: _activeSecondaryStack.canGoForward,
+                  onBack: () => setState(() => _activeSecondaryStack.back()),
+                  onForward: () =>
+                      setState(() => _activeSecondaryStack.forward()),
+                  // 正中搜索框提交 → 切到搜索页展示结果。
+                  onSubmitSearch: _onTitleBarSearch,
                 ),
+                pane: NavigationPane(
+                  // 「发现」入口下线后侧栏少一项：真实页下标映射为可见下标。
+                  selected: _index <= 0 ? _index : _index - 1,
+                  onChanged: (index) => setState(() {
+                    // 侧栏下标少了一个已下线的「发现」项，映射回 _entries/_pages 的真实下标。
+                    _index = index <= 0 ? index : index + 1;
+                    // 切走首页时清空二级页栈,避免回来后还是歌单详情。
+                    if (_index != 0) _homeStack.clear();
+                    // 发现页采用相同语义：切走后回到发现主页。
+                    if (_index != 1) _discoverStack.clear();
+                    // “我的”页切走后同样回到其主页面。
+                    if (_index != 2) _profileStack.clear();
+                    // 搜索页切走后回到搜索结果主页。
+                    if (_index != 3) _searchStack.clear();
+                    // 设置页切走后回到设置主页。
+                    if (_index != 6) _settingsStack.clear();
+                  }), // 固定 expanded,收展改由 size.openWidth 承担(理由见类文档)。
+                  displayMode: PaneDisplayMode.expanded,
+                  size: NavigationPaneSize(
+                    openWidth: _paneOpen
+                        ? kOpenNavigationPaneWidth
+                        : kCompactNavigationPaneWidth,
+                  ),
+                  items: [
+                    for (final entry in _mainEntries.take(4))
+                      // 发现页入口暂时下线：侧栏不渲染该项，但 _entries/_pages 索引保持不变，便于恢复。
+                      if (entry.label != '发现') _paneItem(entry),
+                    PaneItemSeparator(),
+                    for (final entry in _mainEntries.skip(4)) _paneItem(entry),
+                  ],
+                  footerItems: [
+                    for (final entry in _footerEntries) _paneItem(entry),
+                  ],
+                ),
+                // 内容统一由这里给出,不走各 PaneItem 的 body(见类文档第 3 条)。
+                paneBodyBuilder: (item, body) =>
+                    _buildBody(miuix.colors.surface),
               ),
             ),
-            // 底部常驻迷你播放器：有当前曲目时才挂。自绘、零 fluent_ui（见
-            // DesktopMiniPlayer），故放在 FluentTheme 外面无妨——它取 Miuix
-            // 主题与 Material，不依赖 fluent。
-            if (widget.playback.state.currentTrack != null)
-              DesktopMiniPlayer(
-                playback: widget.playback,
-                audioSources: widget.audioSources,
-                account: widget.account,
-              ),
+          ),
+          // 底部常驻迷你播放器：有当前曲目时才挂。自绘、零 fluent_ui（见
+          // DesktopMiniPlayer），故放在 FluentTheme 外面无妨——它取 Miuix
+          // 主题与 Material，不依赖 fluent。
+          if (widget.playback.state.currentTrack != null)
+            DesktopMiniPlayer(
+              playback: widget.playback,
+              audioSources: widget.audioSources,
+              account: widget.account,
+            ),
         ],
       ),
     );
@@ -397,7 +397,9 @@ class _DesktopShellState extends State<DesktopShell> {
     child: Builder(
       builder: (context) => MiuixTheme(
         data: MiuixTheme.of(context).copyWith(
-          colors: MiuixTheme.of(context).colors.copy(surface: m.Colors.transparent),
+          colors: MiuixTheme.of(
+            context,
+          ).colors.copy(surface: m.Colors.transparent),
         ),
         child: m.IconTheme(
           data: m.Theme.of(context).iconTheme,
@@ -471,9 +473,8 @@ class _DesktopShellState extends State<DesktopShell> {
     SupportPage(account: widget.account),
   ];
 
-  Widget? _compactSecondary(Widget? page) => page == null
-      ? null
-      : _DesktopCompactSecondary(child: page);
+  Widget? _compactSecondary(Widget? page) =>
+      page == null ? null : _DesktopCompactSecondary(child: page);
 }
 
 /// 桌面二级内容的统一紧凑层。只调整二级页，不改变一级页面和移动端视觉。

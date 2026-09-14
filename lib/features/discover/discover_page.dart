@@ -19,7 +19,7 @@ class DiscoverPage extends StatefulWidget {
 
   final DiscoverController discover;
   final void Function(DiscoveryPlaylist playlist, {Alignment? originAlignment})
-      onOpenPlaylist;
+  onOpenPlaylist;
 
   /// 桌面端内容区二级页。非空时保留桌面外壳，仅用详情页替换发现页内容。
   final Widget? body;
@@ -75,6 +75,11 @@ class _DiscoverPageState extends State<DiscoverPage>
               parent: ClampingScrollPhysics(),
             ),
             slivers: [
+              // 同 NowListeningPage：CustomScrollView 不消费 MediaQuery.padding，
+              // 显式让出外壳注入的「状态栏 + 玻璃顶栏」高度（桌面端为 0）。
+              SliverToBoxAdapter(
+                child: SizedBox(height: MediaQuery.paddingOf(context).top),
+              ),
               const SliverPadding(
                 padding: EdgeInsets.fromLTRB(16, 22, 16, 14),
                 sliver: SliverToBoxAdapter(
@@ -133,17 +138,29 @@ class _DiscoverPageState extends State<DiscoverPage>
                       return _DiscoverPlaylistCard(
                         playlist: playlist,
                         onTap: (cardContext) {
-                          final box = cardContext.findRenderObject() as RenderBox?;
+                          final box =
+                              cardContext.findRenderObject() as RenderBox?;
                           Alignment? alignment;
                           if (box != null && box.hasSize) {
                             final size = MediaQuery.sizeOf(cardContext);
-                            final center = box.localToGlobal(box.size.center(Offset.zero));
+                            final center = box.localToGlobal(
+                              box.size.center(Offset.zero),
+                            );
                             alignment = Alignment(
-                              ((center.dx / size.width) * 2.0 - 1.0).clamp(-1.0, 1.0),
-                              ((center.dy / size.height) * 2.0 - 1.0).clamp(-1.0, 1.0),
+                              ((center.dx / size.width) * 2.0 - 1.0).clamp(
+                                -1.0,
+                                1.0,
+                              ),
+                              ((center.dy / size.height) * 2.0 - 1.0).clamp(
+                                -1.0,
+                                1.0,
+                              ),
                             );
                           }
-                          widget.onOpenPlaylist(playlist, originAlignment: alignment);
+                          widget.onOpenPlaylist(
+                            playlist,
+                            originAlignment: alignment,
+                          );
                         },
                       );
                     }, childCount: state.playlists.length),

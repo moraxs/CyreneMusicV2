@@ -16,6 +16,7 @@ class CyreneTrackTile extends StatelessWidget {
     this.trailing,
     this.isActive = false,
     this.isGlass = false,
+    this.backdropGroupKey,
   });
 
   final Track track;
@@ -28,6 +29,11 @@ class CyreneTrackTile extends StatelessWidget {
   final Widget? trailing;
   final bool isActive;
   final bool isGlass;
+
+  /// 仅为互不重叠的玻璃卡片共用；null 保持独立模糊，不影响其他页面。
+  final BackdropKey? backdropGroupKey;
+
+  static final _glassBlur = ImageFilter.blur(sigmaX: 10, sigmaY: 10);
 
   @override
   Widget build(BuildContext context) {
@@ -112,15 +118,13 @@ class CyreneTrackTile extends StatelessWidget {
       return ClipRRect(
         borderRadius: BorderRadius.circular(16),
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          filter: _glassBlur,
+          backdropGroupKey: backdropGroupKey,
           child: Container(
             decoration: BoxDecoration(
               color: glassBg,
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: borderColor,
-                width: 0.5,
-              ),
+              border: Border.all(color: borderColor, width: 0.5),
             ),
             child: Material(
               color: Colors.transparent,
