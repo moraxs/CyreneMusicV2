@@ -1,6 +1,5 @@
 import 'dart:math';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
@@ -9,8 +8,8 @@ import 'package:flutter_miuix/miuix.dart';
 import '../../application/auth/account_session_controller.dart';
 import '../../application/home/home_controller.dart';
 import '../../application/playback/playback_controller.dart';
+import '../../domain/models/artist.dart';
 import '../../domain/models/discovery.dart';
-import '../../domain/models/media_url.dart';
 import '../../domain/models/music_source.dart';
 import '../../domain/models/track.dart';
 import '../../infrastructure/services/discovery_service.dart';
@@ -18,15 +17,19 @@ import '../../infrastructure/storage/spotify_charts_cache.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
 import '../../presentation/cyrene/cyrene_page_routes.dart';
 import '../../presentation/cyrene/cyrene_toast.dart';
+import '../artist/artist_detail_page.dart';
 import '../playlist/playlist_detail_page.dart';
 import '../settings/login_page.dart';
 import 'daily_recommend_page.dart';
+import 'for_you/for_you_artwork.dart';
+import 'for_you/for_you_palette.dart';
+import 'for_you/for_you_widgets.dart';
 import 'home_song_row.dart';
 
-/// 首页（对应原版 HomePage 的移动端布局）：
-/// 问候头 → 「为你推荐 / 榜单」切换 → 每日推荐 hero 卡 → 私人FM →
-/// 每日推荐歌单 / 专属歌单 / 雷达歌单（双列网格）→ 个性化新歌（分组列表）。
-/// 未登录时展示登录引导 + 榜单。
+/// 移动端首页：为你推荐与榜单两个页签共用暖色纸张手帐风格（ForYouPalette），
+/// 数据和导航仍复用首页控制器。
+/// 推荐页：问候 → 每日唱片拼贴 → 私人电台 → 唱片架 / 专属精选 / 雷达 → 新歌来信；
+/// 榜单页：榜单源切换 → 随心畅听 → 各榜单前 5 首。未登录时展示登录引导 + 榜单。
 class NowListeningPage extends StatefulWidget {
   const NowListeningPage({
     super.key,
@@ -47,7 +50,8 @@ class NowListeningPage extends StatefulWidget {
     String coverUrl, {
     String? heroTag,
     Alignment? originAlignment,
-  }) onOpenPlaylist;
+  })
+  onOpenPlaylist;
 
   @override
   State<NowListeningPage> createState() => _NowListeningPageState();
@@ -61,6 +65,8 @@ class _NowListeningPageState extends State<NowListeningPage>
   bool _spotifyToplistsLoading = false;
   String? _spotifyToplistsError;
   int _spotifyLoadGeneration = 0;
+  List<SpotifyPersonalizedSection> _spotifySections = const [];
+  int _spotifySectionsGeneration = 0;
   String? _loadedToken;
 
   // 派生数据缓存：仅当控制器发布新数据对象时才重新转换原始 JSON，
@@ -69,9 +75,9 @@ class _NowListeningPageState extends State<NowListeningPage>
   List<Track> _daily = const [];
   List<Track> _fm = const [];
   List<Track> _newest = const [];
-  List<_HomePlaylistCardData> _dailyPlaylists = const [];
-  List<_HomePlaylistCardData> _personalizedPlaylists = const [];
-  List<_HomePlaylistCardData> _radarPlaylists = const [];
+  List<ForYouPlaylistData> _dailyPlaylists = const [];
+  List<ForYouPlaylistData> _personalizedPlaylists = const [];
+  List<ForYouPlaylistData> _radarPlaylists = const [];
   List<Toplist>? _toplistCacheSource;
   final _toplistTracks = <Toplist, List<Track>>{};
 
@@ -85,6 +91,7 @@ class _NowListeningPageState extends State<NowListeningPage>
     _load();
     // 榜单默认源是 Spotify（网易云可选），首屏即需加载，不等用户切换。
     _loadSpotifyToplists();
+    _loadSpotifyPersonalized();
   }
 
   @override
@@ -157,6 +164,148 @@ class _NowListeningPageState extends State<NowListeningPage>
     });
   }
 
+  /// 拉取号池 Spotify 账号的官方同款首页分区。
+  ///
+  /// 纯增量内容：拿不到就整段不渲染，不影响下方榜单，也不弹错误。
+  Future<void> _loadSpotifyPersonalized() async {
+    final generation = ++_spotifySectionsGeneration;
+    final sections = await DiscoveryService.instance.getSpotifyHome(limit: 20);
+    if (!mounted ||
+        generation != _spotifySectionsGeneration ||
+        sections.isEmpty) {
+      return;
+    }
+    setState(() => _spotifySections = sections);
+  }
+
+  /// 把 Spotify 曲目结构转成可播放的 [Track]。
+  List<Track> _toTracks(List<ToplistTrack> items) => items
+      .map(
+        (item) => Track(
+          id: item.id,
+          name: item.name,
+          artists: item.artists,
+          album: item.album,
+          picUrl: item.picUrl,
+          source: item.source ?? MusicSource.spotify,
+          duration: item.duration == null
+              ? null
+              : Duration(milliseconds: item.duration!),
+        ),
+      )
+      .where((track) => track.id.isNotEmpty)
+      .toList(growable: false);
+
+  /// 个性化分区里的一张卡被点开：按**卡片自己**的类型分流到对应的详情页。
+  ///
+  /// 不能按分区类型分——pathfinder 首页的「More like xxx」会把歌单和专辑混在一排。
+  /// 歌单有稳定 id，交给详情页自己重拉；电台与专辑的内容要先取回来再铺进去
+  /// （电台每次生成都不同，没有可复用的歌单 id）。
+  Future<void> _openPersonalizedItem(SpotifyPlaylistPreview preview) async {
+    final kind = preview.itemKind;
+    if (kind == SpotifyPersonalizedKind.playlist) {
+      _pushSpotifyDetail(preview, reloadable: true);
+      return;
+    }
+    if (kind == SpotifyPersonalizedKind.artist) {
+      await _openSpotifyArtist(preview);
+      return;
+    }
+    final tracks = kind == SpotifyPersonalizedKind.radio
+        ? await DiscoveryService.instance.getSpotifyRadio(preview.id)
+        : await DiscoveryService.instance.getSpotifyAlbumTracks(preview.id);
+    if (!mounted) return;
+    if (tracks.isEmpty) {
+      CyreneToast.show(
+        kind == SpotifyPersonalizedKind.radio
+            ? '电台暂时生成不出来，稍后再试'
+            : '这张专辑暂时读不出来，稍后再试',
+      );
+      return;
+    }
+    _pushSpotifyDetail(preview, reloadable: false, tracks: tracks);
+  }
+
+  /// 打开艺术家详情页。页面自己去拉数据，这里只把来源与专辑点击接管交给它。
+  Future<void> _openSpotifyArtist(SpotifyPlaylistPreview preview) async {
+    await Navigator.of(context).push(
+      CyreneHeroExpandPageRoute<void>(
+        builder: (_) => ArtistDetailPage(
+          playback: widget.playback,
+          artistId: preview.id,
+          artistName: preview.name,
+          source: MusicSource.spotify,
+          // Spotify 专辑 id 是 base62 字符串，内置的网易云 AlbumDetailPage 读不了，
+          // 改用本页既有的「拉曲目再铺进详情页」路径。
+          onOpenAlbum: (album) => _openSpotifyAlbumFromArtist(album),
+        ),
+      ),
+    );
+  }
+
+  /// 艺术家页里点开一张专辑：取曲目后铺进详情页（同 album 卡片的做法）。
+  Future<void> _openSpotifyAlbumFromArtist(ArtistAlbum album) async {
+    final albumId = album.id.toString();
+    final tracks = await DiscoveryService.instance.getSpotifyAlbumTracks(
+      albumId,
+    );
+    if (!mounted) return;
+    if (tracks.isEmpty) {
+      CyreneToast.show('这张专辑暂时读不出来，稍后再试');
+      return;
+    }
+    _pushSpotifyDetail(
+      (
+        id: albumId,
+        name: album.name,
+        description: '',
+        coverImgUrl: album.picUrl ?? '',
+        trackCount: tracks.length,
+        itemKind: SpotifyPersonalizedKind.album,
+      ),
+      reloadable: false,
+      tracks: tracks,
+    );
+  }
+
+  void _pushSpotifyDetail(
+    SpotifyPlaylistPreview preview, {
+    required bool reloadable,
+    List<ToplistTrack>? tracks,
+  }) {
+    Navigator.of(context).push(
+      CyreneHeroExpandPageRoute<void>(
+        builder: (_) => PlaylistDetailPage(
+          playlistId: preview.id,
+          title: preview.name,
+          coverUrl: preview.coverImgUrl,
+          playback: widget.playback,
+          token: widget.account.token,
+          desktopLayout: false,
+          source: MusicSource.spotify,
+          reloadable: reloadable,
+          trackCount: tracks?.length ?? preview.trackCount,
+          initialPlaylist: tracks == null
+              ? null
+              : PlaylistDetail(
+                  id: 0,
+                  name: preview.name,
+                  coverImgUrl: preview.coverImgUrl,
+                  description: preview.description,
+                  source: MusicSource.spotify,
+                  tracks: tracks,
+                  playCount: 0,
+                  creator: 'Spotify',
+                  trackCount: tracks.length,
+                  createTime: 0,
+                  updateTime: 0,
+                  tags: const ['Spotify'],
+                ),
+        ),
+      ),
+    );
+  }
+
   /// 打开榜单详情：Spotify 榜单直接 push 详情页（source=spotify、曲目预填、
   /// 无重载闪烁）；网易云走 widget.onOpenPlaylist（默认 netease 源）。
   void _openToplist(Toplist toplist) {
@@ -198,8 +347,7 @@ class _NowListeningPageState extends State<NowListeningPage>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    // 播放状态只影响私人FM卡与歌曲行，由它们各自监听 playback，
-    // 避免播放进度 tick 触发整页重建。
+    // 播放状态仍由 FM 和歌曲行局部监听，进度更新不重建整页。
     return ListenableBuilder(
       listenable: Listenable.merge([widget.home, widget.account]),
       builder: (context, _) {
@@ -222,55 +370,80 @@ class _NowListeningPageState extends State<NowListeningPage>
 
         final showTabs = state.isBound;
         final tab = showTabs ? _tab : _HomeTab.leaderboard;
+        final forYou = tab == _HomeTab.recommend;
+        final palette = ForYouPalette.of(context);
         final (greeting, greetingSubtitle) = _greetingOfNow();
-
-        return MiuixPullToRefresh(
-          isRefreshing: state.isRefreshing,
-          onRefresh: widget.home.refresh,
-          refreshTexts: const ['下拉刷新', '释放立即刷新', '正在刷新...', '刷新成功'],
-          // MiuixPullToRefresh 依赖顶部 OverscrollNotification：必须钳制物理
-          // （iOS 默认 bouncing 不会发出该通知），并关掉安卓拉伸指示器以免
-          // 与下拉头叠加动画。
-          child: ScrollConfiguration(
-            behavior: ScrollConfiguration.of(
-              context,
-            ).copyWith(overscroll: false),
-            child: CustomScrollView(
-              key: const PageStorageKey('home-scroll'),
-              physics: const AlwaysScrollableScrollPhysics(
-                parent: ClampingScrollPhysics(),
-              ),
-              slivers: [
-                SliverToBoxAdapter(
-                  child: _HomeHeader(
-                    title: greeting,
-                    subtitle: greetingSubtitle,
-                    refreshing: state.isRefreshing,
-                    onRefresh: widget.home.refresh,
+        return LayoutBuilder(
+          builder: (context, constraints) => ForYouAtmosphere(
+            enabled: true,
+            child: MiuixPullToRefresh(
+              isRefreshing: state.isRefreshing,
+              onRefresh: widget.home.refresh,
+              refreshTexts: const ['下拉刷新', '释放立即刷新', '正在刷新...', '刷新成功'],
+              // 保留钳制滚动和 OverscrollNotification，iOS 下拉刷新也正常工作。
+              child: ScrollConfiguration(
+                behavior: ScrollConfiguration.of(
+                  context,
+                ).copyWith(overscroll: false),
+                child: CustomScrollView(
+                  // 两个页签分别记住位置，横向唱片架也持有各自的 PageStorageKey。
+                  key: PageStorageKey(
+                    forYou ? 'home-recommend-scroll' : 'home-scroll',
                   ),
-                ),
-                if (showTabs)
-                  SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(12, 14, 12, 0),
-                    sliver: SliverToBoxAdapter(
-                      child: MiuixTabRowWithContour(
-                        tabs: const ['为你推荐', '榜单'],
-                        selectedTabIndex: tab == _HomeTab.recommend ? 0 : 1,
-                        contentAlignment: AlignmentDirectional.centerStart,
-                        onTabSelected: (index) => setState(() {
-                          _tab = index == 0
-                              ? _HomeTab.recommend
-                              : _HomeTab.leaderboard;
-                        }),
+                  physics: const AlwaysScrollableScrollPhysics(
+                    parent: ClampingScrollPhysics(),
+                  ),
+                  slivers: [
+                    // CustomScrollView 不会自动消费 MediaQuery.padding（只有
+                    // ListView 等 BoxScrollView 会）。外壳已把「状态栏 + 玻璃
+                    // 顶栏」高度注入 padding.top（桌面端为 0），这里显式让出，
+                    // 静止时内容停在顶栏下方，上滑时滚入模糊带。
+                    SliverToBoxAdapter(
+                      child: SizedBox(
+                        height: MediaQuery.paddingOf(context).top,
                       ),
                     ),
-                  ),
-                if (tab == _HomeTab.recommend)
-                  ..._recommendSlivers(state)
-                else
-                  ..._leaderboardSlivers(state),
-                const SliverToBoxAdapter(child: SizedBox(height: 180)),
-              ],
+                    SliverToBoxAdapter(
+                      child: ForYouGreeting(
+                        title: greeting,
+                        subtitle: greetingSubtitle,
+                        refreshing: state.isRefreshing,
+                        onRefresh: widget.home.refresh,
+                      ),
+                    ),
+                    if (showTabs)
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+                        sliver: SliverToBoxAdapter(
+                          child: MiuixTabRowWithContour(
+                            tabs: const ['为你推荐', '榜单'],
+                            selectedTabIndex: forYou ? 0 : 1,
+                            cornerRadius: 16,
+                            minWidth: 92,
+                            maxWidth: 116,
+                            contentAlignment: AlignmentDirectional.centerStart,
+                            colors: MiuixTabRowColors(
+                              backgroundColor: Colors.transparent,
+                              contentColor: palette.muted,
+                              selectedBackgroundColor: palette.paper,
+                              selectedContentColor: palette.accent,
+                            ),
+                            onTabSelected: (index) => setState(() {
+                              _tab = index == 0
+                                  ? _HomeTab.recommend
+                                  : _HomeTab.leaderboard;
+                            }),
+                          ),
+                        ),
+                      ),
+                    if (forYou)
+                      ..._recommendSlivers(state, constraints.maxWidth)
+                    else
+                      ..._leaderboardSlivers(state),
+                    const SliverToBoxAdapter(child: SizedBox(height: 180)),
+                  ],
+                ),
+              ),
             ),
           ),
         );
@@ -280,7 +453,7 @@ class _NowListeningPageState extends State<NowListeningPage>
 
   // ===== 为你推荐 =====
 
-  List<Widget> _recommendSlivers(HomeState state) {
+  List<Widget> _recommendSlivers(HomeState state, double availableWidth) {
     final data = state.recommendations;
     if (data == null) {
       return const [
@@ -324,67 +497,109 @@ class _NowListeningPageState extends State<NowListeningPage>
     return [
       if (daily.isNotEmpty)
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(12, 18, 12, 0),
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
           sliver: SliverToBoxAdapter(
-            child: _DailyRecommendCard(
-              tracks: daily,
-              onTap: () => _openDailyDetail(daily),
-            ),
-          ),
-        ),
-      if (fm.isNotEmpty) ...[
-        _sectionTitle('私人FM'),
-        SliverPadding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          sliver: SliverToBoxAdapter(
-            child: ListenableBuilder(
-              listenable: widget.playback,
-              builder: (context, _) => _PersonalFmCard(
-                track: _fmDisplayTrack(fm)!,
-                isPlaying: _isFmCurrent(fm) && widget.playback.state.isPlaying,
-                onToggle: () => _toggleFm(fm),
-                onSkip: () => _skipFm(fm),
-                onOpen: () => _openFmInPlayer(fm),
+            child: RepaintBoundary(
+              child: ForYouDailyCard(
+                tracks: daily,
+                onOpen: () => _openDailyDetail(daily),
+                onPlay: () => _playRecommendationQueue(daily),
               ),
             ),
           ),
         ),
-      ],
-      if (dailyPlaylists.isNotEmpty) ...[
-        _sectionTitle('每日推荐歌单'),
-        _playlistGrid(dailyPlaylists),
-      ],
-      if (personalized.isNotEmpty) ...[
-        _sectionTitle('专属歌单'),
-        _playlistGrid(personalized),
-      ],
-      if (radar.isNotEmpty) ...[_sectionTitle('雷达歌单'), _playlistGrid(radar)],
-      if (newest.isNotEmpty) ...[
-        _sectionTitle('个性化新歌'),
+      if (fm.isNotEmpty)
         SliverPadding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
           sliver: SliverToBoxAdapter(
-            child: CyreneMenuGroup(
-              children: [
-                for (final track in newest)
-                  HomeSongRow(
-                    track: track,
-                    playback: widget.playback,
-                    onPlay: () =>
-                        widget.playback.playTrack(track, queue: newest),
-                    onAddToQueue: () => widget.playback.addToQueue(track),
-                  ),
-              ],
+            child: RepaintBoundary(
+              child: ListenableBuilder(
+                listenable: widget.playback,
+                builder: (context, _) => ForYouRadioCard(
+                  track: _fmDisplayTrack(fm)!,
+                  isPlaying:
+                      _isFmCurrent(fm) && widget.playback.state.isPlaying,
+                  onToggle: () => _toggleFm(fm),
+                  onSkip: () => _skipFm(fm),
+                  onOpen: () => _openFmInPlayer(fm),
+                ),
+              ),
             ),
           ),
         ),
+      if (dailyPlaylists.isNotEmpty) ...[
+        _forYouSection(title: '今日歌单', subtitle: '给每个平凡时刻，选一点喜欢'),
+        _playlistShelf(dailyPlaylists, storageKey: 'daily'),
       ],
+      if (personalized.isNotEmpty) ...[
+        _forYouSection(title: '懂你的音乐角落', subtitle: '专属歌单，刚好合你的心意'),
+        SliverPadding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          sliver: SliverToBoxAdapter(
+            child: RepaintBoundary(
+              child: ForYouSpotlightPlaylist(
+                data: personalized.first,
+                label: '专属精选',
+                onTap: (cardContext) =>
+                    _openRecommendedPlaylist(personalized.first, cardContext),
+              ),
+            ),
+          ),
+        ),
+        if (personalized.length > 1) ...[
+          const SliverToBoxAdapter(child: SizedBox(height: 18)),
+          _playlistGrid(
+            personalized.skip(1).toList(growable: false),
+            availableWidth: availableWidth,
+          ),
+        ],
+      ],
+      if (radar.isNotEmpty) ...[
+        _forYouSection(title: '和下一首好歌相遇', subtitle: '雷达歌单，发现新的心动'),
+        _playlistShelf(radar, storageKey: 'radar', wide: true),
+      ],
+      if (newest.isNotEmpty) ...[
+        _forYouSection(
+          title: '新歌来信',
+          subtitle: '一些新鲜旋律，等你拆开',
+          trailing: ForYouPlayAction(
+            label: '播放全部',
+            subtle: true,
+            onPressed: () => _playRecommendationQueue(newest),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          sliver: SliverList.separated(
+            itemCount: newest.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 8),
+            itemBuilder: (context, index) {
+              final track = newest[index];
+              return ForYouSongSurface(
+                child: HomeSongRow(
+                  track: track,
+                  playback: widget.playback,
+                  onPlay: () => widget.playback.playTrack(track, queue: newest),
+                  onAddToQueue: () => widget.playback.addToQueue(track),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+      const SliverToBoxAdapter(child: ForYouEndNote()),
     ];
   }
 
   // ===== 榜单 =====
 
   List<Widget> _leaderboardSlivers(HomeState state) {
+    final palette = ForYouPalette.of(context);
+    // 网易云榜单入口暂时下线：历史选中的网易云源一律回退到 Spotify，
+    // 相关代码保留以便恢复。
+    if (_leaderboardSource != _LeaderboardSource.spotify) {
+      _leaderboardSource = _LeaderboardSource.spotify;
+    }
     final isSpotify = _leaderboardSource == _LeaderboardSource.spotify;
     final toplists = isSpotify ? _spotifyToplists : state.toplists;
     final loading = isSpotify && _spotifyToplistsLoading;
@@ -394,31 +609,42 @@ class _NowListeningPageState extends State<NowListeningPage>
       // 榜单源切换（始终显示：榜单 tab 对登录/未绑定用户都展示，两源均不依赖登录态）。
       // 与桌面首页一致，改用下拉选择框而非 Tab 栏，省横向空间且语义更清晰。
       SliverPadding(
-        padding: const EdgeInsets.fromLTRB(12, 14, 12, 0),
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
         sliver: SliverToBoxAdapter(
           child: Align(
             alignment: AlignmentDirectional.centerStart,
-            child: MiuixWindowDropdownMenu(
-              title: isSpotify ? 'Spotify' : '网易云音乐',
-              insideMargin: const EdgeInsets.symmetric(
-                horizontal: 14,
-                vertical: 8,
+            child: Container(
+              decoration: ShapeDecoration(
+                color: palette.paper.withValues(alpha: 0.6),
+                shape: MiuixSquircleBorder(
+                  cornerRadius: 16,
+                  side: BorderSide(color: palette.outline, width: 0.7),
+                ),
               ),
-              entry: MiuixDropdownEntry(
-                items: [
-                  MiuixDropdownItem(
-                    text: 'Spotify',
-                    selected: isSpotify,
-                    onClick: () =>
-                        _selectLeaderboardSource(_LeaderboardSource.spotify),
-                  ),
-                  MiuixDropdownItem(
-                    text: '网易云音乐',
-                    selected: !isSpotify,
-                    onClick: () =>
-                        _selectLeaderboardSource(_LeaderboardSource.netease),
-                  ),
-                ],
+              child: MiuixWindowDropdownMenu(
+                title: isSpotify ? 'Spotify' : '网易云音乐',
+                summary: isSpotify ? '全球热门榜单' : '网易云音乐榜单',
+                insideMargin: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 8,
+                ),
+                entry: MiuixDropdownEntry(
+                  items: [
+                    MiuixDropdownItem(
+                      text: 'Spotify',
+                      selected: isSpotify,
+                      onClick: () =>
+                          _selectLeaderboardSource(_LeaderboardSource.spotify),
+                    ),
+                    // 网易云榜单入口暂时下线，保留代码以便恢复。
+                    // MiuixDropdownItem(
+                    //   text: '网易云音乐',
+                    //   selected: !isSpotify,
+                    //   onClick: () =>
+                    //       _selectLeaderboardSource(_LeaderboardSource.netease),
+                    // ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -426,11 +652,16 @@ class _NowListeningPageState extends State<NowListeningPage>
       ),
       if (!loggedIn)
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(12, 18, 12, 0),
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
           sliver: SliverToBoxAdapter(
             child: _LoginPromptCard(onLogin: _openLogin),
           ),
         ),
+      // 个性化分区放在榜单的加载/错误分支之前：它走的是另一条后端链路
+      // （spclient 个性化），榜单挂了不该把它一起吞掉。
+      if (isSpotify)
+        for (final section in _spotifySections)
+          ..._personalizedSection(section),
       if (loading && toplists.isEmpty)
         const SliverFillRemaining(
           hasScrollBody: false,
@@ -463,44 +694,116 @@ class _NowListeningPageState extends State<NowListeningPage>
         )
       else ...[
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(12, 18, 12, 0),
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
           sliver: SliverToBoxAdapter(
-            child: _ShuffleHeroCard(
-              coverUrl: toplists.first.coverImgUrl,
-              onShuffle: _playShuffledToplists,
+            child: RepaintBoundary(
+              child: _LeaderboardShuffleCard(
+                coverUrl: toplists.first.coverImgUrl,
+                onShuffle: _playShuffledToplists,
+              ),
             ),
           ),
         ),
         for (final toplist in toplists) ..._toplistSection(toplist),
+        const SliverToBoxAdapter(child: ForYouEndNote()),
       ],
+    ];
+  }
+
+  /// 号池 Spotify 账号的一个个性化分区。
+  ///
+  /// 分区种类与数量都由后端按「哪几路数据真的取到了」决定，本地不硬编码——
+  /// 原来桌面端写死的六个 Web API 分类在后端 404 后只剩六个永远转圈的占位。
+  List<Widget> _personalizedSection(SpotifyPersonalizedSection section) {
+    if (section.kind == SpotifyPersonalizedKind.track) {
+      final tracks = _toTracks(section.tracks);
+      if (tracks.isEmpty) return const [];
+      return [
+        _forYouSection(title: section.title, subtitle: section.description),
+        SliverPadding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          sliver: SliverList.separated(
+            itemCount: min(5, tracks.length),
+            separatorBuilder: (_, _) => const SizedBox(height: 8),
+            itemBuilder: (context, index) => ForYouSongSurface(
+              child: HomeSongRow(
+                track: tracks[index],
+                playback: widget.playback,
+                onPlay: () =>
+                    widget.playback.playTrack(tracks[index], queue: tracks),
+                onAddToQueue: () => widget.playback.addToQueue(tracks[index]),
+              ),
+            ),
+          ),
+        ),
+      ];
+    }
+    if (section.collections.isEmpty) return const [];
+    return [
+      _forYouSection(title: section.title, subtitle: section.description),
+      SliverToBoxAdapter(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final cardWidth = (constraints.maxWidth * 0.42).clamp(140.0, 184.0);
+            return SizedBox(
+              height: ForYouPlaylistCard.heightFor(context, cardWidth),
+              child: ListView.separated(
+                key: PageStorageKey('home-spotify-${section.id}-shelf'),
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                itemCount: section.collections.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 14),
+                itemBuilder: (context, index) {
+                  final preview = section.collections[index];
+                  return SizedBox(
+                    width: cardWidth,
+                    child: ForYouPlaylistCard(
+                      // ForYouPlaylistData.id 是网易云的数字 id，Spotify 的
+                      // base62 id 塞不进去；卡片本身也不读 id，跳转所需的 id
+                      // 由闭包里的 preview 带着，故此处填 0 即可。
+                      data: ForYouPlaylistData(
+                        id: 0,
+                        name: preview.name,
+                        coverUrl: preview.coverImgUrl,
+                        description: preview.description,
+                        trackCount: preview.trackCount,
+                      ),
+                      onTap: (_) => _openPersonalizedItem(preview),
+                    ),
+                  );
+                },
+              ),
+            );
+          },
+        ),
+      ),
     ];
   }
 
   List<Widget> _toplistSection(Toplist toplist) {
     final tracks = _tracksFor(toplist);
     if (tracks.isEmpty) return const [];
+    final description = toplist.description.trim();
     return [
-      SliverToBoxAdapter(
-        child: _ToplistHeader(
-          name: toplist.name,
-          onOpen: () => _openToplist(toplist),
-        ),
+      _forYouSection(
+        title: toplist.name,
+        subtitle: description.isNotEmpty ? description : '热门曲目实时更新',
+        trailing: _ViewAllAction(onPressed: () => _openToplist(toplist)),
       ),
       SliverPadding(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        sliver: SliverToBoxAdapter(
-          child: CyreneMenuGroup(
-            children: [
-              for (var i = 0; i < min(5, tracks.length); i++)
-                HomeSongRow(
-                  track: tracks[i],
-                  rank: i + 1,
-                  playback: widget.playback,
-                  onPlay: () =>
-                      widget.playback.playTrack(tracks[i], queue: tracks),
-                  onAddToQueue: () => widget.playback.addToQueue(tracks[i]),
-                ),
-            ],
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        sliver: SliverList.separated(
+          itemCount: min(5, tracks.length),
+          separatorBuilder: (_, _) => const SizedBox(height: 8),
+          itemBuilder: (context, index) => ForYouSongSurface(
+            child: HomeSongRow(
+              track: tracks[index],
+              rank: index + 1,
+              playback: widget.playback,
+              onPlay: () =>
+                  widget.playback.playTrack(tracks[index], queue: tracks),
+              onAddToQueue: () => widget.playback.addToQueue(tracks[index]),
+            ),
           ),
         ),
       ),
@@ -526,7 +829,10 @@ class _NowListeningPageState extends State<NowListeningPage>
     _fm = widget.home.convertTracks(data.fm);
     _newest = widget.home.convertTracks(data.personalizedNewsongs);
     _dailyPlaylists = _playlistCards(data.dailyPlaylists, 'daily');
-    _personalizedPlaylists = _playlistCards(data.personalizedPlaylists, 'personalized');
+    _personalizedPlaylists = _playlistCards(
+      data.personalizedPlaylists,
+      'personalized',
+    );
     _radarPlaylists = _playlistCards(data.radarPlaylists, 'radar');
     if (kDebugMode) {
       debugPrint(
@@ -594,11 +900,20 @@ class _NowListeningPageState extends State<NowListeningPage>
     widget.onOpenPlayer();
   }
 
+  void _playRecommendationQueue(List<Track> tracks) {
+    if (tracks.isEmpty) return;
+    widget.playback.playTrack(tracks.first, queue: tracks);
+    widget.onOpenPlayer();
+  }
+
   void _openDailyDetail(List<Track> daily) {
     Navigator.of(context).push(
       CyreneHeroExpandPageRoute<void>(
-        builder: (_) =>
-            DailyRecommendPage(tracks: daily, playback: widget.playback),
+        builder: (_) => DailyRecommendPage(
+          tracks: daily,
+          playback: widget.playback,
+          token: widget.account.token,
+        ),
       ),
     );
   }
@@ -617,75 +932,144 @@ class _NowListeningPageState extends State<NowListeningPage>
 
   // ===== 通用 =====
 
-  Widget _sectionTitle(String text) => SliverToBoxAdapter(
-    child: MiuixSmallTitle(
-      text,
-      insideMargin: const EdgeInsets.fromLTRB(28, 20, 28, 8),
+  Widget _forYouSection({
+    required String title,
+    required String subtitle,
+    Widget? trailing,
+  }) => SliverToBoxAdapter(
+    child: ForYouSectionHeading(
+      title: title,
+      subtitle: subtitle,
+      trailing: trailing,
     ),
   );
 
-  Widget _playlistGrid(List<_HomePlaylistCardData> playlists) => SliverPadding(
-    padding: const EdgeInsets.symmetric(horizontal: 12),
-    sliver: SliverGrid(
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 220,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        childAspectRatio: 0.76,
-      ),
-      delegate: SliverChildBuilderDelegate((context, index) {
-        final playlist = playlists[index];
-        return _PlaylistCard(
-          data: playlist,
-          onTap: (cardContext) {
-            final box = cardContext.findRenderObject() as RenderBox?;
-            Alignment? alignment;
-            if (box != null && box.hasSize) {
-              final size = MediaQuery.sizeOf(cardContext);
-              final center = box.localToGlobal(box.size.center(Offset.zero));
-              alignment = Alignment(
-                ((center.dx / size.width) * 2.0 - 1.0).clamp(-1.0, 1.0),
-                ((center.dy / size.height) * 2.0 - 1.0).clamp(-1.0, 1.0),
+  Widget _playlistShelf(
+    List<ForYouPlaylistData> playlists, {
+    required String storageKey,
+    bool wide = false,
+  }) => SliverToBoxAdapter(
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        final cardWidth = wide
+            ? (constraints.maxWidth * 0.67).clamp(224.0, 300.0)
+            : (constraints.maxWidth * 0.42).clamp(140.0, 184.0);
+        final height = wide
+            ? ForYouSpotlightPlaylist.heightFor(context, compact: true)
+            : ForYouPlaylistCard.heightFor(context, cardWidth);
+        return SizedBox(
+          height: height,
+          child: ListView.separated(
+            key: PageStorageKey('home-$storageKey-shelf'),
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            itemCount: playlists.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 14),
+            itemBuilder: (context, index) {
+              final playlist = playlists[index];
+              return SizedBox(
+                width: cardWidth,
+                child: wide
+                    ? ForYouSpotlightPlaylist(
+                        data: playlist,
+                        compact: true,
+                        label: '音乐雷达',
+                        onTap: (cardContext) =>
+                            _openRecommendedPlaylist(playlist, cardContext),
+                      )
+                    : ForYouPlaylistCard(
+                        data: playlist,
+                        onTap: (cardContext) =>
+                            _openRecommendedPlaylist(playlist, cardContext),
+                      ),
               );
-            }
-            widget.onOpenPlaylist(
-              playlist.id,
-              playlist.name,
-              playlist.coverUrl,
-              heroTag: playlist.heroTag,
-              originAlignment: alignment,
-            );
-          },
+            },
+          ),
         );
-      }, childCount: playlists.length),
+      },
     ),
   );
 
-  List<_HomePlaylistCardData> _playlistCards(
+  Widget _playlistGrid(
+    List<ForYouPlaylistData> playlists, {
+    required double availableWidth,
+  }) {
+    // 宽度来自页面级 Box LayoutBuilder；不用会随 scrollOffset 每帧重建的
+    // SliverLayoutBuilder，卡片高度仍会响应窗口宽度与系统字号。
+    final contentWidth = availableWidth - 40;
+    final columns = contentWidth >= 600 ? 3 : 2;
+    const spacing = 14.0;
+    final width = (contentWidth - spacing * (columns - 1)) / columns;
+    return SliverPadding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      sliver: SliverGrid(
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: columns,
+          mainAxisSpacing: 18,
+          crossAxisSpacing: spacing,
+          mainAxisExtent: ForYouPlaylistCard.heightFor(context, width),
+        ),
+        delegate: SliverChildBuilderDelegate((context, index) {
+          final playlist = playlists[index];
+          return ForYouPlaylistCard(
+            data: playlist,
+            onTap: (cardContext) =>
+                _openRecommendedPlaylist(playlist, cardContext),
+          );
+        }, childCount: playlists.length),
+      ),
+    );
+  }
+
+  void _openRecommendedPlaylist(
+    ForYouPlaylistData playlist,
+    BuildContext cardContext,
+  ) {
+    final box = cardContext.findRenderObject() as RenderBox?;
+    Alignment? alignment;
+    if (box != null && box.hasSize) {
+      final size = MediaQuery.sizeOf(cardContext);
+      final center = box.localToGlobal(box.size.center(Offset.zero));
+      alignment = Alignment(
+        ((center.dx / size.width) * 2.0 - 1.0).clamp(-1.0, 1.0),
+        ((center.dy / size.height) * 2.0 - 1.0).clamp(-1.0, 1.0),
+      );
+    }
+    widget.onOpenPlaylist(
+      playlist.id,
+      playlist.name,
+      playlist.coverUrl,
+      heroTag: playlist.heroTag,
+      originAlignment: alignment,
+    );
+  }
+
+  List<ForYouPlaylistData> _playlistCards(
     Iterable<dynamic> items,
     String tagPrefix,
-  ) =>
-      items
-          .whereType<Map>()
-          .map((raw) => Map<String, Object?>.from(raw))
-          .map(
-            (item) => _HomePlaylistCardData(
-              id:
-                  (item['id'] as num?)?.toInt() ??
-                  int.tryParse(item['id']?.toString() ?? '') ??
-                  0,
-              name: item['name']?.toString() ?? '',
-              coverUrl: (item['picUrl'] ?? item['coverImgUrl'])?.toString() ??
-                  '',
-            ),
-          )
-          .where((item) => item.id != 0 && item.name.isNotEmpty)
-          .map(
-            (item) => item.copyWith(
-              heroTag: 'home-playlist-$tagPrefix-${item.id}',
-            ),
-          )
-          .toList(growable: false);
+  ) {
+    int readCount(Object? value) => value is num
+        ? value.toInt()
+        : int.tryParse(value?.toString() ?? '') ?? 0;
+
+    return items
+        .whereType<Map>()
+        .map((item) {
+          final id = readCount(item['id']);
+          return ForYouPlaylistData(
+            id: id,
+            name: item['name']?.toString() ?? '',
+            coverUrl: (item['picUrl'] ?? item['coverImgUrl'])?.toString() ?? '',
+            heroTag: 'home-playlist-$tagPrefix-$id',
+            description:
+                (item['copywriter'] ?? item['description'])?.toString() ?? '',
+            trackCount: readCount(item['trackCount']),
+            playCount: readCount(item['playCount'] ?? item['playcount']),
+          );
+        })
+        .where((item) => item.id != 0 && item.name.isNotEmpty)
+        .toList(growable: false);
+  }
 }
 
 (String, String) _greetingOfNow() {
@@ -699,425 +1083,28 @@ class _NowListeningPageState extends State<NowListeningPage>
     _ => '晚上好',
   };
   final subtitle = switch (hour) {
-    < 6 => '注意休息，音乐轻声一点',
-    < 9 => '新的一天，从此开始好心情',
-    < 12 => '愿音乐伴你高效工作',
-    < 14 => '午后小憩，来点轻松的旋律',
-    < 18 => '忙碌之余，听听喜欢的歌',
-    _ => '夜色温柔，音乐更动听',
+    < 6 => '把音量放轻，和今天温柔道别',
+    < 9 => '给新的一天，留一点明亮的旋律',
+    < 12 => '喜欢的歌，陪你慢慢走过今天',
+    < 14 => '忙里偷闲，让耳朵也歇一会儿',
+    < 18 => '收集一点旋律，也收集一点好心情',
+    _ => '夜色很温柔，音乐也是',
   };
   return (title, subtitle);
 }
 
 enum _HomeTab { recommend, leaderboard }
 
+// 网易云榜单入口暂时下线：netease 枚举值暂未被引用，保留以便恢复。
+// ignore: unused_field
 enum _LeaderboardSource { netease, spotify }
 
-/// 问候头：大字问候语 + 副标题 + 右侧刷新按钮（对应原版 GreetingHeader + 顶栏动作）。
-class _HomeHeader extends StatelessWidget {
-  const _HomeHeader({
-    required this.title,
-    required this.subtitle,
-    required this.refreshing,
-    required this.onRefresh,
+/// 榜单页顶部的随机播放卡：桃粉 → 纸 → 玫瑰渐变 squircle，与每日推荐卡同族。
+class _LeaderboardShuffleCard extends StatelessWidget {
+  const _LeaderboardShuffleCard({
+    required this.coverUrl,
+    required this.onShuffle,
   });
-
-  final String title;
-  final String subtitle;
-  final bool refreshing;
-  final VoidCallback onRefresh;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = MiuixTheme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(28, 18, 20, 0),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: theme.textStyles.title2.copyWith(
-                    color: theme.colors.onBackground,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -0.5,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  subtitle,
-                  style: theme.textStyles.body2.copyWith(
-                    color: theme.colors.onSurfaceVariantSummary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          MiuixIconButton(
-            enabled: !refreshing,
-            onPressed: onRefresh,
-            child: refreshing
-                ? const MiuixInfiniteProgressIndicator(size: 18)
-                : MiuixIcon(
-                    vector: MiuixIcons.extended.byName('refresh')!,
-                    size: 20,
-                    tint: theme.colors.onBackground,
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 每日推荐 hero 卡：左侧文案，右侧三张倾斜堆叠封面（对应原版 MobileDailyRecommendCard）。
-class _DailyRecommendCard extends StatelessWidget {
-  const _DailyRecommendCard({required this.tracks, required this.onTap});
-
-  final List<Track> tracks;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = MiuixTheme.of(context);
-    final colors = theme.colors;
-    final covers = tracks
-        .map((track) => track.picUrl)
-        .where((url) => url.isNotEmpty)
-        .take(3)
-        .toList(growable: false);
-    return MiuixPressable(
-      onPressed: onTap,
-      feedbackType: MiuixPressFeedbackType.sink,
-      shape: const MiuixSquircleBorder(cornerRadius: 20),
-      child: Container(
-        clipBehavior: Clip.antiAlias,
-        decoration: ShapeDecoration(
-          shape: const MiuixSquircleBorder(cornerRadius: 20),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [colors.surfaceContainerHigh, colors.surfaceContainer],
-          ),
-        ),
-        padding: const EdgeInsets.fromLTRB(20, 22, 16, 22),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    '每日推荐',
-                    style: theme.textStyles.title2.copyWith(
-                      color: colors.onSurfaceContainer,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.5,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      Icon(Icons.auto_awesome, size: 14, color: colors.primary),
-                      const SizedBox(width: 5),
-                      Text(
-                        '为您精选 ${tracks.length} 首',
-                        style: theme.textStyles.footnote1.copyWith(
-                          color: colors.primary,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    '每日凌晨更新，遇见你的心头好',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textStyles.footnote1.copyWith(
-                      color: colors.onSurfaceVariantSummary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 104,
-              height: 120,
-              child: _TiltedCoverStack(covers: covers),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 三张封面的倾斜堆叠（沿用原版层级参数：缩放/旋转/位移/透明度）。
-class _TiltedCoverStack extends StatelessWidget {
-  const _TiltedCoverStack({required this.covers});
-
-  final List<String> covers;
-
-  static const _base = 80.0;
-
-  // 自后向前：(缩放, 旋转弧度, 位移, 不透明度)
-  static const _layers = <(double, double, Offset, double)>[
-    (0.85, -0.2, Offset(-20, -10), 0.5),
-    (0.92, 0.15, Offset(15, 0), 0.8),
-    (1.0, 0.0, Offset.zero, 1.0),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    if (covers.isEmpty) {
-      return const Center(
-        child: _HomeCover(url: '', size: _base),
-      );
-    }
-    return Stack(
-      alignment: Alignment.center,
-      clipBehavior: Clip.none,
-      children: [
-        for (var i = 0; i < _layers.length; i++)
-          _buildLayer(_layers[i], layerFromFront: _layers.length - 1 - i),
-      ],
-    );
-  }
-
-  Widget _buildLayer(
-    (double, double, Offset, double) layer, {
-    required int layerFromFront,
-  }) {
-    final (scale, angle, offset, opacity) = layer;
-    final url = covers[min(layerFromFront, covers.length - 1)];
-    final isFront = layerFromFront == 0;
-    Widget cover = _HomeCover(url: url, size: _base * scale, cornerRadius: 12);
-    if (isFront) {
-      cover = Container(
-        decoration: const ShapeDecoration(
-          shape: MiuixSquircleBorder(cornerRadius: 12),
-          shadows: [
-            BoxShadow(
-              color: Color(0x33000000),
-              blurRadius: 15,
-              offset: Offset(0, 8),
-            ),
-          ],
-        ),
-        child: cover,
-      );
-    }
-    return Transform.translate(
-      offset: offset,
-      child: Transform.rotate(
-        angle: angle,
-        child: Opacity(opacity: opacity, child: cover),
-      ),
-    );
-  }
-}
-
-/// 私人FM 卡：大封面 + 曲名/歌手 + 切歌与播放按钮（对应原版 MobilePersonalFm）。
-class _PersonalFmCard extends StatelessWidget {
-  const _PersonalFmCard({
-    required this.track,
-    required this.isPlaying,
-    required this.onToggle,
-    required this.onSkip,
-    required this.onOpen,
-  });
-
-  final Track track;
-  final bool isPlaying;
-  final VoidCallback onToggle;
-  final VoidCallback onSkip;
-  final VoidCallback onOpen;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = MiuixTheme.of(context);
-    final colors = theme.colors;
-    return MiuixCard(
-      cornerRadius: 20,
-      insideMargin: const EdgeInsets.all(16),
-      onPressed: onOpen,
-      feedbackType: MiuixPressFeedbackType.sink,
-      child: Row(
-        children: [
-          _HomeCover(url: track.picUrl, size: 120, cornerRadius: 20),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  track.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textStyles.headline1.copyWith(
-                    color: colors.onSurfaceContainer,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  track.artists,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textStyles.body2.copyWith(
-                    color: colors.onSurfaceVariantSummary,
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    MiuixIconButton(
-                      onPressed: onSkip,
-                      backgroundColor: colors.secondaryContainer,
-                      cornerRadius: 14,
-                      child: MiuixIcon(
-                        icon: Icons.skip_next_rounded,
-                        size: 22,
-                        tint: colors.onSecondaryContainer,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    MiuixIconButton(
-                      onPressed: onToggle,
-                      backgroundColor: colors.primary,
-                      cornerRadius: 16,
-                      minWidth: 48,
-                      minHeight: 48,
-                      child: MiuixIcon(
-                        icon: isPlaying
-                            ? Icons.pause_rounded
-                            : Icons.play_arrow_rounded,
-                        size: 26,
-                        tint: colors.onPrimary,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 歌单网格卡：封面 + 两行歌单名（对应原版 MobileHoverPlaylistCard 的触屏形态）。
-class _PlaylistCard extends StatelessWidget {
-  const _PlaylistCard({required this.data, required this.onTap});
-
-  final _HomePlaylistCardData data;
-  final ValueChanged<BuildContext> onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = MiuixTheme.of(context);
-    return MiuixCard(
-      cornerRadius: 20,
-      onPressed: () => onTap(context),
-      feedbackType: MiuixPressFeedbackType.sink,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(6, 6, 6, 0),
-              child: _HomeCover(url: data.coverUrl),
-            ),
-          ),
-          SizedBox(
-            height: 52,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 7, 12, 0),
-              child: Align(
-                alignment: Alignment.topLeft,
-                child: Text(
-                  data.name,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textStyles.body2.copyWith(
-                    color: theme.colors.onSurfaceContainer,
-                    fontWeight: FontWeight.w500,
-                    height: 1.25,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 榜单区块标题：小标题 + 「查看全部」。
-class _ToplistHeader extends StatelessWidget {
-  const _ToplistHeader({required this.name, required this.onOpen});
-
-  final String name;
-  final VoidCallback onOpen;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = MiuixTheme.of(context);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Expanded(
-          child: MiuixSmallTitle(
-            name,
-            insideMargin: const EdgeInsets.fromLTRB(28, 20, 8, 8),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.only(right: 20, bottom: 4),
-          child: MiuixPressable(
-            onPressed: onOpen,
-            borderRadius: BorderRadius.circular(8),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    '查看全部',
-                    style: theme.textStyles.footnote1.copyWith(
-                      color: theme.colors.onSurfaceVariantSummary,
-                    ),
-                  ),
-                  const SizedBox(width: 2),
-                  MiuixIcon(
-                    vector: MiuixIcons.extended.byName('chevronForward')!,
-                    size: 13,
-                    tint: theme.colors.onSurfaceVariantActions,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// 榜单页顶部的随机播放卡。
-class _ShuffleHeroCard extends StatelessWidget {
-  const _ShuffleHeroCard({required this.coverUrl, required this.onShuffle});
 
   final String coverUrl;
   final VoidCallback onShuffle;
@@ -1125,47 +1112,74 @@ class _ShuffleHeroCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = MiuixTheme.of(context);
-    final colors = theme.colors;
-    return MiuixCard(
-      cornerRadius: 20,
-      insideMargin: const EdgeInsets.all(16),
+    final palette = ForYouPalette.of(context);
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      padding: const EdgeInsets.all(18),
+      decoration: ShapeDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [palette.peach, palette.paper, palette.rose],
+          stops: const [0, 0.7, 1],
+        ),
+        shape: MiuixSquircleBorder(
+          cornerRadius: 25,
+          side: BorderSide(color: palette.outline, width: 0.7),
+        ),
+      ),
       child: Row(
         children: [
-          _HomeCover(url: coverUrl, size: 64, cornerRadius: 14),
-          const SizedBox(width: 14),
+          ForYouArtwork(url: coverUrl, size: 88, cornerRadius: 18),
+          const SizedBox(width: 16),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.shuffle_rounded,
+                      size: 15,
+                      color: palette.accent,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      '随机模式',
+                      style: theme.textStyles.body2.copyWith(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: palette.accent,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 9),
                 Text(
                   '随心畅听',
-                  style: theme.textStyles.headline1.copyWith(
-                    color: colors.onSurfaceContainer,
-                    fontWeight: FontWeight.w600,
+                  style: theme.textStyles.title1.copyWith(
+                    fontSize: 21,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.4,
+                    color: palette.ink,
                   ),
                 ),
-                const SizedBox(height: 3),
+                const SizedBox(height: 4),
                 Text(
                   '从全部榜单中随机播放热门歌曲',
-                  style: theme.textStyles.body2.copyWith(
-                    color: colors.onSurfaceVariantSummary,
+                  style: theme.textStyles.footnote1.copyWith(
+                    fontSize: 11.5,
+                    color: palette.muted,
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 8),
-          MiuixIconButton(
+          const SizedBox(width: 10),
+          ForYouPlayAction(
+            label: '播放',
+            icon: Icons.shuffle_rounded,
             onPressed: onShuffle,
-            backgroundColor: colors.primary,
-            cornerRadius: 16,
-            minWidth: 48,
-            minHeight: 48,
-            child: MiuixIcon(
-              icon: Icons.shuffle_rounded,
-              size: 22,
-              tint: colors.onPrimary,
-            ),
           ),
         ],
       ),
@@ -1173,7 +1187,48 @@ class _ShuffleHeroCard extends StatelessWidget {
   }
 }
 
-/// 未登录引导卡（对应原版 ForYouLoginPrompt）。
+/// 榜单区块标题右侧的「查看全部」小按钮，纸张底 + 描边。
+class _ViewAllAction extends StatelessWidget {
+  const _ViewAllAction({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = MiuixTheme.of(context);
+    final palette = ForYouPalette.of(context);
+    return MiuixPressable(
+      onPressed: onPressed,
+      borderRadius: BorderRadius.circular(14),
+      feedbackType: MiuixPressFeedbackType.sink,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: palette.paper,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: palette.outline, width: 0.7),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '查看全部',
+              style: theme.textStyles.footnote2.copyWith(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+                color: palette.accent,
+              ),
+            ),
+            const SizedBox(width: 3),
+            Icon(Icons.chevron_right_rounded, size: 14, color: palette.accent),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 未登录引导卡（对应原版 ForYouLoginPrompt），与每日推荐卡同族的渐变纸张卡。
 class _LoginPromptCard extends StatelessWidget {
   const _LoginPromptCard({required this.onLogin});
 
@@ -1182,39 +1237,48 @@ class _LoginPromptCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = MiuixTheme.of(context);
-    final colors = theme.colors;
-    return MiuixCard(
-      cornerRadius: 20,
-      insideMargin: const EdgeInsets.fromLTRB(20, 28, 20, 24),
+    final palette = ForYouPalette.of(context);
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: ShapeDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [palette.peach, palette.paper, palette.rose],
+          stops: const [0, 0.7, 1],
+        ),
+        shape: MiuixSquircleBorder(
+          cornerRadius: 26,
+          side: BorderSide(color: palette.outline, width: 0.7),
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 26, 20, 22),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 96,
-            height: 96,
+            width: 88,
+            height: 88,
             alignment: Alignment.center,
             decoration: ShapeDecoration(
               shape: const CircleBorder(),
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [
-                  colors.primary.withValues(alpha: 0.18),
-                  colors.primary.withValues(alpha: 0.06),
-                ],
+                colors: [palette.rose, palette.paper],
               ),
             ),
             child: Icon(
               Icons.music_note_rounded,
-              size: 42,
-              color: colors.primary,
+              size: 40,
+              color: palette.accent,
             ),
           ),
           const SizedBox(height: 18),
           Text(
             '登录后查看更多内容',
             style: theme.textStyles.title3.copyWith(
-              color: colors.onSurfaceContainer,
+              color: palette.ink,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -1223,7 +1287,7 @@ class _LoginPromptCard extends StatelessWidget {
             '登录即可获取每日推荐、私人FM、专属歌单等个性化内容',
             textAlign: TextAlign.center,
             style: theme.textStyles.body2.copyWith(
-              color: colors.onSurfaceVariantSummary,
+              color: palette.muted,
               height: 1.5,
             ),
           ),
@@ -1271,105 +1335,25 @@ class _FeatureChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = MiuixTheme.of(context);
-    final colors = theme.colors;
+    final palette = ForYouPalette.of(context);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-      decoration: ShapeDecoration(
-        color: colors.secondaryContainer,
-        shape: const StadiumBorder(),
+      decoration: BoxDecoration(
+        color: palette.paper.withValues(alpha: 0.75),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: palette.outline),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 14, color: colors.onSecondaryContainer),
+          Icon(icon, size: 14, color: palette.accent),
           const SizedBox(width: 6),
           Text(
             label,
-            style: theme.textStyles.footnote1.copyWith(
-              color: colors.onSecondaryContainer,
-            ),
+            style: theme.textStyles.footnote1.copyWith(color: palette.accent),
           ),
         ],
       ),
     );
   }
-}
-
-/// squircle 圆角网络封面；[size] 为空时填满父约束。
-class _HomeCover extends StatelessWidget {
-  const _HomeCover({required this.url, this.size, this.cornerRadius = 16});
-
-  final String url;
-  final double? size;
-  final double cornerRadius;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = MiuixTheme.of(context).colors;
-    final fallback = Center(
-      child: Icon(
-        Icons.music_note_rounded,
-        color: colors.onSurfaceVariantSummary,
-      ),
-    );
-    final dpr = MediaQuery.devicePixelRatioOf(context);
-    Widget buildImage(double decodeWidth) => CachedNetworkImage(
-      imageUrl: url,
-      httpHeaders: imageHeaders(url),
-      fit: BoxFit.cover,
-      fadeInDuration: Duration.zero,
-      fadeOutDuration: Duration.zero,
-      // 按显示宽降采样解码,避免网格里全尺寸封面拖累滚动(见 coverDecodeWidth)。
-      memCacheWidth: coverDecodeWidth(decodeWidth, dpr),
-      errorWidget: (_, _, error) {
-        debugPrint('[HomeCover] 加载失败 $url -> $error');
-        return fallback;
-      },
-    );
-    // size 为空时填满父约束(网格卡),用 LayoutBuilder 拿到实际宽度做降采样。
-    final Widget image = url.isEmpty
-        ? fallback
-        : (size != null
-              ? buildImage(size!)
-              : LayoutBuilder(
-                  builder: (context, constraints) => buildImage(
-                    constraints.maxWidth.isFinite && constraints.maxWidth > 0
-                        ? constraints.maxWidth
-                        : 220,
-                  ),
-                ));
-    Widget cover = Container(
-      clipBehavior: Clip.antiAlias,
-      decoration: ShapeDecoration(
-        color: colors.secondaryContainer,
-        shape: MiuixSquircleBorder(cornerRadius: cornerRadius),
-      ),
-      child: image,
-    );
-    if (size != null) {
-      cover = SizedBox.square(dimension: size, child: cover);
-    }
-    return cover;
-  }
-}
-
-class _HomePlaylistCardData {
-  const _HomePlaylistCardData({
-    required this.id,
-    required this.name,
-    required this.coverUrl,
-    this.heroTag = '',
-  });
-
-  final int id;
-  final String name;
-  final String coverUrl;
-  final String heroTag;
-
-  _HomePlaylistCardData copyWith({String? heroTag}) => _HomePlaylistCardData(
-    id: id,
-    name: name,
-    coverUrl: coverUrl,
-    heroTag: heroTag ?? this.heroTag,
-  );
 }

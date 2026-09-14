@@ -18,6 +18,7 @@ import '../../infrastructure/services/discovery_service.dart';
 import '../../infrastructure/storage/spotify_charts_cache.dart';
 import '../../presentation/cyrene/cyrene_toast.dart';
 import '../history/history_page.dart';
+import '../artist/artist_detail_page.dart';
 import '../playlist/playlist_detail_page.dart';
 import 'daily_recommend_page.dart';
 import 'recommend_card_artwork.dart';
@@ -105,18 +106,9 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
   int _spotifyLoadGeneration = 0;
   String? _loadedToken;
 
-  List<SpotifyAlbumPreview> _spotifyNewReleases = const [];
-  Map<String, List<SpotifyPlaylistPreview>> _spotifyCategoryGroups = const {};
+  List<SpotifyPersonalizedSection> _spotifySections = const [];
+  bool _spotifySectionsLoading = false;
   int _spotifyDiscoveryGeneration = 0;
-
-  static const _spotifyCategoryIds = <String, String>{
-    'Hip Hop': 'hiphop',
-    '摇滚': 'rock',
-    '排行榜': 'toplists',
-    '心情': 'mood',
-    '流行': 'pop',
-    'R&B': 'rnb',
-  };
 
   // 派生数据缓存：仅当控制器发布新 RecommendData 对象时才重新解析原始 JSON。
   RecommendData? _recommendCacheSource;
@@ -209,34 +201,32 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     });
   }
 
+  /// 拉取号池 Spotify 账号的个性化首页分区。
+  ///
+  /// 首屏拿不到就整段留白（各分区本就是「有才显示」），不弹错误——这块是锦上
+  /// 添花，真正的主内容是下方的热门榜单。
   Future<void> _loadSpotifyDiscovery() async {
     final generation = ++_spotifyDiscoveryGeneration;
-    final newReleases = await DiscoveryService.instance.getSpotifyNewReleases(
-      limit: 20,
-      country: 'US',
-    );
-    final categoryFutures = _spotifyCategoryIds.entries.map(
-      (entry) => DiscoveryService.instance
-          .getSpotifyCategoryPlaylists(
-            entry.value,
-            limit: 20,
-            country: 'US',
-          )
-          .then((playlists) => (title: entry.key, items: playlists)),
-    );
-    final categoryGroups = await Future.wait(categoryFutures.toList());
+    // 直接赋值而非 setState：本方法由 initState 调用，首帧还没画，setState 会撞上
+    // 「markNeedsBuild() called during build」。结果回来时才需要真正重建。
+    _spotifySectionsLoading = _spotifySections.isEmpty;
+    final sections = await DiscoveryService.instance.getSpotifyHome(limit: 20);
     if (!mounted || generation != _spotifyDiscoveryGeneration) return;
     setState(() {
-      _spotifyNewReleases = newReleases;
-      _spotifyCategoryGroups = {
-        for (final group in categoryGroups) group.title: group.items,
-      };
+      if (sections.isNotEmpty) _spotifySections = sections;
+      _spotifySectionsLoading = false;
     });
   }
 
   Future<void> _openSpotifyAlbum(SpotifyAlbumPreview album) async {
-    final tracks = await DiscoveryService.instance.getSpotifyAlbumTracks(album.id);
-    if (tracks.isEmpty) return;
+    final tracks = await DiscoveryService.instance.getSpotifyAlbumTracks(
+      album.id,
+    );
+    if (!mounted) return;
+    if (tracks.isEmpty) {
+      CyreneToast.show('这张专辑暂时读不出来，稍后再试');
+      return;
+    }
     widget.onOpenSecondary(
       PlaylistDetailPage(
         playlistId: album.id,
@@ -280,6 +270,90 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
         trackCount: preview.trackCount,
       ),
     );
+  }
+
+  /// 打开单曲电台：内容是按需生成的，没有可复用的歌单 id，所以先把曲目拉下来
+  /// 再以 initialPlaylist 直接铺进详情页，并关掉 reloadable（重拉会当成歌单 id）。
+  Future<void> _openSpotifyRadio(SpotifyPlaylistPreview preview) async {
+    final tracks = await DiscoveryService.instance.getSpotifyRadio(preview.id);
+    if (!mounted) return;
+    if (tracks.isEmpty) {
+      CyreneToast.show('电台暂时生成不出来，稍后再试');
+      return;
+    }
+    widget.onOpenSecondary(
+      PlaylistDetailPage(
+        playlistId: preview.id,
+        title: preview.name,
+        coverUrl: preview.coverImgUrl,
+        playback: widget.playback,
+        token: widget.account.token,
+        desktopLayout: true,
+        source: MusicSource.spotify,
+        reloadable: false,
+        trackCount: tracks.length,
+        initialPlaylist: PlaylistDetail(
+          id: 0,
+          name: preview.name,
+          coverImgUrl: preview.coverImgUrl,
+          description: preview.description,
+          source: MusicSource.spotify,
+          tracks: tracks,
+          playCount: 0,
+          creator: 'Spotify',
+          trackCount: tracks.length,
+          createTime: 0,
+          updateTime: 0,
+          tags: const ['Spotify', '电台'],
+        ),
+      ),
+    );
+  }
+
+  /// 打开艺术家详情页。页面自己去拉数据，这里只把来源与专辑点击接管交给它。
+  void _openSpotifyArtist(SpotifyPlaylistPreview preview) {
+    widget.onOpenSecondary(
+      ArtistDetailPage(
+        playback: widget.playback,
+        artistId: preview.id,
+        artistName: preview.name,
+        source: MusicSource.spotify,
+        // Spotify 专辑 id 是 base62 字符串，内置的网易云 AlbumDetailPage 读不了，
+        // 走本页既有的 Spotify 专辑路径。
+        onOpenAlbum: (album) => _openSpotifyAlbum((
+          id: album.id.toString(),
+          name: album.name,
+          artists: preview.name,
+          coverImgUrl: album.picUrl ?? '',
+        )),
+      ),
+    );
+  }
+
+  /// 个性化分区里的一张卡被点开：按**卡片自己**的类型分流。
+  ///
+  /// 不能按分区类型分——pathfinder 首页的「More like xxx」会把歌单和专辑混在一排。
+  void _openPersonalizedItem(SpotifyPlaylistPreview preview) {
+    switch (preview.itemKind) {
+      case SpotifyPersonalizedKind.playlist:
+        _openSpotifyPlaylist(preview);
+      case SpotifyPersonalizedKind.radio:
+        _openSpotifyRadio(preview);
+      case SpotifyPersonalizedKind.artist:
+        _openSpotifyArtist(preview);
+      case SpotifyPersonalizedKind.album:
+        _openSpotifyAlbum((
+          id: preview.id,
+          name: preview.name,
+          artists: preview.description,
+          coverImgUrl: preview.coverImgUrl,
+        ));
+      case SpotifyPersonalizedKind.track:
+      case SpotifyPersonalizedKind.mixed:
+        // track 由 _NewSongsSection 直接播放；mixed 只是分区级类型，
+        // 落不到单张卡片上（见 DiscoveryService._parseCollectionItems）。
+        break;
+    }
   }
 
   void _onAccountChanged() {
@@ -395,7 +469,12 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
   void _openDailyDetail() {
     if (_daily.isEmpty) return;
     widget.onOpenSecondary(
-      DailyRecommendPage(tracks: _daily, playback: widget.playback),
+      DailyRecommendPage(
+        tracks: _daily,
+        playback: widget.playback,
+        token: widget.account.token,
+        desktopLayout: true,
+      ),
     );
   }
 
@@ -643,10 +722,16 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
   // ===== 榜单 =====
 
   List<Widget> _leaderboardSections(HomeState state) {
+    // 网易云榜单入口暂时下线：历史选中的网易云源一律回退到 Spotify，
+    // 相关代码保留以便恢复。
+    if (_leaderboardSource != _LeaderboardSource.spotify) {
+      _leaderboardSource = _LeaderboardSource.spotify;
+    }
     final isSpotify = _leaderboardSource == _LeaderboardSource.spotify;
     final toplists = isSpotify ? _spotifyToplists : state.toplists;
     debugPrint('[DHP] _leaderboardSections toplists=${toplists.length}');
     return [
+      if (isSpotify) ..._personalizedSections(),
       _LeaderboardDashboard(
         source: _leaderboardSource,
         loading: isSpotify && _spotifyToplistsLoading,
@@ -693,28 +778,68 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
           widget.onOpenPlaylist(toplist.id, toplist.name, toplist.coverImgUrl);
         },
       ),
-      if (isSpotify) ...[
-        const SizedBox(height: 28),
-        _SpotifyAlbumSection(
-          title: '新碟上架',
-          items: _spotifyNewReleases,
-          onOpen: _openSpotifyAlbum,
+    ];
+  }
+
+  /// 号池 Spotify 账号的个性化分区，铺在热门榜单之前。
+  ///
+  /// 分区是后端按「哪几路数据真的取到了」动态给的，本地不硬编码顺序或数量，
+  /// 空了就整段不渲染——原来的「新碟上架 / Hip Hop / 摇滚…」是写死的六个分类，
+  /// 后端 404 之后只会留下六个永远转圈的 spinner，这次不再重蹈覆辙。
+  List<Widget> _personalizedSections() {
+    if (_spotifySections.isEmpty) {
+      if (!_spotifySectionsLoading) return const [];
+      return const [
+        SizedBox(
+          height: 140,
+          child: Center(child: MiuixCircularProgressIndicator()),
         ),
-        for (final entry in _spotifyCategoryGroups.entries) ...[
-          const SizedBox(height: 28),
-          _SpotifyDiscoverySection(
-            title: entry.key,
-            items: entry.value,
-            onOpen: _openSpotifyPlaylist,
+        SizedBox(height: 28),
+      ];
+    }
+    return [
+      for (final section in _spotifySections) ...[
+        if (section.kind == SpotifyPersonalizedKind.track)
+          _NewSongsSection(
+            title: section.title,
+            tracks: _toTracks(section.tracks),
+            onPlay: (track, queue) =>
+                widget.playback.playTrack(track, queue: queue),
+          )
+        else
+          _SpotifyCollectionSection(
+            title: section.title,
+            description: section.description,
+            items: section.collections,
+            onOpen: _openPersonalizedItem,
           ),
-        ],
+        const SizedBox(height: 28),
       ],
     ];
   }
+
+  List<Track> _toTracks(List<ToplistTrack> items) => items
+      .map(
+        (item) => Track(
+          id: item.id,
+          name: item.name,
+          artists: item.artists,
+          album: item.album,
+          picUrl: item.picUrl,
+          source: item.source ?? MusicSource.spotify,
+          duration: item.duration == null
+              ? null
+              : Duration(milliseconds: item.duration!),
+        ),
+      )
+      .where((track) => track.id.isNotEmpty)
+      .toList(growable: false);
 }
 
 enum _HomeTab { recommend, leaderboard }
 
+// 网易云榜单入口暂时下线：netease 枚举值暂未被引用，保留以便恢复。
+// ignore: unused_field
 enum _LeaderboardSource { netease, spotify }
 
 /// 4 张推荐卡的位置标识，用于按卡索引已解析的动态视觉。
@@ -1703,10 +1828,17 @@ class _PersonalFmSection extends StatelessWidget {
 /// 个性化新歌区块（桌面）：横向新歌卡片列。遵守本文件「横向条不用
 /// ListView」（无障碍桥缺陷），故限量 + SingleChildScrollView + Row。
 class _NewSongsSection extends StatelessWidget {
-  const _NewSongsSection({required this.tracks, required this.onPlay});
+  const _NewSongsSection({
+    required this.tracks,
+    required this.onPlay,
+    this.title = '个性化新歌',
+  });
 
   final List<Track> tracks;
   final void Function(Track track, List<Track> queue) onPlay;
+
+  /// 区块标题。个性化分区会用后端给的标题（如「你收藏的音乐」）覆盖默认值。
+  final String title;
 
   @override
   Widget build(BuildContext context) {
@@ -1715,7 +1847,7 @@ class _NewSongsSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const _SectionHeader(title: '个性化新歌'),
+        _SectionHeader(title: title),
         const SizedBox(height: 12),
         SizedBox(
           height: 200,
@@ -1855,12 +1987,13 @@ class _LeaderboardDashboard extends StatelessWidget {
                 ),
                 entry: MiuixDropdownEntry(
                   items: [
-                    MiuixDropdownItem(
-                      text: '网易云音乐',
-                      selected: source == _LeaderboardSource.netease,
-                      onClick: () =>
-                          onSourceChanged(_LeaderboardSource.netease),
-                    ),
+                    // 网易云榜单入口暂时下线，保留代码以便恢复。
+                    // MiuixDropdownItem(
+                    //   text: '网易云音乐',
+                    //   selected: source == _LeaderboardSource.netease,
+                    //   onClick: () =>
+                    //       onSourceChanged(_LeaderboardSource.netease),
+                    // ),
                     MiuixDropdownItem(
                       text: 'Spotify',
                       selected: source == _LeaderboardSource.spotify,
@@ -2291,21 +2424,28 @@ class _Cover extends StatelessWidget {
   }
 }
 
-/// Spotify 发现页的歌单分类区块。
-class _SpotifyDiscoverySection extends StatelessWidget {
-  const _SpotifyDiscoverySection({
+/// 个性化首页里「一排卡片」的通用区块（歌单 / 电台 / 专辑共用）。
+///
+/// 三者的卡片信息结构完全一致（封面 + 主标题 + 副标题），差别只在点开后的去处，
+/// 由调用方通过 [onOpen] 分流，故不再按类型各写一套区块。
+class _SpotifyCollectionSection extends StatelessWidget {
+  const _SpotifyCollectionSection({
     required this.title,
+    required this.description,
     required this.items,
     required this.onOpen,
   });
 
   final String title;
+  final String description;
   final List<SpotifyPlaylistPreview> items;
   final ValueChanged<SpotifyPlaylistPreview> onOpen;
 
   @override
   Widget build(BuildContext context) {
     final theme = MiuixTheme.of(context);
+    // 空分区由调用方过滤掉，这里不再画 spinner——画了就会永远停在转圈。
+    if (items.isEmpty) return const SizedBox.shrink();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2316,45 +2456,45 @@ class _SpotifyDiscoverySection extends StatelessWidget {
             fontWeight: FontWeight.w700,
           ),
         ),
-        const SizedBox(height: 16),
-        if (items.isEmpty)
-          const SizedBox(
-            height: 120,
-            child: Center(child: MiuixCircularProgressIndicator()),
-          )
-        else
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final columns = constraints.maxWidth >= 980 ? 4 : 2;
-              final gap = 16.0;
-              final cardWidth = (constraints.maxWidth - (columns - 1) * gap) / columns;
-              return Wrap(
-                spacing: gap,
-                runSpacing: gap,
-                children: [
-                  for (final item in items)
-                    SizedBox(
-                      width: cardWidth,
-                      child: _SpotifyPlaylistCard(
-                        preview: item,
-                        onOpen: onOpen,
-                      ),
-                    ),
-                ],
-              );
-            },
+        if (description.isNotEmpty) ...[
+          const SizedBox(height: 5),
+          Text(
+            description,
+            style: theme.textStyles.body2.copyWith(
+              color: theme.colors.onSurfaceVariantSummary,
+            ),
           ),
+        ],
+        const SizedBox(height: 16),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            const columnsWide = 4;
+            const gap = 16.0;
+            final columns = constraints.maxWidth >= 980 ? columnsWide : 2;
+            final cardWidth =
+                (constraints.maxWidth - (columns - 1) * gap) / columns;
+            return Wrap(
+              spacing: gap,
+              runSpacing: gap,
+              children: [
+                // 一屏最多两行，再多就挤掉下方的榜单；后端也已按分区限量。
+                for (final item in items.take(columns * 2))
+                  SizedBox(
+                    width: cardWidth,
+                    child: _SpotifyPlaylistCard(preview: item, onOpen: onOpen),
+                  ),
+              ],
+            );
+          },
+        ),
       ],
     );
   }
 }
 
-/// Spotify 发现页的单张歌单卡片。
+/// 个性化分区里的单张卡片（歌单 / 电台 / 专辑共用）。
 class _SpotifyPlaylistCard extends StatelessWidget {
-  const _SpotifyPlaylistCard({
-    required this.preview,
-    required this.onOpen,
-  });
+  const _SpotifyPlaylistCard({required this.preview, required this.onOpen});
 
   final SpotifyPlaylistPreview preview;
   final ValueChanged<SpotifyPlaylistPreview> onOpen;
@@ -2376,117 +2516,11 @@ class _SpotifyPlaylistCard extends StatelessWidget {
             preview.name,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: theme.textStyles.body1.copyWith(
-              fontWeight: FontWeight.w600,
-            ),
+            style: theme.textStyles.body1.copyWith(fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 4),
           MiuixText(
             preview.description,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textStyles.footnote2.copyWith(
-              color: theme.colors.onSurfaceVariantSummary,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Spotify 发现页的专辑分类区块。
-class _SpotifyAlbumSection extends StatelessWidget {
-  const _SpotifyAlbumSection({
-    required this.title,
-    required this.items,
-    required this.onOpen,
-  });
-
-  final String title;
-  final List<SpotifyAlbumPreview> items;
-  final ValueChanged<SpotifyAlbumPreview> onOpen;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = MiuixTheme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: theme.textStyles.headline1.copyWith(
-            color: theme.colors.onBackground,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        const SizedBox(height: 16),
-        if (items.isEmpty)
-          const SizedBox(
-            height: 120,
-            child: Center(child: MiuixCircularProgressIndicator()),
-          )
-        else
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final columns = constraints.maxWidth >= 980 ? 4 : 2;
-              final gap = 16.0;
-              final cardWidth = (constraints.maxWidth - (columns - 1) * gap) / columns;
-              return Wrap(
-                spacing: gap,
-                runSpacing: gap,
-                children: [
-                  for (final item in items)
-                    SizedBox(
-                      width: cardWidth,
-                      child: _SpotifyAlbumCard(
-                        preview: item,
-                        onOpen: onOpen,
-                      ),
-                    ),
-                ],
-              );
-            },
-          ),
-      ],
-    );
-  }
-}
-
-/// Spotify 发现页的单张专辑卡片。
-class _SpotifyAlbumCard extends StatelessWidget {
-  const _SpotifyAlbumCard({
-    required this.preview,
-    required this.onOpen,
-  });
-
-  final SpotifyAlbumPreview preview;
-  final ValueChanged<SpotifyAlbumPreview> onOpen;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = MiuixTheme.of(context);
-    return MiuixCard(
-      cornerRadius: 18,
-      insideMargin: const EdgeInsets.all(12),
-      feedbackType: MiuixPressFeedbackType.sink,
-      onPressed: () => onOpen(preview),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _Cover(url: preview.coverImgUrl, size: 120, cornerRadius: 14),
-          const SizedBox(height: 10),
-          MiuixText(
-            preview.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textStyles.body1.copyWith(
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 4),
-          MiuixText(
-            preview.artists,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: theme.textStyles.footnote2.copyWith(

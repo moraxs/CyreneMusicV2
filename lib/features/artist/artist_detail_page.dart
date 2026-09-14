@@ -6,7 +6,10 @@ import 'package:flutter_miuix/miuix.dart';
 import '../../application/playback/playback_controller.dart';
 import '../../domain/models/artist.dart';
 import '../../domain/models/media_url.dart';
+import '../../domain/models/music_source.dart';
+import '../../domain/models/track.dart';
 import '../../infrastructure/services/artist_service.dart';
+import '../../infrastructure/services/discovery_service.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
 import '../album/album_detail_page.dart';
 import '../player/cyrene_track_tile.dart';
@@ -17,11 +20,21 @@ class ArtistDetailPage extends StatefulWidget {
     required this.playback,
     this.artistId,
     this.artistName,
+    this.source = MusicSource.netease,
+    this.onOpenAlbum,
   });
 
   final PlaybackController playback;
   final Object? artistId;
   final String? artistName;
+
+  /// 数据来源。[MusicSource.spotify] 时走 pathfinder（`/spotify/artist/:id`），
+  /// 其余走网易云的 [ArtistService]。
+  final MusicSource source;
+
+  /// 专辑卡点击。为空时走内置的网易云 [AlbumDetailPage]——Spotify 的专辑 id 是
+  /// base62 字符串，那个页面读不了，必须由调用方接管。
+  final void Function(ArtistAlbum album)? onOpenAlbum;
 
   @override
   State<ArtistDetailPage> createState() => _ArtistDetailPageState();
@@ -60,6 +73,8 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
       }
       final detail = id == null
           ? null
+          : widget.source == MusicSource.spotify
+          ? await _loadSpotify(id.toString())
           : await ArtistService.instance.fetchArtistDetail(id);
       if (!mounted || requestId != _requestId) return;
       setState(() {
@@ -74,6 +89,50 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
         _error = '歌手详情加载失败，请稍后重试。';
       });
     }
+  }
+
+  /// Spotify 艺术家：把 [SpotifyArtistDetail] 映射成本页通用的 [ArtistDetailInfo]。
+  ///
+  /// 字段对不齐的地方：Spotify 没有 alias / MV 概念，`musicSize` 只反映「热门曲目」
+  /// 这一小撮而非全部作品，所以这两项留空，头部那行统计会退化成只显示专辑数。
+  Future<ArtistDetailInfo?> _loadSpotify(String artistId) async {
+    final artist = await DiscoveryService.instance.getSpotifyArtist(artistId);
+    if (artist == null) return null;
+    return ArtistDetailInfo(
+      artist: ArtistInfo(
+        id: artist.id,
+        name: artist.name,
+        picUrl: artist.coverImgUrl.isEmpty ? null : artist.coverImgUrl,
+        briefDesc: artist.biography.isEmpty
+            ? formatSpotifyArtistStats(artist)
+            : artist.biography,
+        albumSize: artist.albums.length,
+      ),
+      songs: artist.tracks
+          .map(
+            (item) => Track(
+              id: item.id,
+              name: item.name,
+              artists: item.artists,
+              album: item.album,
+              picUrl: item.picUrl,
+              source: MusicSource.spotify,
+              duration: item.duration == null
+                  ? null
+                  : Duration(milliseconds: item.duration!),
+            ),
+          )
+          .toList(growable: false),
+      albums: artist.albums
+          .map(
+            (album) => ArtistAlbum(
+              id: album.id,
+              name: album.name,
+              picUrl: album.coverImgUrl,
+            ),
+          )
+          .toList(growable: false),
+    );
   }
 
   @override
@@ -156,14 +215,21 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
                 final album = detail.albums[index];
                 return _AlbumCard(
                   album: album,
-                  onTap: () => Navigator.of(context).push(
-                    CupertinoPageRoute<void>(
-                      builder: (_) => AlbumDetailPage(
-                        albumId: album.id,
-                        playback: widget.playback,
+                  onTap: () {
+                    final onOpenAlbum = widget.onOpenAlbum;
+                    if (onOpenAlbum != null) {
+                      onOpenAlbum(album);
+                      return;
+                    }
+                    Navigator.of(context).push(
+                      CupertinoPageRoute<void>(
+                        builder: (_) => AlbumDetailPage(
+                          albumId: album.id,
+                          playback: widget.playback,
+                        ),
                       ),
-                    ),
-                  ),
+                    );
+                  },
                 );
               },
             ),

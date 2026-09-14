@@ -122,12 +122,21 @@ class UrlService extends ChangeNotifier {
   String get spotifySearchUrl => _path('/spotify/search');
   String spotifyPlaylistUrl(String playlistId, {int limit = 50}) =>
       _path('/spotify/playlist/$playlistId?limit=$limit');
-  String spotifyNewReleasesUrl({int limit = 20, int offset = 0, String country = 'US'}) =>
-      _path('/spotify/new-releases?country=$country&limit=$limit&offset=$offset');
   String spotifyAlbumTracksUrl(String albumId, {int limit = 50, int offset = 0, String country = 'US'}) =>
       _path('/spotify/album/$albumId/tracks?country=$country&limit=$limit&offset=$offset');
-  String spotifyCategoryPlaylistsUrl(String categoryId, {int limit = 20, int offset = 0, String country = 'US'}) =>
-      _path('/spotify/category/$categoryId/playlists?country=$country&limit=$limit&offset=$offset');
+  /// 号池 Spotify 账号的个性化首页分区（你的热门合辑 / 推荐电台 / …）。
+  /// 只能看见账号收藏过的内容，是 [spotifyHomeUrl] 的降级路径。
+  String spotifyPersonalizedUrl({int limit = 20}) =>
+      _path('/spotify/personalized?limit=$limit');
+  /// 号池 Spotify 账号的官方同款首页（Daily Mix / Your top mixes / daylist / …）。
+  /// 走 Spotify 内部 GraphQL 网关，响应形状与 [spotifyPersonalizedUrl] 一致。
+  String spotifyHomeUrl({int limit = 20}) =>
+      _path('/spotify/home?limit=$limit');
+  /// 艺术家详情（头像 / 粉丝数 / 月听众 / 简介 / 热门曲目 / 代表专辑）。
+  String spotifyArtistUrl(String artistId) => _path('/spotify/artist/$artistId');
+  /// 单曲电台：以某首歌为种子生成的 Spotify 推荐。
+  String spotifyRecommendationsUrl(String trackId, {int limit = 30}) =>
+      _path('/spotify/recommendations/$trackId?limit=$limit');
 
   // Update
   /// 应用更新检查端点：返回最新版本号、更新说明与各平台下载地址。

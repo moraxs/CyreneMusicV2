@@ -14,7 +14,8 @@ class ArtistInfo {
     this.mvSize,
   });
 
-  final int id;
+  /// 网易云是数字 id，Spotify 是 base62 字符串，故用 Object 承载。
+  final Object id;
   final String name;
   final String? picUrl;
   final String? img1v1Url;
@@ -25,7 +26,7 @@ class ArtistInfo {
   final int? mvSize;
 
   factory ArtistInfo.fromJson(Map<String, Object?> json) => ArtistInfo(
-    id: (json['id'] as num?)?.toInt() ?? 0,
+    id: (json['id'] as num?)?.toInt() ?? json['id']?.toString() ?? 0,
     name: json['name']?.toString() ?? '',
     picUrl: json['picUrl']?.toString(),
     img1v1Url: json['img1v1Url']?.toString(),
@@ -81,14 +82,15 @@ class ArtistAlbum {
     this.publishTime,
   });
 
-  final int id;
+  /// 网易云是数字 id，Spotify 是 base62 字符串，故用 Object 承载。
+  final Object id;
   final String name;
   final String? picUrl;
   final String? company;
   final int? publishTime;
 
   factory ArtistAlbum.fromJson(Map<String, Object?> json) => ArtistAlbum(
-    id: (json['id'] as num?)?.toInt() ?? 0,
+    id: (json['id'] as num?)?.toInt() ?? json['id']?.toString() ?? 0,
     name: json['name']?.toString() ?? '',
     picUrl: json['picUrl']?.toString(),
     company: json['company']?.toString(),
