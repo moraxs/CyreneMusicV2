@@ -1,5 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
+    <!-- 默认配置：允许所有 HTTP 流量以兼容更多代理和音频源，但这存在安全风险 -->
+    <!-- 由于音乐播放经常遇到各种不知名的 CDN 或者代理地址 -->
+    <!-- base-config 必须写在 domain-config 之前：Android 的解析器是顺序读的，
+         domain-config 解析时若 base-config 还没读到，它继承的就是平台默认值
+         而不是这里的配置。 -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
     <!-- 允许本地代理服务器的 HTTP 明文流量 -->
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">localhost</domain>
@@ -12,12 +23,4 @@
         <domain includeSubdomains="true">qq.com</domain>
         <domain includeSubdomains="true">kugou.com</domain>
     </domain-config>
-
-    <!-- 默认配置：允许所有 HTTP 流量以兼容更多代理和音频源，但这存在安全风险 -->
-    <!-- 由于音乐播放经常遇到各种不知名的 CDN 或者代理地址 -->
-    <base-config cleartextTrafficPermitted="true">
-        <trust-anchors>
-            <certificates src="system" />
-        </trust-anchors>
-    </base-config>
 </network-security-config>

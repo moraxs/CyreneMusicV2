@@ -5,6 +5,7 @@ import 'package:flutter_miuix/miuix.dart';
 import '../../application/auth/account_session_controller.dart';
 import '../../domain/models/user.dart';
 import '../../infrastructure/services/invite_service.dart';
+import '../../infrastructure/services/public_config_service.dart';
 import '../../presentation/cyrene/cyrene_overlays.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
 import '../../presentation/cyrene/cyrene_user_hero_card.dart';
@@ -78,12 +79,12 @@ class PersonalCenterPage extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 12),
+                // 自带下方间距：活动关闭时整段（含间距）一起消失。
                 _InviteSection(
                   account: account,
                   onOpenInvitePage: () =>
                       _openPage(context, InvitePage(account: account)),
                 ),
-                const SizedBox(height: 12),
                 CyreneMenuGroup(
                   children: [
                     CyreneMenuRow(
@@ -204,6 +205,9 @@ class PersonalCenterPage extends StatelessWidget {
 /// 单独做成有状态组件而不是塞进 [PersonalCenterPage] 的 build：这一段要拉一次
 /// `/invite/summary` 才能显示邀请码与积分，不该把整个个人中心变成 StatefulWidget。
 /// 拉取失败时退化成「不带摘要的入口行」——邀请入口本身不该因为网络抖动而消失。
+///
+/// 是否显示由后端 `/config/public` 的 `invite.enabled` 决定：开关确认之前先
+/// 不渲染（免得入口闪一下又消失），拿不到配置时照常显示。
 class _InviteSection extends StatefulWidget {
   const _InviteSection({required this.account, required this.onOpenInvitePage});
 
@@ -221,10 +225,21 @@ class _InviteSectionState extends State<_InviteSection> {
   var _loading = true;
   InviteSummary? _summary;
 
+  /// 活动开关；null 表示还没问到后端。
+  bool? _enabled;
+
   @override
   void initState() {
     super.initState();
-    _load();
+    _loadEnabled();
+  }
+
+  /// 先问开关再拉摘要：活动关闭时后端整组 /invite/* 回 403，没必要白发一次。
+  Future<void> _loadEnabled() async {
+    final enabled = await PublicConfigService.instance.fetchInviteEnabled();
+    if (!mounted) return;
+    setState(() => _enabled = enabled);
+    if (enabled) await _load();
   }
 
   Future<void> _load() async {
@@ -260,8 +275,16 @@ class _InviteSectionState extends State<_InviteSection> {
 
   @override
   Widget build(BuildContext context) {
+    if (_enabled != true) return const SizedBox.shrink();
     final summary = _summary;
     final bound = summary?.hasBoundInviter ?? false;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: _group(summary, bound),
+    );
+  }
+
+  Widget _group(InviteSummary? summary, bool bound) {
     return CyreneMenuGroup(
       children: [
         CyreneMenuRow(

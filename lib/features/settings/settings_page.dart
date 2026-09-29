@@ -27,6 +27,7 @@ import 'ai_settings_page.dart';
 import 'together_settings_page.dart';
 import 'equalizer_page.dart';
 import 'login_page.dart';
+import 'membership_center_page.dart';
 import 'personal_center_page.dart';
 import 'settings_actions.dart';
 
@@ -293,6 +294,28 @@ class SettingsPage extends StatelessWidget {
           context,
           PersonalCenterPage(
             account: account,
+            onOpenSecondary: onOpenSecondary,
+            body: body,
+          ),
+        ),
+      ),
+      // 会员中心：卡面只在已购时显示会员，未购就是购买入口；下面接「我的订单」。
+      // 右侧摘要取本机快照（进页后 PremiumMembershipSection 会拉 /card/status
+      // 并在不一致时回写，所以这里不自己发请求）。
+      CyreneMenuRow(
+        key: const Key('open-membership-center'),
+        vector: MiuixIcons.extended.byName('bankCards')!,
+        iconBackground: _iconPurple,
+        title: '会员中心',
+        subtitle: 'Cyrene Premium 身份与我的订单',
+        value: user.hasListeningCard
+            ? 'Premium'
+            : (user.isSponsor ? 'Sponsor' : null),
+        onTap: () => _openPage(
+          context,
+          MembershipCenterPage(
+            account: account,
+            audioSources: audioSources,
             onOpenSecondary: onOpenSecondary,
             body: body,
           ),

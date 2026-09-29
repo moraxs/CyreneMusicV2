@@ -104,7 +104,8 @@ class _OnboardingPageState extends State<OnboardingPage> {
     if (_agreementReadToEnd || !_agreementScrollController.hasClients) return;
     final position = _agreementScrollController.position;
     // maxScrollExtent 为 0 即内容不足一屏，视为已读完（见 initState）。
-    final atEnd = position.maxScrollExtent <= 0 ||
+    final atEnd =
+        position.maxScrollExtent <= 0 ||
         position.pixels >= position.maxScrollExtent - 20;
     if (atEnd && mounted) setState(() => _agreementReadToEnd = true);
   }
@@ -174,13 +175,13 @@ class _OnboardingPageState extends State<OnboardingPage> {
                                 ),
                               ),
                             ),
-                            Padding(
-                              padding: EdgeInsets.fromLTRB(
+                            // 键盘弹出时（登录步骤）底栏跟着上移，按钮不被遮住。
+                            _KeyboardInsetPadding(
+                              padding: const EdgeInsets.fromLTRB(
                                 24,
                                 12,
                                 24,
-                                // 键盘弹出时（登录步骤）底栏跟着上移，按钮不被遮住。
-                                16 + MediaQuery.viewInsetsOf(context).bottom,
+                                16,
                               ),
                               child: _buildActionBar(),
                             ),
@@ -265,7 +266,10 @@ class _OnboardingPageState extends State<OnboardingPage> {
           label: hasEnabledSource ? '下一步' : '请先添加并启用一个音源',
           enabled: hasEnabledSource,
           onPressed: widget.onAudioSourceDone,
-          secondary: MiuixTextButton('跳过，稍后在设置里配置', onPressed: _skipAudioSource),
+          secondary: MiuixTextButton(
+            '跳过，稍后在设置里配置',
+            onPressed: _skipAudioSource,
+          ),
         );
       },
     ),
@@ -279,7 +283,8 @@ class _OnboardingPageState extends State<OnboardingPage> {
   Future<void> _skipAudioSource() async {
     final confirmed = await _confirmSkip(
       title: '跳过音源配置？',
-      summary: '没有可用音源时无法解析在线歌曲，搜索到的歌会播放失败。'
+      summary:
+          '没有可用音源时无法解析在线歌曲，搜索到的歌会播放失败。'
           '你可以随时在「设置 → 播放与音源」里补上。',
     );
     // 跳过音源不等于跳过引导：仍要进样式设置步，最后统一完成。
@@ -335,5 +340,24 @@ class _OnboardingPageState extends State<OnboardingPage> {
         ],
       );
     },
+  );
+}
+
+/// 底边额外让出键盘高度的 Padding。
+///
+/// viewInsets 在键盘动画期间逐帧变化，依赖收在这一层：整页 build 里直接读的话，
+/// 引导页连同当前步骤正文每帧都要重建一遍。
+class _KeyboardInsetPadding extends StatelessWidget {
+  const _KeyboardInsetPadding({required this.padding, required this.child});
+
+  final EdgeInsets padding;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: padding.copyWith(
+      bottom: padding.bottom + MediaQuery.viewInsetsOf(context).bottom,
+    ),
+    child: child,
   );
 }

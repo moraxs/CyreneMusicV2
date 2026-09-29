@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
 
 import '../../application/auth/account_session_controller.dart';
+import '../../infrastructure/services/public_config_service.dart';
 import '../../presentation/cyrene/cyrene_aurora_backdrop.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
 
@@ -74,9 +75,14 @@ class LoginViewState extends State<LoginView> {
   final _passwordController = TextEditingController();
   final _passwordFocus = FocusNode();
 
-  // 登录/注册双模式。注册表单复用同一外壳（品牌头 + 滚动 + 模式切换链接），
-  // 主体换成 `_RegisterForm`；独立登录页与引导页两处入口因此自动同步获得注册能力。
+  // 登录/注册/找回密码三模式，共用同一外壳（品牌头 + 滚动 + 模式切换链接），
+  // 主体分别换成 `_RegisterForm` / `_ResetPasswordForm`；独立登录页与引导页两处
+  // 入口因此自动同步获得注册与找回密码能力。
   var _showRegister = false;
+  var _showReset = false;
+
+  /// 重置成功回到登录模式时的回执；进登录态先清掉，避免旧提示残留。
+  String? _resetNotice;
 
   /// 当前是否为注册模式。引导页底部操作条监听它在「注册新账号 / 已有账号直接登录」
   /// 之间切换文案与动作；独立登录页不依赖它。
@@ -88,16 +94,22 @@ class LoginViewState extends State<LoginView> {
 
   /// 切入注册模式（供引导页底部「注册」按钮触发）。
   void switchToRegister() {
-    if (_showRegister) return;
-    setState(() => _showRegister = true);
+    if (_showRegister && !_showReset) return;
+    setState(() {
+      _showRegister = true;
+      _showReset = false;
+    });
     registerMode.value = true;
     widget.account.clearError();
   }
 
-  /// 切回登录模式（供注册流程自身回切 / 外部兜底）。
+  /// 切回登录模式（供注册/找回密码流程自身回切 / 外部兜底）。
   void switchToLogin() {
-    if (!_showRegister) return;
-    setState(() => _showRegister = false);
+    if (!_showRegister && !_showReset) return;
+    setState(() {
+      _showRegister = false;
+      _showReset = false;
+    });
     registerMode.value = false;
     widget.account.clearError();
   }
@@ -125,125 +137,155 @@ class LoginViewState extends State<LoginView> {
       final theme = MiuixTheme.of(context);
       final colors = theme.colors;
       final isBusy = state.isBusy;
-      return ListView(
-        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-        padding: widget.padding.copyWith(
-          bottom:
-              widget.padding.bottom + MediaQuery.viewInsetsOf(context).bottom,
-        ),
-        children: [
-          Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 460),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _BrandHeader(registering: _showRegister),
-                  const SizedBox(height: 32),
-                  if (_showRegister)
-                    _RegisterForm(
-                      account: widget.account,
-                      onSignedIn: () => widget.onSignedIn?.call(),
-                      onAutoLoginFailed: _handleAutoLoginFailed,
-                    )
-                  else ...[
-                    // 字段自带浮动标签与填充底色，直接铺排、不再套外部容器。
-                    MiuixTextField(
-                      key: const Key('login-account-field'),
-                      controller: _accountController,
-                      enabled: !isBusy,
-                      label: '邮箱或用户名',
-                      singleLine: true,
-                      leadingIcon: _FieldIcon(
+      return _KeyboardAvoidingList(
+        padding: widget.padding,
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _BrandHeader(registering: _showRegister),
+                const SizedBox(height: 32),
+                if (_showReset)
+                  _ResetPasswordForm(
+                    account: widget.account,
+                    onResetSucceeded: _handleResetSucceeded,
+                  )
+                else if (_showRegister)
+                  _RegisterForm(
+                    account: widget.account,
+                    onSignedIn: () => widget.onSignedIn?.call(),
+                    onAutoLoginFailed: _handleAutoLoginFailed,
+                  )
+                else ...[
+                  // 重置成功回到登录态时给一句回执，否则用户不知道刚那步生效了没。
+                  if (_resetNotice != null) ...[
+                    CyreneInlineAlert(
+                      key: const Key('login-reset-success'),
+                      vector: MiuixIcons.extended.byName('ok')!,
+                      title: '密码已重置',
+                      description: _resetNotice!,
+                    ),
+                    const SizedBox(height: 14),
+                  ],
+                  // 字段自带浮动标签与填充底色，直接铺排、不再套外部容器。
+                  MiuixTextField(
+                    key: const Key('login-account-field'),
+                    controller: _accountController,
+                    enabled: !isBusy,
+                    label: '邮箱或用户名',
+                    singleLine: true,
+                    leadingIcon: _FieldIcon(
+                      child: MiuixIcon(
+                        vector: MiuixIcons.extended.byName('contacts')!,
+                        size: 20,
+                        tint: colors.onSecondaryContainer,
+                      ),
+                    ),
+                    keyboardType: TextInputType.emailAddress,
+                    textInputAction: TextInputAction.next,
+                    onChanged: (_) => _clearFieldError(account: true),
+                    onSubmitted: (_) => _passwordFocus.requestFocus(),
+                  ),
+                  if (_accountError != null) _FieldError(_accountError!),
+                  const SizedBox(height: 12),
+                  MiuixTextField(
+                    key: const Key('login-password-field'),
+                    controller: _passwordController,
+                    focusNode: _passwordFocus,
+                    enabled: !isBusy,
+                    label: '密码',
+                    singleLine: true,
+                    obscureText: _obscurePassword,
+                    leadingIcon: _FieldIcon(
+                      child: MiuixIcon(
+                        vector: MiuixIcons.extended.byName('lock')!,
+                        size: 20,
+                        tint: colors.onSecondaryContainer,
+                      ),
+                    ),
+                    trailingIcon: Padding(
+                      padding: const EdgeInsets.only(left: 4, right: 8),
+                      child: MiuixIconButton(
+                        onPressed: () => setState(
+                          () => _obscurePassword = !_obscurePassword,
+                        ),
                         child: MiuixIcon(
-                          vector: MiuixIcons.extended.byName('contacts')!,
+                          vector: MiuixIcons.extended.byName(
+                            _obscurePassword ? 'hide' : 'show',
+                          )!,
                           size: 20,
                           tint: colors.onSecondaryContainer,
                         ),
                       ),
-                      keyboardType: TextInputType.emailAddress,
-                      textInputAction: TextInputAction.next,
-                      onChanged: (_) => _clearFieldError(account: true),
-                      onSubmitted: (_) => _passwordFocus.requestFocus(),
                     ),
-                    if (_accountError != null) _FieldError(_accountError!),
-                    const SizedBox(height: 12),
-                    MiuixTextField(
-                      key: const Key('login-password-field'),
-                      controller: _passwordController,
-                      focusNode: _passwordFocus,
-                      enabled: !isBusy,
-                      label: '密码',
-                      singleLine: true,
-                      obscureText: _obscurePassword,
-                      leadingIcon: _FieldIcon(
-                        child: MiuixIcon(
-                          vector: MiuixIcons.extended.byName('lock')!,
-                          size: 20,
-                          tint: colors.onSecondaryContainer,
-                        ),
-                      ),
-                      trailingIcon: Padding(
-                        padding: const EdgeInsets.only(left: 4, right: 8),
-                        child: MiuixIconButton(
-                          onPressed: () => setState(
-                            () => _obscurePassword = !_obscurePassword,
-                          ),
-                          child: MiuixIcon(
-                            vector: MiuixIcons.extended.byName(
-                              _obscurePassword ? 'hide' : 'show',
-                            )!,
-                            size: 20,
-                            tint: colors.onSecondaryContainer,
-                          ),
-                        ),
-                      ),
-                      textInputAction: TextInputAction.done,
-                      onChanged: (_) => _clearFieldError(account: false),
-                      onSubmitted: (_) => _submit(),
-                    ),
-                    if (_passwordError != null) _FieldError(_passwordError!),
-                    if (state.errorMessage != null) ...[
-                      const SizedBox(height: 14),
-                      CyreneInlineAlert(
-                        key: const Key('login-error-message'),
-                        vector: MiuixIcons.extended.byName('info')!,
-                        title: '登录失败',
-                        description: state.errorMessage!,
-                        destructive: true,
-                      ),
-                    ],
-                    const SizedBox(height: 20),
-                    _SubmitButton(
-                      isSigningIn:
-                          state.status == AccountSessionStatus.signingIn,
-                      enabled: !isBusy,
-                      onPressed: _submit,
+                    textInputAction: TextInputAction.done,
+                    onChanged: (_) => _clearFieldError(account: false),
+                    onSubmitted: (_) => _submit(),
+                  ),
+                  if (_passwordError != null) _FieldError(_passwordError!),
+                  if (state.errorMessage != null) ...[
+                    const SizedBox(height: 14),
+                    CyreneInlineAlert(
+                      key: const Key('login-error-message'),
+                      vector: MiuixIcons.extended.byName('info')!,
+                      title: '登录失败',
+                      description: state.errorMessage!,
+                      destructive: true,
                     ),
                   ],
-                  const SizedBox(height: 14),
-                  Text(
-                    _showRegister
-                        ? '注册即表示你同意我们的服务条款与隐私政策'
-                        : '登录即表示你同意在此设备上安全保存会话信息',
-                    textAlign: TextAlign.center,
-                    style: theme.textStyles.footnote1.copyWith(
-                      color: colors.onSurfaceVariantSummary,
+                  // 找回密码入口贴在提交按钮上方右侧，与登录动作同屏可见。
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: MiuixTextButton(
+                      '忘记密码？',
+                      key: const Key('login-forgot-password-link'),
+                      onPressed: _openReset,
                     ),
                   ),
-                  const SizedBox(height: 6),
-                  // 注册模式里的「直接登录」回切链接始终保留；登录模式里的注册链接
-                  // 由 [showRegisterSwitch] 决定（引导页把它交给底部操作条，不重复展示）。
-                  if (_showRegister || widget.showRegisterSwitch)
-                    _ModeSwitchLink(
-                      registering: _showRegister,
-                      onTap: _toggleMode,
-                    ),
+                  const SizedBox(height: 8),
+                  _SubmitButton(
+                    isSigningIn: state.status == AccountSessionStatus.signingIn,
+                    enabled: !isBusy,
+                    onPressed: _submit,
+                  ),
                 ],
-              ),
+                const SizedBox(height: 14),
+                Text(
+                  _showRegister
+                      ? '注册即表示你同意我们的服务条款与隐私政策'
+                      : '登录即表示你同意在此设备上安全保存会话信息',
+                  textAlign: TextAlign.center,
+                  style: theme.textStyles.footnote1.copyWith(
+                    color: colors.onSurfaceVariantSummary,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                // 找回密码是登录态下的子流程，回登录链接必须始终保留，
+                // 否则用户会困在重置换密流程里出不来；注册模式里的「直接登录」
+                // 同样始终保留；登录模式里的注册链接由 [showRegisterSwitch]
+                // 决定（引导页把它交给底部操作条，不重复展示）。
+                if (_showReset)
+                  _ModeSwitchLink(
+                    label: '返回登录',
+                    buttonKey: const Key('reset-to-login-toggle'),
+                    onTap: switchToLogin,
+                  )
+                else if (_showRegister || widget.showRegisterSwitch)
+                  _ModeSwitchLink(
+                    label: _showRegister ? '已有账号？直接登录' : '没有账号？注册新账号',
+                    buttonKey: Key(
+                      _showRegister
+                          ? 'register-to-login-toggle'
+                          : 'login-to-register-toggle',
+                    ),
+                    onTap: _toggleMode,
+                  ),
+              ],
             ),
           ),
-        ],
+        ),
       );
     },
   );
@@ -270,9 +312,37 @@ class LoginViewState extends State<LoginView> {
   }
 
   void _toggleMode() {
-    setState(() => _showRegister = !_showRegister);
+    setState(() {
+      _showRegister = !_showRegister;
+      _showReset = false;
+    });
     registerMode.value = _showRegister;
     // 切换语境时清掉登录态的错误提示，避免上一个模式的报错残留在新模式。
+    widget.account.clearError();
+  }
+
+  /// 从登录模式进入找回密码。
+  void _openReset() {
+    setState(() {
+      _showReset = true;
+      _resetNotice = null;
+      // 先把上一位用户的密码清掉：既不留给重置换密流程当「新密码」，
+      // 也避免在屏幕上留着别人的输入。
+      _passwordController.clear();
+      _passwordError = null;
+    });
+    widget.account.clearError();
+  }
+
+  /// 重置成功：切回登录并预填刚重置的邮箱，用户只需再输一次新密码。
+  void _handleResetSucceeded(String email) {
+    setState(() {
+      _showReset = false;
+      _showRegister = false;
+      _accountController.text = email;
+      _passwordController.clear();
+      _resetNotice = '请使用新密码登录';
+    });
     widget.account.clearError();
   }
 
@@ -323,9 +393,7 @@ class _BrandHeader extends StatelessWidget {
         ),
         const SizedBox(height: 7),
         Text(
-          registering
-              ? '注册后即可登录，同步你的歌单、收藏与听歌记录'
-              : '登录以同步你的歌单、收藏与听歌记录',
+          registering ? '注册后即可登录，同步你的歌单、收藏与听歌记录' : '登录以同步你的歌单、收藏与听歌记录',
           textAlign: TextAlign.center,
           style: theme.textStyles.body2.copyWith(
             color: theme.colors.onSurfaceVariantSummary,
@@ -336,22 +404,21 @@ class _BrandHeader extends StatelessWidget {
   }
 }
 
-/// 登录/注册双模式的切换链接（表单底部，两模式互切）。
+/// 登录/注册/找回密码三模式间的切换链接（表单底部，三态互切）。
 class _ModeSwitchLink extends StatelessWidget {
-  const _ModeSwitchLink({required this.registering, required this.onTap});
+  const _ModeSwitchLink({
+    required this.label,
+    required this.buttonKey,
+    required this.onTap,
+  });
 
-  final bool registering;
+  final String label;
+  final Key buttonKey;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) => Center(
-    child: MiuixTextButton(
-      registering ? '已有账号？直接登录' : '没有账号？注册新账号',
-      key: Key(
-        registering ? 'register-to-login-toggle' : 'login-to-register-toggle',
-      ),
-      onPressed: onTap,
-    ),
+    child: MiuixTextButton(label, key: buttonKey, onPressed: onTap),
   );
 }
 
@@ -417,10 +484,19 @@ class _RegisterFormState extends State<_RegisterForm> {
   String? _errorMessage;
   String? _successMessage;
 
+  /// 邀请有礼开关（后端 /config/public）。确认开放前不显示邀请码输入框。
+  var _inviteEnabled = false;
+
   @override
   void initState() {
     super.initState();
     _checkRegistrationStatus();
+    _checkInviteEnabled();
+  }
+
+  Future<void> _checkInviteEnabled() async {
+    final enabled = await PublicConfigService.instance.fetchInviteEnabled();
+    if (mounted) setState(() => _inviteEnabled = enabled);
   }
 
   @override
@@ -450,9 +526,7 @@ class _RegisterFormState extends State<_RegisterForm> {
       if (result.success && result.enabled) {
         _registrationEnabled = true;
       } else {
-        _statusMessage = result.success
-            ? '因滥用，我们暂时关闭了公开注册'
-            : '无法确认注册状态，请稍后重试';
+        _statusMessage = result.success ? '因滥用，我们暂时关闭了公开注册' : '无法确认注册状态，请稍后重试';
       }
     });
   }
@@ -540,7 +614,9 @@ class _RegisterFormState extends State<_RegisterForm> {
       password,
       code,
       // 大小写不敏感，统一成大写再送后端，省得用户手抄成小写被判无效。
-      inviteCode: _inviteController.text.trim().toUpperCase(),
+      inviteCode: _inviteEnabled
+          ? _inviteController.text.trim().toUpperCase()
+          : null,
     );
     if (!mounted) return;
     if (!result.success) {
@@ -690,9 +766,8 @@ class _RegisterFormState extends State<_RegisterForm> {
           trailingIcon: Padding(
             padding: const EdgeInsets.only(left: 4, right: 8),
             child: MiuixIconButton(
-              onPressed: () => setState(
-                () => _obscurePassword = !_obscurePassword,
-              ),
+              onPressed: () =>
+                  setState(() => _obscurePassword = !_obscurePassword),
               child: MiuixIcon(
                 vector: MiuixIcons.extended.byName(
                   _obscurePassword ? 'hide' : 'show',
@@ -726,9 +801,8 @@ class _RegisterFormState extends State<_RegisterForm> {
           trailingIcon: Padding(
             padding: const EdgeInsets.only(left: 4, right: 8),
             child: MiuixIconButton(
-              onPressed: () => setState(
-                () => _obscureConfirm = !_obscureConfirm,
-              ),
+              onPressed: () =>
+                  setState(() => _obscureConfirm = !_obscureConfirm),
               child: MiuixIcon(
                 vector: MiuixIcons.extended.byName(
                   _obscureConfirm ? 'hide' : 'show',
@@ -767,13 +841,16 @@ class _RegisterFormState extends State<_RegisterForm> {
                   keyboardType: TextInputType.number,
                   textInputAction: TextInputAction.next,
                   onChanged: (_) => _clearFieldError(_RegField.code),
-                  onSubmitted: (_) => _inviteFocus.requestFocus(),
+                  onSubmitted: (_) => _inviteEnabled
+                      ? _inviteFocus.requestFocus()
+                      : _register(),
                 ),
               ),
               const SizedBox(width: 10),
               MiuixButton(
                 key: const Key('register-send-code-button'),
-                enabled: _registrationEnabled &&
+                enabled:
+                    _registrationEnabled &&
                     !_sendingCode &&
                     !_codeSent &&
                     !_registering,
@@ -789,28 +866,31 @@ class _RegisterFormState extends State<_RegisterForm> {
           ),
         ),
         if (_codeError != null) _FieldError(_codeError!),
-        const SizedBox(height: 12),
         // 邀请码选填：填了就在注册成功后绑定邀请人（邀请有礼）。
         // 填错只会被后端 400 挡下，邮箱验证码不会被消耗，改一下就能重试。
-        MiuixTextField(
-          key: const Key('register-invite-field'),
-          controller: _inviteController,
-          focusNode: _inviteFocus,
-          enabled: canType,
-          label: '邀请码（选填）',
-          singleLine: true,
-          leadingIcon: _FieldIcon(
-            child: MiuixIcon(
-              vector: MiuixIcons.extended.byName('promotions')!,
-              size: 20,
-              tint: colors.onSecondaryContainer,
+        // 活动关闭（/config/public 的 invite.enabled=false）时整块不显示。
+        if (_inviteEnabled) ...[
+          const SizedBox(height: 12),
+          MiuixTextField(
+            key: const Key('register-invite-field'),
+            controller: _inviteController,
+            focusNode: _inviteFocus,
+            enabled: canType,
+            label: '邀请码（选填）',
+            singleLine: true,
+            leadingIcon: _FieldIcon(
+              child: MiuixIcon(
+                vector: MiuixIcons.extended.byName('promotions')!,
+                size: 20,
+                tint: colors.onSecondaryContainer,
+              ),
             ),
+            textCapitalization: TextCapitalization.characters,
+            textInputAction: TextInputAction.done,
+            onChanged: (_) => _clearFieldError(_RegField.invite),
+            onSubmitted: (_) => _register(),
           ),
-          textCapitalization: TextCapitalization.characters,
-          textInputAction: TextInputAction.done,
-          onChanged: (_) => _clearFieldError(_RegField.invite),
-          onSubmitted: (_) => _register(),
-        ),
+        ],
         const SizedBox(height: 20),
         _RegisterButton(
           isRegistering: _registering,
@@ -818,6 +898,381 @@ class _RegisterFormState extends State<_RegisterForm> {
           onPressed: _register,
         ),
       ],
+    );
+  }
+}
+
+/// 找回密码表单本体（邮箱 / 验证码 / 新密码 / 确认新密码 + 重置按钮）。
+///
+/// 与注册同构：挂在 [LoginView] 的找回密码模式下，发送验证码与提交重置都直接
+/// 透传到 [AccountSessionController]（叶子操作，不经过会话状态机）。重置成功不
+/// 自动登录——后端不签发 token，由父级切回登录并预填邮箱。
+class _ResetPasswordForm extends StatefulWidget {
+  const _ResetPasswordForm({
+    required this.account,
+    required this.onResetSucceeded,
+  });
+
+  final AccountSessionController account;
+
+  /// 重置成功后的回调，参数为本次重置的邮箱（父级用于回登录并预填）。
+  final ValueChanged<String> onResetSucceeded;
+
+  @override
+  State<_ResetPasswordForm> createState() => _ResetPasswordFormState();
+}
+
+enum _ResetField { email, code, password, confirm }
+
+class _ResetPasswordFormState extends State<_ResetPasswordForm> {
+  final _emailController = TextEditingController();
+  final _codeController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _confirmController = TextEditingController();
+
+  final _codeFocus = FocusNode();
+  final _passwordFocus = FocusNode();
+  final _confirmFocus = FocusNode();
+
+  String? _emailError;
+  String? _codeError;
+  String? _passwordError;
+  String? _confirmError;
+
+  var _obscurePassword = true;
+  var _obscureConfirm = true;
+
+  var _sendingCode = false;
+  var _codeSent = false;
+  var _countdown = 0;
+  Timer? _timer;
+
+  var _submitting = false;
+  String? _errorMessage;
+
+  static final _emailPattern = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$');
+  static final _qqNumberPattern = RegExp(r'^\d+$');
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _emailController.dispose();
+    _codeController.dispose();
+    _passwordController.dispose();
+    _confirmController.dispose();
+    _codeFocus.dispose();
+    _passwordFocus.dispose();
+    _confirmFocus.dispose();
+    super.dispose();
+  }
+
+  /// 注册只收 QQ 邮箱，用户习惯直接输 QQ 号；纯数字自动补 @qq.com，
+  /// 其余按完整邮箱原样提交（Linux Do 账号的邮箱域名不一定是 qq.com）。
+  String get _email {
+    final raw = _emailController.text.trim();
+    return _qqNumberPattern.hasMatch(raw) ? '$raw@qq.com' : raw;
+  }
+
+  String? _validateEmail() {
+    final raw = _emailController.text.trim();
+    if (raw.isEmpty) return '请输入注册邮箱';
+    if (!_emailPattern.hasMatch(_email)) return '邮箱格式不正确';
+    return null;
+  }
+
+  /// 发送验证码：只需要邮箱，先于其他字段校验，与注册流程一致。
+  Future<void> _sendCode() async {
+    final emailError = _validateEmail();
+    setState(() {
+      _emailError = emailError;
+      _errorMessage = null;
+    });
+    if (emailError != null) return;
+
+    setState(() => _sendingCode = true);
+    final result = await widget.account.sendResetCode(_email);
+    if (!mounted) return;
+    setState(() {
+      _sendingCode = false;
+      if (result.success) {
+        // 后端对未注册邮箱也返回成功（防账号枚举），这里不做区分。
+        _startCountdown();
+      } else {
+        _errorMessage = result.message ?? '发送失败，请稍后重试';
+      }
+    });
+  }
+
+  void _startCountdown() {
+    _timer?.cancel();
+    setState(() {
+      _codeSent = true;
+      _countdown = 60;
+    });
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) return;
+      setState(() {
+        if (_countdown > 1) {
+          _countdown--;
+        } else {
+          _codeSent = false;
+          timer.cancel();
+        }
+      });
+    });
+  }
+
+  Future<void> _reset() async {
+    final emailError = _validateEmail();
+    final code = _codeController.text.trim();
+    final password = _passwordController.text;
+    final confirm = _confirmController.text;
+    setState(() {
+      _emailError = emailError;
+      _codeError = code.length != 6 ? '请输入 6 位验证码' : null;
+      _passwordError = password.length < 8 ? '密码至少 8 个字符' : null;
+      _confirmError = confirm.isEmpty
+          ? '请确认新密码'
+          : (confirm != password ? '两次密码不一致' : null);
+      _errorMessage = null;
+    });
+    if (_emailError != null ||
+        _codeError != null ||
+        _passwordError != null ||
+        _confirmError != null) {
+      return;
+    }
+
+    setState(() => _submitting = true);
+    final result = await widget.account.resetPassword(_email, code, password);
+    if (!mounted) return;
+    setState(() => _submitting = false);
+    if (!result.success) {
+      setState(() => _errorMessage = result.message ?? '重置失败，请稍后重试');
+      return;
+    }
+    widget.onResetSucceeded(_email);
+  }
+
+  void _clearFieldError(_ResetField field) {
+    switch (field) {
+      case _ResetField.email:
+        if (_emailError != null) setState(() => _emailError = null);
+      case _ResetField.code:
+        if (_codeError != null) setState(() => _codeError = null);
+      case _ResetField.password:
+        if (_passwordError != null) setState(() => _passwordError = null);
+      case _ResetField.confirm:
+        if (_confirmError != null) setState(() => _confirmError = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = MiuixTheme.of(context);
+    final colors = theme.colors;
+    final canType = !_submitting;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (_errorMessage != null) ...[
+          CyreneInlineAlert(
+            key: const Key('reset-error-message'),
+            vector: MiuixIcons.extended.byName('info')!,
+            title: '重置失败',
+            description: _errorMessage!,
+            destructive: true,
+          ),
+          const SizedBox(height: 14),
+        ],
+        MiuixTextField(
+          key: const Key('reset-email-field'),
+          controller: _emailController,
+          enabled: canType,
+          label: '注册邮箱',
+          singleLine: true,
+          leadingIcon: _FieldIcon(
+            child: MiuixIcon(
+              vector: MiuixIcons.extended.byName('email')!,
+              size: 20,
+              tint: colors.onSecondaryContainer,
+            ),
+          ),
+          keyboardType: TextInputType.emailAddress,
+          textInputAction: TextInputAction.next,
+          onChanged: (_) => _clearFieldError(_ResetField.email),
+          onSubmitted: (_) => _codeFocus.requestFocus(),
+        ),
+        if (_emailError != null) _FieldError(_emailError!),
+        const SizedBox(height: 12),
+        // 验证码与「发送验证码」并排：IntrinsicHeight 让按钮高度贴合输入框。
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: MiuixTextField(
+                  key: const Key('reset-code-field'),
+                  controller: _codeController,
+                  focusNode: _codeFocus,
+                  enabled: canType,
+                  label: '验证码',
+                  singleLine: true,
+                  leadingIcon: _FieldIcon(
+                    child: MiuixIcon(
+                      vector: MiuixIcons.extended.byName('promotions')!,
+                      size: 20,
+                      tint: colors.onSecondaryContainer,
+                    ),
+                  ),
+                  keyboardType: TextInputType.number,
+                  textInputAction: TextInputAction.next,
+                  onChanged: (_) => _clearFieldError(_ResetField.code),
+                  onSubmitted: (_) => _passwordFocus.requestFocus(),
+                ),
+              ),
+              const SizedBox(width: 10),
+              MiuixButton(
+                key: const Key('reset-send-code-button'),
+                enabled: !_sendingCode && !_codeSent && !_submitting,
+                onPressed: _sendCode,
+                child: MiuixText(
+                  _codeSent
+                      ? '$_countdown 秒'
+                      : (_sendingCode ? '发送中…' : '发送验证码'),
+                  style: theme.textStyles.button,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (_codeError != null) _FieldError(_codeError!),
+        const SizedBox(height: 12),
+        MiuixTextField(
+          key: const Key('reset-password-field'),
+          controller: _passwordController,
+          focusNode: _passwordFocus,
+          enabled: canType,
+          label: '新密码（至少 8 位）',
+          singleLine: true,
+          obscureText: _obscurePassword,
+          leadingIcon: _FieldIcon(
+            child: MiuixIcon(
+              vector: MiuixIcons.extended.byName('lock')!,
+              size: 20,
+              tint: colors.onSecondaryContainer,
+            ),
+          ),
+          trailingIcon: Padding(
+            padding: const EdgeInsets.only(left: 4, right: 8),
+            child: MiuixIconButton(
+              onPressed: () =>
+                  setState(() => _obscurePassword = !_obscurePassword),
+              child: MiuixIcon(
+                vector: MiuixIcons.extended.byName(
+                  _obscurePassword ? 'hide' : 'show',
+                )!,
+                size: 20,
+                tint: colors.onSecondaryContainer,
+              ),
+            ),
+          ),
+          textInputAction: TextInputAction.next,
+          onChanged: (_) => _clearFieldError(_ResetField.password),
+          onSubmitted: (_) => _confirmFocus.requestFocus(),
+        ),
+        if (_passwordError != null) _FieldError(_passwordError!),
+        const SizedBox(height: 12),
+        MiuixTextField(
+          key: const Key('reset-confirm-field'),
+          controller: _confirmController,
+          focusNode: _confirmFocus,
+          enabled: canType,
+          label: '确认新密码',
+          singleLine: true,
+          obscureText: _obscureConfirm,
+          leadingIcon: _FieldIcon(
+            child: MiuixIcon(
+              vector: MiuixIcons.extended.byName('lock')!,
+              size: 20,
+              tint: colors.onSecondaryContainer,
+            ),
+          ),
+          trailingIcon: Padding(
+            padding: const EdgeInsets.only(left: 4, right: 8),
+            child: MiuixIconButton(
+              onPressed: () =>
+                  setState(() => _obscureConfirm = !_obscureConfirm),
+              child: MiuixIcon(
+                vector: MiuixIcons.extended.byName(
+                  _obscureConfirm ? 'hide' : 'show',
+                )!,
+                size: 20,
+                tint: colors.onSecondaryContainer,
+              ),
+            ),
+          ),
+          textInputAction: TextInputAction.done,
+          onChanged: (_) => _clearFieldError(_ResetField.confirm),
+          onSubmitted: (_) => _reset(),
+        ),
+        if (_confirmError != null) _FieldError(_confirmError!),
+        const SizedBox(height: 20),
+        _ResetButton(
+          isResetting: _submitting,
+          enabled: !_submitting && !_sendingCode,
+          onPressed: _reset,
+        ),
+      ],
+    );
+  }
+}
+
+/// 重置提交按钮：整行宽，与注册 [_RegisterButton]、登录 [_SubmitButton] 同构。
+class _ResetButton extends StatelessWidget {
+  const _ResetButton({
+    required this.isResetting,
+    required this.enabled,
+    required this.onPressed,
+  });
+
+  final bool isResetting;
+  final bool enabled;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = MiuixTheme.of(context);
+    return SizedBox(
+      width: double.infinity,
+      child: MiuixButton(
+        key: const Key('reset-submit-button'),
+        enabled: enabled,
+        colors: MiuixButtonDefaults.buttonColorsPrimary(context),
+        onPressed: onPressed,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (isResetting) ...[
+              MiuixCircularProgressIndicator(
+                size: 16,
+                strokeWidth: 2,
+                colors: MiuixProgressIndicatorColors(
+                  foregroundColor: theme.colors.onPrimary,
+                  disabledForegroundColor: theme.colors.onPrimary,
+                  backgroundColor: Colors.transparent,
+                ),
+              ),
+              const SizedBox(width: 10),
+            ],
+            MiuixText(
+              isResetting ? '正在重置…' : '重置密码',
+              style: theme.textStyles.button,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -962,4 +1417,24 @@ class _FieldError extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 底部内边距跟着键盘走的单子项列表。
+///
+/// viewInsets 在键盘动画期间逐帧变化；依赖只落在这一层，表单 [child] 由调用方
+/// 构建好传进来，每帧只重建 ListView 本身，不会把整张登录/注册表单跟着重建。
+class _KeyboardAvoidingList extends StatelessWidget {
+  const _KeyboardAvoidingList({required this.padding, required this.child});
+
+  final EdgeInsets padding;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => ListView(
+    keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+    padding: padding.copyWith(
+      bottom: padding.bottom + MediaQuery.viewInsetsOf(context).bottom,
+    ),
+    children: [child],
+  );
 }

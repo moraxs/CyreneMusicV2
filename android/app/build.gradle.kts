@@ -33,6 +33,8 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // 桌面图标名；debug 覆盖成带后缀的，方便和 release 并排区分。
+        manifestPlaceholders["appLabel"] = "CyreneMusic"
     }
 
     signingConfigs {
@@ -48,6 +50,13 @@ android {
     }
 
     buildTypes {
+        debug {
+            // 独立包名，让 debug 与 release 能同时装在一台机器上（签名不同，
+            // 同包名会互相覆盖失败）。数据目录也随之分开，互不串登录态。
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+            manifestPlaceholders["appLabel"] = "CyreneMusic Debug"
+        }
         release {
             // 用 android/key.properties 指向的 cyrene-release.jks 签名 release 包。
             signingConfig = signingConfigs.getByName("release")

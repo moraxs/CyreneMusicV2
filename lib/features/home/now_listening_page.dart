@@ -18,18 +18,20 @@ import '../../presentation/cyrene/cyrene_page.dart';
 import '../../presentation/cyrene/cyrene_page_routes.dart';
 import '../../presentation/cyrene/cyrene_toast.dart';
 import '../artist/artist_detail_page.dart';
+import '../playlist/playlist_detail_loaders.dart';
 import '../playlist/playlist_detail_page.dart';
 import '../settings/login_page.dart';
 import 'daily_recommend_page.dart';
-import 'for_you/for_you_artwork.dart';
 import 'for_you/for_you_palette.dart';
 import 'for_you/for_you_widgets.dart';
+import 'for_you/spotify_home_widgets.dart';
 import 'home_song_row.dart';
 
 /// 移动端首页：为你推荐与榜单两个页签共用暖色纸张手帐风格（ForYouPalette），
 /// 数据和导航仍复用首页控制器。
 /// 推荐页：问候 → 每日唱片拼贴 → 私人电台 → 唱片架 / 专属精选 / 雷达 → 新歌来信；
-/// 榜单页：榜单源切换 → 随心畅听 → 各榜单前 5 首。未登录时展示登录引导 + 榜单。
+/// 榜单页：榜单源切换 → 随心畅听 → 榜单抽歌卡组 → 个性化分区（按类型换版式），
+/// 中间穿插横滑排行榜与歌单摘歌。未登录时展示登录引导 + 榜单。
 class NowListeningPage extends StatefulWidget {
   const NowListeningPage({
     super.key,
@@ -67,6 +69,15 @@ class _NowListeningPageState extends State<NowListeningPage>
   int _spotifyLoadGeneration = 0;
   List<SpotifyPersonalizedSection> _spotifySections = const [];
   int _spotifySectionsGeneration = 0;
+
+  /// 「今天就听这些」从各榜单轮流抽歌；「换一批」只是换个随机种子。
+  int _pickSeed = 0;
+  List<Toplist>? _picksSource;
+  int _picksSeed = -1;
+  List<Track> _picks = const [];
+
+  /// 从某张个性化歌单里摘出来的几首歌（首页分区只有歌单封面，没有曲目）。
+  ({SpotifyPlaylistPreview preview, List<Track> tracks})? _playlistPick;
   String? _loadedToken;
 
   // 派生数据缓存：仅当控制器发布新数据对象时才重新转换原始 JSON，
@@ -176,6 +187,39 @@ class _NowListeningPageState extends State<NowListeningPage>
       return;
     }
     setState(() => _spotifySections = sections);
+    _loadPlaylistPick(sections, generation);
+  }
+
+  /// 挑一张个性化歌单（Daily Mix 之类）拉曲目，随机摘几首做成歌曲卡组。
+  ///
+  /// 只试前几张：拉不到或曲目太少就换下一张，都不行就不出这一段。
+  Future<void> _loadPlaylistPick(
+    List<SpotifyPersonalizedSection> sections,
+    int generation,
+  ) async {
+    final candidates = [
+      for (final section in sections)
+        for (final item in section.collections)
+          if (item.itemKind == SpotifyPersonalizedKind.playlist) item,
+    ];
+    for (final preview in candidates.take(3)) {
+      final detail = await DiscoveryService.instance.getPlaylistDetail(
+        preview.id,
+        source: 'spotify',
+        limit: 40,
+      );
+      if (!mounted || generation != _spotifySectionsGeneration) return;
+      final tracks = _toTracks(detail?.tracks ?? const []);
+      if (tracks.length < 3) continue;
+      final picked = [...tracks]..shuffle(Random(preview.id.hashCode));
+      setState(() {
+        _playlistPick = (
+          preview: preview,
+          tracks: picked.take(9).toList(growable: false),
+        );
+      });
+      return;
+    }
   }
 
   /// 把 Spotify 曲目结构转成可播放的 [Track]。
@@ -199,31 +243,37 @@ class _NowListeningPageState extends State<NowListeningPage>
   /// 个性化分区里的一张卡被点开：按**卡片自己**的类型分流到对应的详情页。
   ///
   /// 不能按分区类型分——pathfinder 首页的「More like xxx」会把歌单和专辑混在一排。
-  /// 歌单有稳定 id，交给详情页自己重拉；电台与专辑的内容要先取回来再铺进去
-  /// （电台每次生成都不同，没有可复用的歌单 id）。
+  /// 一律立即跳转：歌单有稳定 id，由详情页自己重拉；电台与专辑没有可复用的
+  /// 歌单 id，交给 loader 在详情页里现拉（电台每次生成都不同）。
   Future<void> _openPersonalizedItem(SpotifyPlaylistPreview preview) async {
-    final kind = preview.itemKind;
-    if (kind == SpotifyPersonalizedKind.playlist) {
-      _pushSpotifyDetail(preview, reloadable: true);
-      return;
+    switch (preview.itemKind) {
+      case SpotifyPersonalizedKind.artist:
+        await _openSpotifyArtist(preview);
+      case SpotifyPersonalizedKind.radio:
+        _pushSpotifyDetail(
+          preview,
+          loader: spotifyRadioLoader(
+            seedId: preview.id,
+            name: preview.name,
+            coverUrl: preview.coverImgUrl,
+            description: preview.description,
+          ),
+        );
+      case SpotifyPersonalizedKind.album:
+        _pushSpotifyDetail(
+          preview,
+          loader: spotifyAlbumLoader(
+            albumId: preview.id,
+            name: preview.name,
+            coverUrl: preview.coverImgUrl,
+            artists: preview.description,
+          ),
+        );
+      case SpotifyPersonalizedKind.playlist:
+      case SpotifyPersonalizedKind.track:
+      case SpotifyPersonalizedKind.mixed:
+        _pushSpotifyDetail(preview);
     }
-    if (kind == SpotifyPersonalizedKind.artist) {
-      await _openSpotifyArtist(preview);
-      return;
-    }
-    final tracks = kind == SpotifyPersonalizedKind.radio
-        ? await DiscoveryService.instance.getSpotifyRadio(preview.id)
-        : await DiscoveryService.instance.getSpotifyAlbumTracks(preview.id);
-    if (!mounted) return;
-    if (tracks.isEmpty) {
-      CyreneToast.show(
-        kind == SpotifyPersonalizedKind.radio
-            ? '电台暂时生成不出来，稍后再试'
-            : '这张专辑暂时读不出来，稍后再试',
-      );
-      return;
-    }
-    _pushSpotifyDetail(preview, reloadable: false, tracks: tracks);
   }
 
   /// 打开艺术家详情页。页面自己去拉数据，这里只把来源与专辑点击接管交给它。
@@ -236,42 +286,37 @@ class _NowListeningPageState extends State<NowListeningPage>
           artistName: preview.name,
           source: MusicSource.spotify,
           // Spotify 专辑 id 是 base62 字符串，内置的网易云 AlbumDetailPage 读不了，
-          // 改用本页既有的「拉曲目再铺进详情页」路径。
-          onOpenAlbum: (album) => _openSpotifyAlbumFromArtist(album),
+          // 改走本页的 Spotify 专辑详情。
+          onOpenAlbum: _openSpotifyAlbumFromArtist,
         ),
       ),
     );
   }
 
-  /// 艺术家页里点开一张专辑：取曲目后铺进详情页（同 album 卡片的做法）。
-  Future<void> _openSpotifyAlbumFromArtist(ArtistAlbum album) async {
+  /// 艺术家页里点开一张专辑：立即进详情页，曲目由 loader 在页内现拉。
+  void _openSpotifyAlbumFromArtist(ArtistAlbum album) {
     final albumId = album.id.toString();
-    final tracks = await DiscoveryService.instance.getSpotifyAlbumTracks(
-      albumId,
-    );
-    if (!mounted) return;
-    if (tracks.isEmpty) {
-      CyreneToast.show('这张专辑暂时读不出来，稍后再试');
-      return;
-    }
     _pushSpotifyDetail(
       (
         id: albumId,
         name: album.name,
         description: '',
         coverImgUrl: album.picUrl ?? '',
-        trackCount: tracks.length,
+        trackCount: 0,
         itemKind: SpotifyPersonalizedKind.album,
       ),
-      reloadable: false,
-      tracks: tracks,
+      loader: spotifyAlbumLoader(
+        albumId: albumId,
+        name: album.name,
+        coverUrl: album.picUrl ?? '',
+      ),
     );
   }
 
+  /// [loader] 为空时详情页按歌单 id 自己拉取。
   void _pushSpotifyDetail(
     SpotifyPlaylistPreview preview, {
-    required bool reloadable,
-    List<ToplistTrack>? tracks,
+    Future<PlaylistDetail?> Function()? loader,
   }) {
     Navigator.of(context).push(
       CyreneHeroExpandPageRoute<void>(
@@ -283,24 +328,8 @@ class _NowListeningPageState extends State<NowListeningPage>
           token: widget.account.token,
           desktopLayout: false,
           source: MusicSource.spotify,
-          reloadable: reloadable,
-          trackCount: tracks?.length ?? preview.trackCount,
-          initialPlaylist: tracks == null
-              ? null
-              : PlaylistDetail(
-                  id: 0,
-                  name: preview.name,
-                  coverImgUrl: preview.coverImgUrl,
-                  description: preview.description,
-                  source: MusicSource.spotify,
-                  tracks: tracks,
-                  playCount: 0,
-                  creator: 'Spotify',
-                  trackCount: tracks.length,
-                  createTime: 0,
-                  updateTime: 0,
-                  tags: const ['Spotify'],
-                ),
+          trackCount: preview.trackCount,
+          loader: loader,
         ),
       ),
     );
@@ -657,156 +686,326 @@ class _NowListeningPageState extends State<NowListeningPage>
             child: _LoginPromptCard(onLogin: _openLogin),
           ),
         ),
-      // 个性化分区放在榜单的加载/错误分支之前：它走的是另一条后端链路
-      // （spclient 个性化），榜单挂了不该把它一起吞掉。
-      if (isSpotify)
-        for (final section in _spotifySections)
-          ..._personalizedSection(section),
-      if (loading && toplists.isEmpty)
-        const SliverFillRemaining(
-          hasScrollBody: false,
-          child: Center(child: MiuixCircularProgressIndicator()),
-        )
-      else if (toplists.isEmpty && error != null)
+      ..._chartsBody(toplists, loading: loading, error: error),
+    ];
+  }
+
+  /// 榜单页签正文：随心畅听 → 今天就听这些 → 个性化分区，中间穿插排行榜与
+  /// 歌单摘歌，避免一种版式连着出现。
+  ///
+  /// 个性化分区与榜单走两条后端链路，谁先回来先铺谁，一边挂了不连累另一边。
+  List<Widget> _chartsBody(
+    List<Toplist> toplists, {
+    required bool loading,
+    required String? error,
+  }) {
+    final sections = _leaderboardSource == _LeaderboardSource.spotify
+        ? _spotifySections
+        : const <SpotifyPersonalizedSection>[];
+    final charts = [
+      for (final toplist in toplists)
+        if (_tracksFor(toplist).isNotEmpty) toplist,
+    ];
+    if (charts.isEmpty && sections.isEmpty) {
+      if (loading) {
+        return const [
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(child: MiuixCircularProgressIndicator()),
+          ),
+        ];
+      }
+      return [
         SliverFillRemaining(
           hasScrollBody: false,
-          child: CyreneEmptyState(
-            icon: Icons.cloud_off,
-            title: 'Spotify 榜单加载失败',
-            description: error,
-            action: MiuixButton(
-              onPressed: _loadSpotifyToplists,
-              child: MiuixText(
-                '重试',
-                style: MiuixTheme.of(context).textStyles.button,
-              ),
-            ),
-          ),
-        )
-      else if (toplists.isEmpty)
-        const SliverFillRemaining(
-          hasScrollBody: false,
-          child: CyreneEmptyState(
-            icon: Icons.emoji_events,
-            title: '暂无榜单内容',
-            description: '稍后下拉刷新再试。',
-          ),
-        )
-      else ...[
+          child: error != null
+              ? CyreneEmptyState(
+                  icon: Icons.cloud_off,
+                  title: 'Spotify 榜单加载失败',
+                  description: error,
+                  action: MiuixButton(
+                    onPressed: _loadSpotifyToplists,
+                    child: MiuixText(
+                      '重试',
+                      style: MiuixTheme.of(context).textStyles.button,
+                    ),
+                  ),
+                )
+              : const CyreneEmptyState(
+                  icon: Icons.emoji_events,
+                  title: '暂无榜单内容',
+                  description: '稍后下拉刷新再试。',
+                ),
+        ),
+      ];
+    }
+
+    final slivers = <Widget>[];
+    if (charts.isNotEmpty) {
+      final all = {
+        for (final chart in charts)
+          for (final track in _tracksFor(chart)) track.key,
+      };
+      slivers.add(
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
           sliver: SliverToBoxAdapter(
             child: RepaintBoundary(
-              child: _LeaderboardShuffleCard(
-                coverUrl: toplists.first.coverImgUrl,
+              child: SpotifyMixHero(
+                covers: [
+                  for (final chart in charts.take(3))
+                    _tracksFor(chart).first.picUrl,
+                ],
+                chartCount: charts.length,
+                trackCount: all.length,
+                leadTrack: _tracksFor(charts.first).first,
                 onShuffle: _playShuffledToplists,
               ),
             ),
           ),
         ),
-        for (final toplist in toplists) ..._toplistSection(toplist),
-        const SliverToBoxAdapter(child: ForYouEndNote()),
-      ],
+      );
+      final picks = _chartPicks(charts);
+      if (picks.isNotEmpty) {
+        slivers.addAll([
+          _forYouSection(
+            title: '今天就听这些',
+            subtitle: '从各个榜单里挑出来的歌',
+            trailing: SpotifyPillAction(
+              label: '换一批',
+              icon: Icons.refresh_rounded,
+              leadingIcon: true,
+              onPressed: () => setState(() => _pickSeed++),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: SpotifySongPager(
+              tracks: picks,
+              playback: widget.playback,
+              // 换一批后回到第一页，不恢复上一批的翻页位置。
+              storageKey: 'home-spotify-picks-$_pickSeed',
+            ),
+          ),
+        ]);
+      }
+    }
+
+    // 排行榜插在第 2 个分区后、歌单摘歌插在第 5 个分区后；分区不够就顺延到末尾。
+    var chartsPlaced = false;
+    var pickPlaced = false;
+    var collectionIndex = 0;
+    for (var i = 0; i < sections.length; i++) {
+      if (i == 2) {
+        slivers.addAll(_chartCarousel(charts, loading: loading, error: error));
+        chartsPlaced = true;
+      }
+      if (i == 5) {
+        slivers.addAll(_playlistPickSlivers());
+        pickPlaced = true;
+      }
+      final section = sections[i];
+      slivers.addAll(_personalizedSection(section, collectionIndex));
+      if (_usesRotatingLayout(section)) collectionIndex++;
+    }
+    if (!chartsPlaced) {
+      slivers.addAll(_chartCarousel(charts, loading: loading, error: error));
+    }
+    if (!pickPlaced) slivers.addAll(_playlistPickSlivers());
+    slivers.add(const SliverToBoxAdapter(child: ForYouEndNote()));
+    return slivers;
+  }
+
+  /// 从各榜单轮流抽歌：每张榜单跳过前三名（排行榜卡里已经露出），打乱后
+  /// 一张抽一首，去重，凑满 12 首（四页）。
+  List<Track> _chartPicks(List<Toplist> charts) {
+    if (_picksSeed == _pickSeed &&
+        _picksSource != null &&
+        _sameCharts(_picksSource!, charts)) {
+      return _picks;
+    }
+    final random = Random(_pickSeed * 7919 + charts.length);
+    final pools = [
+      for (final chart in charts)
+        (_tracksFor(chart).skip(3).toList()..shuffle(random)),
+    ];
+    final seen = <String>{};
+    final picks = <Track>[];
+    for (var round = 0; picks.length < 12; round++) {
+      if (pools.every((pool) => round >= pool.length)) break;
+      for (final pool in pools) {
+        if (round < pool.length && seen.add(pool[round].key)) {
+          picks.add(pool[round]);
+          if (picks.length == 12) break;
+        }
+      }
+    }
+    _picksSource = charts;
+    _picksSeed = _pickSeed;
+    return _picks = List.unmodifiable(picks);
+  }
+
+  /// [charts] 每次 build 都是新列表，按元素比对才能让缓存生效。
+  static bool _sameCharts(List<Toplist> a, List<Toplist> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!identical(a[i], b[i])) return false;
+    }
+    return true;
+  }
+
+  List<Widget> _chartCarousel(
+    List<Toplist> charts, {
+    required bool loading,
+    required String? error,
+  }) {
+    if (charts.isNotEmpty) {
+      return [
+        _forYouSection(title: '排行榜', subtitle: '全球与各地区的播放热度'),
+        SliverToBoxAdapter(
+          child: SpotifyChartCarousel(
+            toplists: charts,
+            tracksFor: _tracksFor,
+            onOpen: _openToplist,
+            playback: widget.playback,
+          ),
+        ),
+      ];
+    }
+    if (loading) {
+      return [
+        _forYouSection(title: '排行榜', subtitle: '全球与各地区的播放热度'),
+        const SliverToBoxAdapter(
+          child: SizedBox(
+            height: 120,
+            child: Center(child: MiuixCircularProgressIndicator()),
+          ),
+        ),
+      ];
+    }
+    if (error == null) return const [];
+    // 个性化分区还在，榜单挂了就只在它自己的位置给一句提示和重试。
+    final theme = MiuixTheme.of(context);
+    final palette = ForYouPalette.of(context);
+    return [
+      _forYouSection(title: '排行榜', subtitle: '暂时没有取到'),
+      SliverPadding(
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        sliver: SliverToBoxAdapter(
+          child: ForYouSongSurface(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '榜单服务暂时不可用',
+                      style: theme.textStyles.body2.copyWith(
+                        color: palette.muted,
+                      ),
+                    ),
+                  ),
+                  MiuixTextButton('重试', onPressed: _loadSpotifyToplists),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     ];
   }
+
+  List<Widget> _playlistPickSlivers() {
+    final pick = _playlistPick;
+    if (pick == null) return const [];
+    return [
+      _forYouSection(
+        title: '摘自「${pick.preview.name}」',
+        subtitle: '从歌单里挑了几首，先听听看',
+        trailing: SpotifyPillAction(
+          label: '打开歌单',
+          onPressed: () => _openPersonalizedItem(pick.preview),
+        ),
+      ),
+      SliverToBoxAdapter(
+        child: SpotifySongPager(
+          tracks: pick.tracks,
+          playback: widget.playback,
+          storageKey: 'home-spotify-playlist-pick',
+        ),
+      ),
+    ];
+  }
+
+  /// 艺人与专辑分区有专属版式，其余（歌单 / 电台 / 混排）才参与轮换。
+  bool _usesRotatingLayout(SpotifyPersonalizedSection section) =>
+      section.kind != SpotifyPersonalizedKind.track &&
+      section.kind != SpotifyPersonalizedKind.artist &&
+      section.kind != SpotifyPersonalizedKind.album &&
+      section.collections.isNotEmpty;
+
+  static const _rotatingLayouts = [
+    SpotifyCollectionLayout.mosaic,
+    SpotifyCollectionLayout.shelf,
+    SpotifyCollectionLayout.list,
+    SpotifyCollectionLayout.wide,
+  ];
 
   /// 号池 Spotify 账号的一个个性化分区。
   ///
   /// 分区种类与数量都由后端按「哪几路数据真的取到了」决定，本地不硬编码——
   /// 原来桌面端写死的六个 Web API 分类在后端 404 后只剩六个永远转圈的占位。
-  List<Widget> _personalizedSection(SpotifyPersonalizedSection section) {
+  /// 版式按分区类型选；歌单类分区按出现顺序在四种版式间轮换。
+  List<Widget> _personalizedSection(
+    SpotifyPersonalizedSection section,
+    int collectionIndex,
+  ) {
+    final storageKey = 'home-spotify-${section.id}';
     if (section.kind == SpotifyPersonalizedKind.track) {
       final tracks = _toTracks(section.tracks);
       if (tracks.isEmpty) return const [];
       return [
-        _forYouSection(title: section.title, subtitle: section.description),
-        SliverPadding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          sliver: SliverList.separated(
-            itemCount: min(5, tracks.length),
-            separatorBuilder: (_, _) => const SizedBox(height: 8),
-            itemBuilder: (context, index) => ForYouSongSurface(
-              child: HomeSongRow(
-                track: tracks[index],
-                playback: widget.playback,
-                onPlay: () =>
-                    widget.playback.playTrack(tracks[index], queue: tracks),
-                onAddToQueue: () => widget.playback.addToQueue(tracks[index]),
-              ),
-            ),
+        _forYouSection(
+          title: section.title,
+          subtitle: section.description,
+          trailing: ForYouPlayAction(
+            label: '播放全部',
+            subtle: true,
+            onPressed: () =>
+                widget.playback.playTrack(tracks.first, queue: tracks),
+          ),
+        ),
+        SliverToBoxAdapter(
+          child: SpotifySongPager(
+            tracks: tracks,
+            playback: widget.playback,
+            storageKey: '$storageKey-songs',
           ),
         ),
       ];
     }
-    if (section.collections.isEmpty) return const [];
+    final items = section.collections;
+    if (items.isEmpty) return const [];
+    final Widget body = switch (section.kind) {
+      SpotifyPersonalizedKind.artist => SpotifyArtistRow(
+        items: items,
+        onOpen: _openPersonalizedItem,
+        storageKey: '$storageKey-artists',
+      ),
+      SpotifyPersonalizedKind.album => SpotifyAlbumShelf(
+        items: items,
+        onOpen: _openPersonalizedItem,
+        storageKey: '$storageKey-albums',
+      ),
+      _ => SpotifyCollectionSection(
+        items: items,
+        layout: _rotatingLayouts[collectionIndex % _rotatingLayouts.length],
+        onOpen: _openPersonalizedItem,
+        storageKey: '$storageKey-shelf',
+      ),
+    };
     return [
       _forYouSection(title: section.title, subtitle: section.description),
-      SliverToBoxAdapter(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final cardWidth = (constraints.maxWidth * 0.42).clamp(140.0, 184.0);
-            return SizedBox(
-              height: ForYouPlaylistCard.heightFor(context, cardWidth),
-              child: ListView.separated(
-                key: PageStorageKey('home-spotify-${section.id}-shelf'),
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                itemCount: section.collections.length,
-                separatorBuilder: (_, _) => const SizedBox(width: 14),
-                itemBuilder: (context, index) {
-                  final preview = section.collections[index];
-                  return SizedBox(
-                    width: cardWidth,
-                    child: ForYouPlaylistCard(
-                      // ForYouPlaylistData.id 是网易云的数字 id，Spotify 的
-                      // base62 id 塞不进去；卡片本身也不读 id，跳转所需的 id
-                      // 由闭包里的 preview 带着，故此处填 0 即可。
-                      data: ForYouPlaylistData(
-                        id: 0,
-                        name: preview.name,
-                        coverUrl: preview.coverImgUrl,
-                        description: preview.description,
-                        trackCount: preview.trackCount,
-                      ),
-                      onTap: (_) => _openPersonalizedItem(preview),
-                    ),
-                  );
-                },
-              ),
-            );
-          },
-        ),
-      ),
-    ];
-  }
-
-  List<Widget> _toplistSection(Toplist toplist) {
-    final tracks = _tracksFor(toplist);
-    if (tracks.isEmpty) return const [];
-    final description = toplist.description.trim();
-    return [
-      _forYouSection(
-        title: toplist.name,
-        subtitle: description.isNotEmpty ? description : '热门曲目实时更新',
-        trailing: _ViewAllAction(onPressed: () => _openToplist(toplist)),
-      ),
-      SliverPadding(
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        sliver: SliverList.separated(
-          itemCount: min(5, tracks.length),
-          separatorBuilder: (_, _) => const SizedBox(height: 8),
-          itemBuilder: (context, index) => ForYouSongSurface(
-            child: HomeSongRow(
-              track: tracks[index],
-              rank: index + 1,
-              playback: widget.playback,
-              onPlay: () =>
-                  widget.playback.playTrack(tracks[index], queue: tracks),
-              onAddToQueue: () => widget.playback.addToQueue(tracks[index]),
-            ),
-          ),
-        ),
-      ),
+      SliverToBoxAdapter(child: body),
     ];
   }
 
@@ -1098,135 +1297,6 @@ enum _HomeTab { recommend, leaderboard }
 // 网易云榜单入口暂时下线：netease 枚举值暂未被引用，保留以便恢复。
 // ignore: unused_field
 enum _LeaderboardSource { netease, spotify }
-
-/// 榜单页顶部的随机播放卡：桃粉 → 纸 → 玫瑰渐变 squircle，与每日推荐卡同族。
-class _LeaderboardShuffleCard extends StatelessWidget {
-  const _LeaderboardShuffleCard({
-    required this.coverUrl,
-    required this.onShuffle,
-  });
-
-  final String coverUrl;
-  final VoidCallback onShuffle;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = MiuixTheme.of(context);
-    final palette = ForYouPalette.of(context);
-    return Container(
-      clipBehavior: Clip.antiAlias,
-      padding: const EdgeInsets.all(18),
-      decoration: ShapeDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [palette.peach, palette.paper, palette.rose],
-          stops: const [0, 0.7, 1],
-        ),
-        shape: MiuixSquircleBorder(
-          cornerRadius: 25,
-          side: BorderSide(color: palette.outline, width: 0.7),
-        ),
-      ),
-      child: Row(
-        children: [
-          ForYouArtwork(url: coverUrl, size: 88, cornerRadius: 18),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      Icons.shuffle_rounded,
-                      size: 15,
-                      color: palette.accent,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      '随机模式',
-                      style: theme.textStyles.body2.copyWith(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w600,
-                        color: palette.accent,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 9),
-                Text(
-                  '随心畅听',
-                  style: theme.textStyles.title1.copyWith(
-                    fontSize: 21,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -0.4,
-                    color: palette.ink,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '从全部榜单中随机播放热门歌曲',
-                  style: theme.textStyles.footnote1.copyWith(
-                    fontSize: 11.5,
-                    color: palette.muted,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 10),
-          ForYouPlayAction(
-            label: '播放',
-            icon: Icons.shuffle_rounded,
-            onPressed: onShuffle,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 榜单区块标题右侧的「查看全部」小按钮，纸张底 + 描边。
-class _ViewAllAction extends StatelessWidget {
-  const _ViewAllAction({required this.onPressed});
-
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = MiuixTheme.of(context);
-    final palette = ForYouPalette.of(context);
-    return MiuixPressable(
-      onPressed: onPressed,
-      borderRadius: BorderRadius.circular(14),
-      feedbackType: MiuixPressFeedbackType.sink,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: palette.paper,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: palette.outline, width: 0.7),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              '查看全部',
-              style: theme.textStyles.footnote2.copyWith(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w600,
-                color: palette.accent,
-              ),
-            ),
-            const SizedBox(width: 3),
-            Icon(Icons.chevron_right_rounded, size: 14, color: palette.accent),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 /// 未登录引导卡（对应原版 ForYouLoginPrompt），与每日推荐卡同族的渐变纸张卡。
 class _LoginPromptCard extends StatelessWidget {

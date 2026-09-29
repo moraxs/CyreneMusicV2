@@ -274,9 +274,19 @@ class PlaybackUrlResolverService implements PlaybackSourceClient {
           ? Map<String, Object?>.from(result['data'] as Map)
           : null;
       if (result['status'] == 200 && data != null && data['url'] != null) {
-        // data.url 是相对路径，需拼接后端 baseUrl
+        // data.url 是相对路径，需拼接后端 baseUrl。
         final baseUrl = _stripTrailingSlash(configSource.url);
-        return ResolvedPlayback(url: '$baseUrl${data['url']}');
+        final proxied = '$baseUrl${data['url']}';
+        // 直连模式下后端还会给出 data.directUrl —— Rust 取流服务的绝对地址。
+        // 走它就少一跳：否则要先请求 /spotify/raw-stream 再吃一个 https→http 的
+        // 302，等于多一次 TLS 握手加一次重新建连，移动网络上这一跳经常比取流
+        // 本身还慢。直连地址通常是裸 IP + 明文 HTTP，未必每个网络都通，所以把
+        // 代理地址留作 fallbackUrl（加载失败会自动重试，见 playTrack 的候选链）。
+        final direct = data['directUrl']?.toString();
+        if (direct != null && direct.isNotEmpty) {
+          return ResolvedPlayback(url: direct, fallbackUrl: proxied);
+        }
+        return ResolvedPlayback(url: proxied);
       }
       throw AudioSourceError(
         'Spotify 解析失败: ${result['msg'] ?? data?['msg'] ?? 'Unknown error'}',

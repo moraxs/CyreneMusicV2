@@ -41,6 +41,7 @@ class PlaylistDetailPage extends StatefulWidget {
     this.description = '',
     this.tags = const [],
     this.preserveTrackOrder = false,
+    this.loader,
   }) : isPersonal = false;
 
   /// 个人歌单模式：曲目走 Cyrene 后端 `/playlists/:id/tracks`（需 [token]）。
@@ -63,7 +64,8 @@ class PlaylistDetailPage extends StatefulWidget {
     this.description = '',
     this.tags = const [],
     this.preserveTrackOrder = false,
-  }) : isPersonal = true;
+  }) : isPersonal = true,
+       loader = null;
 
   /// 现成曲目模式：tracks 已由调用方提供，不请求歌单接口；
   /// 封面随机取自有封面的曲目（调用方传空 coverUrl 即可触发）。
@@ -86,7 +88,8 @@ class PlaylistDetailPage extends StatefulWidget {
        preserveTrackOrder = true,
        reloadable = false,
        initialPlaylist = null,
-       heroTag = null;
+       heroTag = null,
+       loader = null;
 
   final Object playlistId;
   final String title;
@@ -112,6 +115,13 @@ class PlaylistDetailPage extends StatefulWidget {
 
   /// 默认排序保持传入顺序不反转（如每日推荐已按推荐序给出）。
   final bool preserveTrackOrder;
+
+  /// 自定义取数：非 null 时代替歌单接口，由页面自己在打开后调用。
+  ///
+  /// 专辑 / 电台这类没有可复用歌单 id 的内容用它——调用方不必先 await 曲目
+  /// 再跳转，页面立即打开并显示加载动画；返回 null 或空曲目视为加载失败。
+  /// 下拉刷新会再调一次（电台因此会重新生成）。
+  final Future<PlaylistDetail?> Function()? loader;
 
   /// 首页歌单卡共享元素过渡 tag；桌面端与个人歌单恒为 null（不参与动画）。
   final String? heroTag;
@@ -249,7 +259,7 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   ///
   /// 默认排序的目标一致：**最近加入的歌排在最前**。但两类歌单拿到手的原始顺序
   /// 相反，所以处理方式也相反：
-  /// - 个人歌单：后端 `getTracks` 已按 `added_at` 倒序返回（新的在前），直接用原序。
+  /// - 个人歌单：加载时已由 [_newestFirst] 按加入时间排成新的在前，直接用原序。
   ///   这里若再反转，同步/收藏进来的新歌会被顶到列表最底部，最想找的反而最难找。
   /// - 第三方歌单：来源 API 给的是歌单创建顺序（最早的在前），反转后才是新的在前。
   ///
@@ -352,7 +362,10 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
     });
 
     try {
-      final fetched = widget.isPersonal
+      final loader = widget.loader;
+      final fetched = loader != null
+          ? await loader()
+          : widget.isPersonal
           ? await _loadPersonal()
           : await DiscoveryService.instance.getPlaylistDetail(
               widget.playlistId,
@@ -445,9 +458,11 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
 
   /// 加载个人歌单曲目并组装为 [PlaylistDetail]（元信息来自跳转参数）。
   Future<PlaylistDetail> _loadPersonal() async {
-    final tracks = await PlaylistService.instance.getPlaylistTracks(
-      widget.token!,
-      widget.playlistId as int,
+    final tracks = _newestFirst(
+      await PlaylistService.instance.getPlaylistTracks(
+        widget.token!,
+        widget.playlistId as int,
+      ),
     );
     return PlaylistDetail(
       id: widget.playlistId as int,
@@ -462,6 +477,26 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
       tags: const [],
       tracks: tracks.map(_playlistTrackToToplist).toList(growable: false),
     );
+  }
+
+  /// 个人歌单的显示顺序：**最近加入的在最前**，同步 / 导入进来的新歌排在顶部。
+  ///
+  /// 不依赖后端返回顺序：线上实际返回的是旧歌在前，而且同一批加入的歌（一次
+  /// 导入或一次同步）共用同一个 `addedAt`，批内顺序也没有保证。所以先把原列表
+  /// 整体反转，再按 `addedAt` 倒序**稳定**排序——跨批次一定新批在上，同批内
+  /// 保持反转后的相对顺序。`addedAt` 解析不出来的当作最早，沉到底部。
+  static List<PlaylistTrack> _newestFirst(List<PlaylistTrack> tracks) {
+    final reversed = tracks.reversed.toList();
+    final times = {
+      for (final (i, track) in reversed.indexed)
+        i: DateTime.tryParse(track.addedAt)?.millisecondsSinceEpoch ?? 0,
+    };
+    final order = List<int>.generate(reversed.length, (i) => i)
+      ..sort((a, b) {
+        final byTime = times[b]!.compareTo(times[a]!);
+        return byTime != 0 ? byTime : a.compareTo(b);
+      });
+    return [for (final i in order) reversed[i]];
   }
 
   ToplistTrack _playlistTrackToToplist(PlaylistTrack t) => ToplistTrack(

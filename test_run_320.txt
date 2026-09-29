@@ -1,0 +1,110 @@
+00:00 +0: loading D:/work/cyrene_music_reborn/test/features/settings/settings_page_test.dart
+00:00 +0: (setUpAll)
+00:00 +0: 外观玻璃菜单在各形态下不溢出且面板在视口内：320.0x640.0 x2.0 dark rtl page
+✅ [LyricFontService] 加载设置成功: fontType=preset, presetFontId=microsoft_yahei
+🎨 [PlayerBackground] 已初始化: PlayerBackgroundType.dynamic, 模糊: 10.0, 渐变: false
+══╡ EXCEPTION CAUGHT BY RENDERING LIBRARY ╞═════════════════════════════════════════════════════════
+The following assertion was thrown during layout:
+A RenderFlex overflowed by 3.0 pixels on the right.
+
+The relevant error-causing widget was:
+  Row
+  Row:file:///D:/work/flutter_miuix/lib/src/theme/miuix/components/miuix_basic_component.dart:161:19
+
+The overflowing RenderFlex has an orientation of Axis.horizontal.
+The edge of the RenderFlex that is overflowing has been marked in the rendering with a yellow and
+black striped pattern. This is usually caused by the contents being too big for the RenderFlex.
+Consider applying a flex factor (e.g. using an Expanded widget) to force the children of the
+RenderFlex to fit within the available space instead of being sized to their natural size.
+This is considered an error condition because it indicates that there is content that cannot be
+seen. If the content is legitimately bigger than the available space, consider clipping it with a
+ClipRect widget before putting it in the flex, or using a scrollable container rather than a Flex,
+like a ListView.
+The specific RenderFlex in question is: RenderFlex#d0163 relayoutBoundary=up25 OVERFLOWING:
+  creator: Row ← Column ← _BasicSlot ← _BasicComponentRow ← Column ← Padding ← ConstrainedBox ← Stack
+    ← Semantics ← _FocusInheritedScope ← Focus ← MouseRegion-[GlobalKey#f3761] ← ⋯
+  parentData: offset=Offset(0.0, 0.0); flex=null; fit=null (can use size)
+  constraints: BoxConstraints(0.0<=w<=123.0, 0.0<=h<=Infinity)
+  size: Size(123.0, 37.0)
+  direction: horizontal
+  mainAxisAlignment: start
+  mainAxisSize: min
+  crossAxisAlignment: center
+  textDirection: rtl
+  verticalDirection: down
+  spacing: 0.0
+◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤
+════════════════════════════════════════════════════════════════════════════════════════════════════
+══╡ EXCEPTION CAUGHT BY RENDERING LIBRARY ╞═════════════════════════════════════════════════════════
+The following assertion was thrown during layout:
+A RenderFlex overflowed by 3.0 pixels on the right.
+
+The relevant error-causing widget was:
+  Row
+  Row:file:///D:/work/flutter_miuix/lib/src/theme/miuix/components/miuix_basic_component.dart:161:19
+
+The overflowing RenderFlex has an orientation of Axis.horizontal.
+The edge of the RenderFlex that is overflowing has been marked in the rendering with a yellow and
+black striped pattern. This is usually caused by the contents being too big for the RenderFlex.
+Consider applying a flex factor (e.g. using an Expanded widget) to force the children of the
+RenderFlex to fit within the available space instead of being sized to their natural size.
+This is considered an error condition because it indicates that there is content that cannot be
+seen. If the content is legitimately bigger than the available space, consider clipping it with a
+ClipRect widget before putting it in the flex, or using a scrollable container rather than a Flex,
+like a ListView.
+The specific RenderFlex in question is: RenderFlex#bc327 relayoutBoundary=up25 OVERFLOWING:
+  creator: Row ← Column ← _BasicSlot ← _BasicComponentRow ← Column ← Padding ← ConstrainedBox ← Stack
+    ← Semantics ← _FocusInheritedScope ← Focus ← MouseRegion-[GlobalKey#25ac6] ← ⋯
+  parentData: offset=Offset(0.0, 0.0); flex=null; fit=null (can use size)
+  constraints: BoxConstraints(0.0<=w<=123.0, 0.0<=h<=Infinity)
+  size: Size(123.0, 37.0)
+  direction: horizontal
+  mainAxisAlignment: start
+  mainAxisSize: min
+  crossAxisAlignment: center
+  textDirection: rtl
+  verticalDirection: down
+  spacing: 0.0
+◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤
+════════════════════════════════════════════════════════════════════════════════════════════════════
+══╡ EXCEPTION CAUGHT BY RENDERING LIBRARY ╞═════════════════════════════════════════════════════════
+The following assertion was thrown during layout:
+A RenderFlex overflowed by 3.0 pixels on the right.
+
+The relevant error-causing widget was:
+  Row
+  Row:file:///D:/work/flutter_miuix/lib/src/theme/miuix/components/miuix_basic_component.dart:161:19
+
+The overflowing RenderFlex has an orientation of Axis.horizontal.
+The edge of the RenderFlex that is overflowing has been marked in the rendering with a yellow and
+black striped pattern. This is usually caused by the contents being too big for the RenderFlex.
+Consider applying a flex factor (e.g. using an Expanded widget) to force the children of the
+RenderFlex to fit within the available space instead of being sized to their natural size.
+This is considered an error condition because it indicates that there is content that cannot be
+seen. If the content is legitimately bigger than the available space, consider clipping it with a
+ClipRect widget before putting it in the flex, or using a scrollable container rather than a Flex,
+like a ListView.
+The specific RenderFlex in question is: RenderFlex#86961 relayoutBoundary=up25 OVERFLOWING:
+  creator: Row ← Column ← _BasicSlot ← _BasicComponentRow ← Column ← Padding ← ConstrainedBox ← Stack
+    ← Semantics ← _FocusInheritedScope ← Focus ← MouseRegion-[GlobalKey#4ae2c] ← ⋯
+  parentData: offset=Offset(0.0, 0.0); flex=null; fit=null (can use size)
+  constraints: BoxConstraints(0.0<=w<=123.0, 0.0<=h<=Infinity)
+  size: Size(123.0, 37.0)
+  direction: horizontal
+  mainAxisAlignment: start
+  mainAxisSize: min
+  crossAxisAlignment: center
+  textDirection: rtl
+  verticalDirection: down
+  spacing: 0.0
+◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤
+════════════════════════════════════════════════════════════════════════════════════════════════════
+10:00 +0 -1: 外观玻璃菜单在各形态下不溢出且面板在视口内：320.0x640.0 x2.0 dark rtl page [E]
+  TimeoutException after 0:10:00.000000: Test timed out after 10 minutes.
+  dart:isolate  _RawReceivePort._handleMessage
+  
+10:00 +0 -1: (tearDownAll)
+10:00 +0 -1: Some tests failed.
+
+Failing tests:
+  D:/work/cyrene_music_reborn/test/features/settings/settings_page_test.dart: 外观玻璃菜单在各形态下不溢出且面板在视口内：320.0x640.0 x2.0 dark rtl page

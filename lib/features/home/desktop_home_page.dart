@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
@@ -19,8 +21,11 @@ import '../../infrastructure/storage/spotify_charts_cache.dart';
 import '../../presentation/cyrene/cyrene_toast.dart';
 import '../history/history_page.dart';
 import '../artist/artist_detail_page.dart';
+import '../playlist/playlist_detail_loaders.dart';
 import '../playlist/playlist_detail_page.dart';
 import 'daily_recommend_page.dart';
+import 'desktop_charts/desktop_charts_home.dart';
+import 'for_you/for_you_palette.dart';
 import 'recommend_card_artwork.dart';
 
 /// 桌面端专属首页（宽屏布局，对应设计稿 Aurora Music 桌面版）。
@@ -36,9 +41,9 @@ import 'recommend_card_artwork.dart';
 /// 覆盖区布局与「返回首页」的返回键/标题栏标题（见 `desktop_shell.dart`）。
 /// 只有全屏播放器（[onOpenPlayer]）仍走全窗口路由，与移动端行为一致。
 ///
-/// 六段式（自上而下）：问候头 → 「为你推荐 / 榜单」切换 → 4 张渐变推荐卡 →
-/// 「最近播放 + 你的歌单」双栏 → 推荐歌单。数据全部复用外壳已持有的
-/// controller（[home]/[discover]/[playlists]/[account]/[playback]）。
+/// 推荐页保留个性化内容；榜单页由 [DesktopChartsHome] 组合精选海报、继续听、
+/// 热门单曲与分类榜单，Spotify 个性化分区放在核心内容之后。数据全部复用
+/// 外壳已持有的 controller，缓存和二级页导航仍在本页管理。
 ///
 /// **坑：横向条一律不用惰性 [ListView]，改 SingleChildScrollView + Row。**
 /// Windows 版 Flutter 的无障碍桥有一处已知缺陷（flutter#182444「ListView +
@@ -97,17 +102,39 @@ class DesktopHomePage extends StatefulWidget {
   State<DesktopHomePage> createState() => _DesktopHomePageState();
 }
 
-class _DesktopHomePageState extends State<DesktopHomePage> {
+class _DesktopHomePageState extends State<DesktopHomePage>
+    with SingleTickerProviderStateMixin {
   var _tab = _HomeTab.recommend;
-  var _leaderboardSource = _LeaderboardSource.spotify;
+
+  /// Tab 滑块的位置：0 = 为你推荐，1 = 榜单。放在页面 state 而不是 Tab 栏里——
+  /// 滚动视图按 Tab 换 key，切换时 Tab 栏会整个重建，自己持有的动画会丢。
+  late final AnimationController _tabMotion = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 480),
+    value: _tab.index.toDouble(),
+  );
+
+  /// 切换 Tab。[animate] 为 false 用于加载完成后按绑定状态自动选中，不播动画。
+  void _selectTab(_HomeTab tab, {bool animate = true}) {
+    if (!animate) {
+      _tabMotion.value = tab.index.toDouble();
+    } else if (tab.index > _tabMotion.value) {
+      _tabMotion.forward();
+    } else {
+      _tabMotion.reverse();
+    }
+    if (tab != _tab) setState(() => _tab = tab);
+  }
+
   List<Toplist> _spotifyToplists = const [];
-  bool _spotifyToplistsLoading = false;
+  bool _spotifyToplistsLoading = true;
+  bool _spotifyToplistsFetching = false;
+  bool _refreshing = false;
   String? _spotifyToplistsError;
   int _spotifyLoadGeneration = 0;
   String? _loadedToken;
 
   List<SpotifyPersonalizedSection> _spotifySections = const [];
-  bool _spotifySectionsLoading = false;
   int _spotifyDiscoveryGeneration = 0;
 
   // 派生数据缓存：仅当控制器发布新 RecommendData 对象时才重新解析原始 JSON。
@@ -139,7 +166,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     _loadedToken = widget.account.token;
     _loadAll();
     _loadHistory();
-    // 榜单默认源是 Spotify（网易云作为可选项），首屏即需加载，不等用户切换。
+    // 榜单使用 Spotify，首屏即加载，不等用户切换。
     _loadSpotifyToplists();
     _loadSpotifyDiscovery();
   }
@@ -149,56 +176,48 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     _spotifyLoadGeneration++;
     widget.account.removeListener(_onAccountChanged);
     widget.playback.removeListener(_onPlaybackChanged);
+    _tabMotion.dispose();
     super.dispose();
   }
 
-  Future<void> _selectLeaderboardSource(_LeaderboardSource source) async {
-    if (_leaderboardSource == source) return;
-    setState(() => _leaderboardSource = source);
-    if (source == _LeaderboardSource.spotify && _spotifyToplists.isEmpty) {
-      await _loadSpotifyToplists();
-    }
-  }
-
   Future<void> _loadSpotifyToplists() async {
-    if (_spotifyToplistsLoading) return;
+    if (_spotifyToplistsFetching) return;
+    _spotifyToplistsFetching = true;
     final generation = ++_spotifyLoadGeneration;
-
-    // 1) 先读本地快照：非空则立即绘制（loading 保持 false，后台静默刷新，
-    //    不闪 spinner；_LeaderboardDashboard 在 entries 非空时本就不显示 spinner）。
-    final cached = await SpotifyChartsCache.instance.read();
-    if (!mounted || generation != _spotifyLoadGeneration) return;
-
-    final hasCache = cached != null && cached.isNotEmpty;
-    setState(() {
-      if (hasCache) {
-        _spotifyToplists = cached;
+    try {
+      // 已有内容不被加载态盖住；冷启动先读快照，再静默刷新。
+      final cached = _spotifyToplists.isEmpty
+          ? await SpotifyChartsCache.instance.read()
+          : null;
+      if (!mounted || generation != _spotifyLoadGeneration) return;
+      setState(() {
+        if (cached != null && cached.isNotEmpty) _spotifyToplists = cached;
+        _spotifyToplistsLoading = _spotifyToplists.isEmpty;
         _spotifyToplistsError = null;
-        _spotifyToplistsLoading = false;
-      } else {
-        // 冷启动无缓存：显示 spinner 等待首屏。
-        _spotifyToplistsLoading = true;
-        _spotifyToplistsError = null;
+      });
+
+      final toplists = await DiscoveryService.instance.getSpotifyToplists();
+      if (!mounted || generation != _spotifyLoadGeneration) return;
+      setState(() {
+        if (toplists.isNotEmpty) {
+          _spotifyToplists = toplists;
+          SpotifyChartsCache.instance.write(toplists);
+        } else if (_spotifyToplists.isEmpty) {
+          _spotifyToplistsError = 'Spotify 榜单暂时不可用，请稍后刷新重试';
+        }
+      });
+    } catch (error) {
+      if (!mounted || generation != _spotifyLoadGeneration) return;
+      debugPrint('[DHP] Spotify charts failed: $error');
+      if (_spotifyToplists.isEmpty) {
+        setState(() => _spotifyToplistsError = '榜单加载失败，请检查网络后重试');
       }
-    });
-
-    // 2) 后台刷新：有缓存时为静默刷新（loading=false），无缓存时表现为可见 loading。
-    final toplists = await DiscoveryService.instance.getSpotifyToplists();
-    if (!mounted || generation != _spotifyLoadGeneration) return;
-
-    setState(() {
-      if (toplists.isNotEmpty) {
-        _spotifyToplists = toplists;
-        _spotifyToplistsError = null;
-        // 3) 成功且非空 → 回写快照（best-effort，store 内部 try/catch，不 await）。
-        SpotifyChartsCache.instance.write(toplists);
-      } else if (!hasCache) {
-        // 既无缓存又无新数据 → 维持原错误提示 + 重新加载。
-        _spotifyToplistsError = 'Spotify 榜单暂时不可用，请确认后端与 spotify-streamer 已启动';
+    } finally {
+      _spotifyToplistsFetching = false;
+      if (mounted && generation == _spotifyLoadGeneration) {
+        setState(() => _spotifyToplistsLoading = false);
       }
-      // hasCache && toplists.isEmpty（后端整体失败）→ 保留缓存，不设错误，不闪。
-      _spotifyToplistsLoading = false;
-    });
+    }
   }
 
   /// 拉取号池 Spotify 账号的个性化首页分区。
@@ -207,50 +226,30 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
   /// 添花，真正的主内容是下方的热门榜单。
   Future<void> _loadSpotifyDiscovery() async {
     final generation = ++_spotifyDiscoveryGeneration;
-    // 直接赋值而非 setState：本方法由 initState 调用，首帧还没画，setState 会撞上
-    // 「markNeedsBuild() called during build」。结果回来时才需要真正重建。
-    _spotifySectionsLoading = _spotifySections.isEmpty;
     final sections = await DiscoveryService.instance.getSpotifyHome(limit: 20);
     if (!mounted || generation != _spotifyDiscoveryGeneration) return;
     setState(() {
       if (sections.isNotEmpty) _spotifySections = sections;
-      _spotifySectionsLoading = false;
     });
   }
 
-  Future<void> _openSpotifyAlbum(SpotifyAlbumPreview album) async {
-    final tracks = await DiscoveryService.instance.getSpotifyAlbumTracks(
-      album.id,
-    );
-    if (!mounted) return;
-    if (tracks.isEmpty) {
-      CyreneToast.show('这张专辑暂时读不出来，稍后再试');
-      return;
-    }
+  /// 打开专辑：立即进详情页，曲目由页面自己取（取的过程显示加载动画）。
+  void _openSpotifyAlbum(SpotifyAlbumPreview album) {
     widget.onOpenSecondary(
       PlaylistDetailPage(
         playlistId: album.id,
         title: album.name,
         coverUrl: album.coverImgUrl,
+        creator: album.artists,
         playback: widget.playback,
         token: widget.account.token,
         desktopLayout: true,
         source: MusicSource.spotify,
-        reloadable: false,
-        trackCount: tracks.length,
-        initialPlaylist: PlaylistDetail(
-          id: 0,
+        loader: spotifyAlbumLoader(
+          albumId: album.id,
           name: album.name,
-          coverImgUrl: album.coverImgUrl,
-          description: album.artists,
-          source: MusicSource.spotify,
-          tracks: tracks,
-          playCount: 0,
-          creator: album.artists,
-          trackCount: tracks.length,
-          createTime: 0,
-          updateTime: 0,
-          tags: const ['Spotify'],
+          coverUrl: album.coverImgUrl,
+          artists: album.artists,
         ),
       ),
     );
@@ -272,39 +271,24 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     );
   }
 
-  /// 打开单曲电台：内容是按需生成的，没有可复用的歌单 id，所以先把曲目拉下来
-  /// 再以 initialPlaylist 直接铺进详情页，并关掉 reloadable（重拉会当成歌单 id）。
-  Future<void> _openSpotifyRadio(SpotifyPlaylistPreview preview) async {
-    final tracks = await DiscoveryService.instance.getSpotifyRadio(preview.id);
-    if (!mounted) return;
-    if (tracks.isEmpty) {
-      CyreneToast.show('电台暂时生成不出来，稍后再试');
-      return;
-    }
+  /// 打开单曲电台：内容按需生成、没有可复用的歌单 id，交给 loader 在详情页
+  /// 里现拉，页面立即打开。
+  void _openSpotifyRadio(SpotifyPlaylistPreview preview) {
     widget.onOpenSecondary(
       PlaylistDetailPage(
         playlistId: preview.id,
         title: preview.name,
         coverUrl: preview.coverImgUrl,
+        creator: 'Spotify',
         playback: widget.playback,
         token: widget.account.token,
         desktopLayout: true,
         source: MusicSource.spotify,
-        reloadable: false,
-        trackCount: tracks.length,
-        initialPlaylist: PlaylistDetail(
-          id: 0,
+        loader: spotifyRadioLoader(
+          seedId: preview.id,
           name: preview.name,
-          coverImgUrl: preview.coverImgUrl,
+          coverUrl: preview.coverImgUrl,
           description: preview.description,
-          source: MusicSource.spotify,
-          tracks: tracks,
-          playCount: 0,
-          creator: 'Spotify',
-          trackCount: tracks.length,
-          createTime: 0,
-          updateTime: 0,
-          tags: const ['Spotify', '电台'],
         ),
       ),
     );
@@ -370,22 +354,34 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     _loadHistory();
   }
 
-  /// 刷新：除了重拉数据，还要重抽推荐卡封面（同一份推荐数据换一张封面）。
-  Future<void> _refresh() {
-    _artworkBatch++;
-    _recommendCacheSource = null;
-    _artwork.clear();
-    return widget.home.refresh();
+  /// 刷新推荐与 Spotify 内容，而不只刷新网易云控制器。
+  Future<void> _refresh() async {
+    if (_refreshing) return;
+    setState(() {
+      _refreshing = true;
+      _artworkBatch++;
+      _recommendCacheSource = null;
+      _artwork.clear();
+    });
+    try {
+      await Future.wait([
+        widget.home.refresh(),
+        _loadSpotifyToplists(),
+        _loadSpotifyDiscovery(),
+        _loadHistory(),
+      ]);
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
   }
 
   void _loadAll() {
     widget.home.load(token: _loadedToken).then((_) {
       if (!mounted) return;
-      setState(() {
-        _tab = widget.home.state.isBound
-            ? _HomeTab.recommend
-            : _HomeTab.leaderboard;
-      });
+      _selectTab(
+        widget.home.state.isBound ? _HomeTab.recommend : _HomeTab.leaderboard,
+        animate: false,
+      );
     });
     widget.playlists.load(_loadedToken);
     widget.discover.load();
@@ -577,43 +573,71 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
           'toplists=${state.toplists.length}',
         );
 
-        if (state.isLoading && !state.hasContent) {
+        final showTabs = state.isBound;
+        final tab = showTabs ? _tab : _HomeTab.leaderboard;
+        if (tab == _HomeTab.recommend && state.isLoading && !state.hasContent) {
           return const Center(child: MiuixCircularProgressIndicator());
         }
 
-        final showTabs = state.isBound;
-        final tab = showTabs ? _tab : _HomeTab.leaderboard;
-
-        return ScrollConfiguration(
-          behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
-          child: CustomScrollView(
-            key: const PageStorageKey('desktop-home-scroll'),
-            slivers: [
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(36, 24, 36, 48),
-                sliver: SliverList(
-                  delegate: SliverChildListDelegate([
-                    _GreetingHeader(
-                      username: widget.account.state.user?.username,
-                      refreshing: state.isRefreshing,
-                      onRefresh: _refresh,
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            // 超宽屏保留舒适的阅读宽度，小窗口则减小留白。
+            final horizontal = math.max(
+              constraints.maxWidth < 840 ? 24.0 : 36.0,
+              (constraints.maxWidth - 1560) / 2,
+            );
+            // 榜单页与移动端同一套暖纸色底；推荐页保持原样。
+            return _ChartsBackdrop(
+              enabled: tab == _HomeTab.leaderboard,
+              child: ScrollConfiguration(
+                behavior: ScrollConfiguration.of(
+                  context,
+                ).copyWith(scrollbars: false),
+                child: CustomScrollView(
+                  key: PageStorageKey('desktop-home-${tab.name}-scroll'),
+                  slivers: [
+                    SliverPadding(
+                      padding: EdgeInsets.fromLTRB(
+                        horizontal,
+                        24,
+                        horizontal,
+                        48,
+                      ),
+                      sliver: SliverList(
+                        delegate: SliverChildListDelegate([
+                          _GreetingHeader(
+                            username: widget.account.state.user?.username,
+                            refreshing: _refreshing || state.isRefreshing,
+                            onRefresh: _refresh,
+                          ),
+                          const SizedBox(height: 22),
+                          if (showTabs) ...[
+                            _HomeTabSwitcher(
+                              motion: _tabMotion,
+                              selected: tab,
+                              onSelected: _selectTab,
+                            ),
+                            const SizedBox(height: 20),
+                          ],
+                          // 整个滚动视图按 Tab 换 key，新内容挂载时从切换方向
+                          // 淡入滑进来。
+                          _TabReveal(
+                            fromEnd: tab == _HomeTab.leaderboard,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: tab == _HomeTab.recommend
+                                  ? _recommendSections(state)
+                                  : _leaderboardSections(),
+                            ),
+                          ),
+                        ]),
+                      ),
                     ),
-                    const SizedBox(height: 22),
-                    _TabBar(
-                      showTabs: showTabs,
-                      selected: tab,
-                      onSelected: (value) => setState(() => _tab = value),
-                    ),
-                    const SizedBox(height: 20),
-                    if (tab == _HomeTab.recommend)
-                      ..._recommendSections(state)
-                    else
-                      ..._leaderboardSections(state),
-                  ]),
+                  ],
                 ),
               ),
-            ],
-          ),
+            );
+          },
         );
       },
     );
@@ -721,101 +745,98 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
 
   // ===== 榜单 =====
 
-  List<Widget> _leaderboardSections(HomeState state) {
-    // 网易云榜单入口暂时下线：历史选中的网易云源一律回退到 Spotify，
-    // 相关代码保留以便恢复。
-    if (_leaderboardSource != _LeaderboardSource.spotify) {
-      _leaderboardSource = _LeaderboardSource.spotify;
+  // 榜单页的派生数据缓存：播放状态每次结构性变化都会重建榜单页，
+  // 只有源列表换了才重新转换曲目，DesktopChartsHome 也靠列表身份复用抽歌结果。
+  List<Toplist>? _entriesSource;
+  List<DesktopChartEntry> _entries = const [];
+  List<SpotifyPersonalizedSection>? _sectionsSource;
+  List<DesktopSpotifySection> _desktopSections = const [];
+  List<HistoryEntry>? _recentSource;
+  List<Track> _recent = const [];
+
+  List<Widget> _leaderboardSections() {
+    if (!identical(_entriesSource, _spotifyToplists)) {
+      _entriesSource = _spotifyToplists;
+      _entries = List.unmodifiable([
+        for (final toplist in _spotifyToplists)
+          (toplist: toplist, tracks: widget.home.tracksForToplist(toplist)),
+      ]);
     }
-    final isSpotify = _leaderboardSource == _LeaderboardSource.spotify;
-    final toplists = isSpotify ? _spotifyToplists : state.toplists;
-    debugPrint('[DHP] _leaderboardSections toplists=${toplists.length}');
+    if (!identical(_sectionsSource, _spotifySections)) {
+      _sectionsSource = _spotifySections;
+      _desktopSections = List.unmodifiable([
+        for (final section in _spotifySections)
+          (
+            id: section.id,
+            title: section.title,
+            description: section.description,
+            kind: section.kind,
+            items: section.collections,
+            tracks: _toTracks(section.tracks),
+          ),
+      ]);
+    }
+    if (!identical(_recentSource, _history)) {
+      _recentSource = _history;
+      _recent = _history.map(_historyToTrack).toList(growable: false);
+    }
     return [
-      if (isSpotify) ..._personalizedSections(),
-      _LeaderboardDashboard(
-        source: _leaderboardSource,
-        loading: isSpotify && _spotifyToplistsLoading,
-        errorMessage: isSpotify ? _spotifyToplistsError : null,
-        onRetry: isSpotify ? _loadSpotifyToplists : null,
-        onSourceChanged: _selectLeaderboardSource,
-        entries: [
-          for (final toplist in toplists)
-            (toplist: toplist, tracks: widget.home.tracksForToplist(toplist)),
-        ],
-        onPlay: (track, queue) =>
-            widget.playback.playTrack(track, queue: queue),
-        onOpen: (toplist) {
-          if (toplist.source == MusicSource.spotify) {
-            final tracks = toplist.tracks;
-            widget.onOpenSecondary(
-              PlaylistDetailPage(
-                playlistId: toplist.externalId ?? toplist.id,
-                title: toplist.name,
-                coverUrl: toplist.coverImgUrl,
-                playback: widget.playback,
-                token: widget.account.token,
-                desktopLayout: true,
-                source: MusicSource.spotify,
-                reloadable: toplist.externalId != null,
-                initialPlaylist: PlaylistDetail(
-                  id: toplist.id,
-                  name: toplist.name,
-                  coverImgUrl: toplist.coverImgUrl,
-                  description: toplist.description,
-                  source: MusicSource.spotify,
-                  tracks: tracks,
-                  playCount: 0,
-                  creator: 'Spotify',
-                  trackCount: tracks.length,
-                  createTime: 0,
-                  updateTime: 0,
-                  tags: const ['Spotify'],
-                ),
-              ),
-            );
-            return;
-          }
-          widget.onOpenPlaylist(toplist.id, toplist.name, toplist.coverImgUrl);
-        },
+      // 仅监听结构性播放状态，不订阅 position tick，封面和榜单不会每秒重建。
+      ListenableBuilder(
+        listenable: widget.playback,
+        builder: (context, _) => DesktopChartsHome(
+          entries: _entries,
+          sections: _desktopSections,
+          loading: _spotifyToplistsLoading,
+          errorMessage: _spotifyToplistsError,
+          onRetry: _loadSpotifyToplists,
+          recentTracks: _recent,
+          currentTrack: widget.playback.state.currentTrack,
+          isPlaying: widget.playback.state.isPlaying,
+          onPlay: (track, queue) =>
+              widget.playback.playTrack(track, queue: queue),
+          onTogglePlayback: widget.playback.togglePlay,
+          onOpenPlayer: widget.onOpenPlayer,
+          onOpenHistory: _openHistoryAll,
+          onOpenChart: _openChart,
+          onOpenItem: _openPersonalizedItem,
+        ),
       ),
     ];
   }
 
-  /// 号池 Spotify 账号的个性化分区，铺在热门榜单之前。
-  ///
-  /// 分区是后端按「哪几路数据真的取到了」动态给的，本地不硬编码顺序或数量，
-  /// 空了就整段不渲染——原来的「新碟上架 / Hip Hop / 摇滚…」是写死的六个分类，
-  /// 后端 404 之后只会留下六个永远转圈的 spinner，这次不再重蹈覆辙。
-  List<Widget> _personalizedSections() {
-    if (_spotifySections.isEmpty) {
-      if (!_spotifySectionsLoading) return const [];
-      return const [
-        SizedBox(
-          height: 140,
-          child: Center(child: MiuixCircularProgressIndicator()),
-        ),
-        SizedBox(height: 28),
-      ];
-    }
-    return [
-      for (final section in _spotifySections) ...[
-        if (section.kind == SpotifyPersonalizedKind.track)
-          _NewSongsSection(
-            title: section.title,
-            tracks: _toTracks(section.tracks),
-            onPlay: (track, queue) =>
-                widget.playback.playTrack(track, queue: queue),
-          )
-        else
-          _SpotifyCollectionSection(
-            title: section.title,
-            description: section.description,
-            items: section.collections,
-            onOpen: _openPersonalizedItem,
+  void _openChart(Toplist toplist) {
+    if (toplist.source == MusicSource.spotify) {
+      final tracks = toplist.tracks;
+      widget.onOpenSecondary(
+        PlaylistDetailPage(
+          playlistId: toplist.externalId ?? toplist.id,
+          title: toplist.name,
+          coverUrl: toplist.coverImgUrl,
+          playback: widget.playback,
+          token: widget.account.token,
+          desktopLayout: true,
+          source: MusicSource.spotify,
+          reloadable: toplist.externalId != null,
+          initialPlaylist: PlaylistDetail(
+            id: toplist.id,
+            name: toplist.name,
+            coverImgUrl: toplist.coverImgUrl,
+            description: toplist.description,
+            source: MusicSource.spotify,
+            tracks: tracks,
+            playCount: 0,
+            creator: 'Spotify',
+            trackCount: tracks.length,
+            createTime: 0,
+            updateTime: 0,
+            tags: const ['Spotify'],
           ),
-        const SizedBox(height: 28),
-      ],
-    ];
+        ),
+      );
+      return;
+    }
+    widget.onOpenPlaylist(toplist.id, toplist.name, toplist.coverImgUrl);
   }
 
   List<Track> _toTracks(List<ToplistTrack> items) => items
@@ -838,9 +859,54 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
 
 enum _HomeTab { recommend, leaderboard }
 
-// 网易云榜单入口暂时下线：netease 枚举值暂未被引用，保留以便恢复。
-// ignore: unused_field
-enum _LeaderboardSource { netease, spotify }
+/// 榜单页的暖纸色底。
+///
+/// 不用移动端的 ForYouAtmosphere：桌面内容区的 surface 是透明的（透出 Mica），
+/// 它的渐变两端取 surface，会和透明黑插值出一片发灰的脏色。这里渐变两端用同一
+/// 纸色、只变不透明度，顶部淡一些让 Mica 隐约透出，往下渐渐铺满。
+class _ChartsBackdrop extends StatelessWidget {
+  const _ChartsBackdrop({required this.enabled, required this.child});
+
+  final bool enabled;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = ForYouPalette.of(context);
+    final paper = palette.background;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // 始终挂载、只切透明度：切到榜单时暖纸色渐渐铺开，而不是啪地出现。
+        Positioned.fill(
+          child: IgnorePointer(
+            child: AnimatedOpacity(
+              opacity: enabled ? 1 : 0,
+              duration: const Duration(milliseconds: 420),
+              curve: Curves.easeOutCubic,
+              child: RepaintBoundary(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        paper.withValues(alpha: 0.55),
+                        paper.withValues(alpha: 0.92),
+                      ],
+                      stops: const [0, 0.35],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        child,
+      ],
+    );
+  }
+}
 
 /// 4 张推荐卡的位置标识，用于按卡索引已解析的动态视觉。
 enum _RecSlot { daily, relax, focus, radar }
@@ -978,6 +1044,8 @@ class _GreetingHeader extends StatelessWidget {
               const SizedBox(height: 4),
               Text(
                 subtitle,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
                 style: theme.textStyles.body2.copyWith(
                   color: colors.onSurfaceVariantSummary,
                 ),
@@ -1002,74 +1070,207 @@ class _GreetingHeader extends StatelessWidget {
   }
 }
 
-/// 「为你推荐 / 榜单」切换 + 右侧「自定义推荐」按钮。
-class _TabBar extends StatelessWidget {
-  const _TabBar({
-    required this.showTabs,
+/// 「为你推荐 / 榜单」分段切换。
+///
+/// 自绘的胶囊轨道 + 滑块：滑块由页面持有的 [motion]（0 → 1）驱动。移动时前沿
+/// 走快曲线、后沿走慢曲线，滑块会先被拉长再收拢，像被拽过去一样；文字与图标
+/// 颜色随滑块距离渐变。
+class _HomeTabSwitcher extends StatelessWidget {
+  const _HomeTabSwitcher({
+    required this.motion,
     required this.selected,
     required this.onSelected,
   });
 
-  final bool showTabs;
+  final AnimationController motion;
   final _HomeTab selected;
   final ValueChanged<_HomeTab> onSelected;
+
+  static const _pad = 4.0;
+  static const _labels = ['为你推荐', '榜单'];
+  static const _icons = [Icons.auto_awesome_rounded, Icons.leaderboard_rounded];
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MiuixTheme.of(context).colors;
+    final scaler = MediaQuery.textScalerOf(context);
+    final segment = 124.0 * math.max(1.0, scaler.scale(14) / 14 * 0.9);
+    final height = math.max(44.0, scaler.scale(14) * 1.4 + 24);
+    const leading = Curves.easeOutCubic;
+    const trailing = Curves.easeInOutCubic;
+
+    return Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: Container(
+        width: segment * _labels.length + _pad * 2,
+        height: height,
+        decoration: BoxDecoration(
+          color: colors.onBackground.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(height / 2),
+        ),
+        // 描边放前景：写在 decoration 里会被 Container 当成内边距，吃掉 1.6px，
+        // 两格按 segment 算的总宽就塞不下了，滑块位置也会和格子错开。
+        foregroundDecoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(height / 2),
+          border: Border.all(
+            color: colors.onBackground.withValues(alpha: 0.06),
+            width: 0.8,
+          ),
+        ),
+        child: AnimatedBuilder(
+          animation: motion,
+          builder: (context, _) {
+            final value = motion.value;
+            // 往右走时右沿领先、左沿拖后；往左走时反过来。
+            final double left;
+            final double right;
+            if (motion.status == AnimationStatus.reverse) {
+              final q = 1 - value;
+              left = 1 - leading.transform(q);
+              right = 1 - trailing.transform(q);
+            } else {
+              left = trailing.transform(value);
+              right = leading.transform(value);
+            }
+            return Stack(
+              children: [
+                Positioned(
+                  left: _pad + left * segment,
+                  width: segment + (right - left) * segment,
+                  top: _pad,
+                  bottom: _pad,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: colors.surfaceContainer,
+                      borderRadius: BorderRadius.circular(height / 2),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.08),
+                          blurRadius: 10,
+                          offset: const Offset(0, 3),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Positioned.fill(
+                  left: _pad,
+                  right: _pad,
+                  child: Row(
+                    children: [
+                      for (var i = 0; i < _labels.length; i++)
+                        SizedBox(
+                          width: segment,
+                          child: _HomeTabLabel(
+                            label: _labels[i],
+                            icon: _icons[i],
+                            // 1 = 滑块正好停在这一格上。
+                            emphasis: (1 - (value - i).abs()).clamp(0.0, 1.0),
+                            selected: selected.index == i,
+                            onPressed: () => onSelected(_HomeTab.values[i]),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _HomeTabLabel extends StatelessWidget {
+  const _HomeTabLabel({
+    required this.label,
+    required this.icon,
+    required this.emphasis,
+    required this.selected,
+    required this.onPressed,
+  });
+
+  final String label;
+  final IconData icon;
+  final double emphasis;
+  final bool selected;
+  final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
     final theme = MiuixTheme.of(context);
-    debugPrint('[DHP] _TabBar.build showTabs=$showTabs');
-    return Row(
-      children: [
-        if (showTabs)
-          Expanded(
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: MiuixTabRowWithContour(
-                tabs: const ['为你推荐', '榜单'],
-                selectedTabIndex: selected == _HomeTab.recommend ? 0 : 1,
-                contentAlignment: AlignmentDirectional.centerStart,
-                onTabSelected: (index) => onSelected(
-                  index == 0 ? _HomeTab.recommend : _HomeTab.leaderboard,
-                ),
+    final colors = theme.colors;
+    final text = Color.lerp(
+      colors.onSurfaceVariantSummary,
+      colors.onBackground,
+      emphasis,
+    )!;
+    final glyph = Color.lerp(
+      colors.onSurfaceVariantSummary,
+      colors.primary,
+      emphasis,
+    )!;
+    return Semantics(
+      selected: selected,
+      child: MiuixPressable(
+        onPressed: onPressed,
+        semanticLabel: label,
+        borderRadius: BorderRadius.circular(999),
+        child: Center(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Transform.scale(
+                scale: 0.9 + 0.1 * emphasis,
+                child: Icon(icon, size: 17, color: glyph),
               ),
-            ),
-          )
-        else
-          const Spacer(),
-        MiuixPressable(
-          onPressed: () => CyreneToast.show('自定义推荐即将上线'),
-          borderRadius: BorderRadius.circular(20),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-            decoration: ShapeDecoration(
-              color: theme.colors.secondaryContainer,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-              ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                MiuixIcon(
-                  icon: Icons.tune_rounded,
-                  size: 16,
-                  tint: theme.colors.onSurfaceContainer,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  '自定义推荐',
-                  style: theme.textStyles.footnote1.copyWith(
-                    color: theme.colors.onSurfaceContainer,
-                    fontWeight: FontWeight.w500,
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textStyles.body2.copyWith(
+                    fontSize: 14,
+                    // 字重不做插值（会抖动字宽），过半才加粗。
+                    fontWeight: emphasis > 0.5
+                        ? FontWeight.w700
+                        : FontWeight.w500,
+                    color: text,
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
-      ],
+      ),
     );
   }
+}
+
+/// Tab 内容挂载时的入场：淡入并从切换方向滑进来，只在挂载时播一次。
+/// [child] 走 TweenAnimationBuilder 的 child 参数，动画期间不重建内容。
+class _TabReveal extends StatelessWidget {
+  const _TabReveal({required this.fromEnd, required this.child});
+
+  final bool fromEnd;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => TweenAnimationBuilder<double>(
+    tween: Tween(begin: 0, end: 1),
+    duration: const Duration(milliseconds: 460),
+    curve: Curves.easeOutCubic,
+    child: child,
+    builder: (context, t, child) => Opacity(
+      opacity: t,
+      child: Transform.translate(
+        offset: Offset((fromEnd ? 28 : -28) * (1 - t), 0),
+        child: child,
+      ),
+    ),
+  );
 }
 
 /// 4 张渐变推荐卡横向等宽排列。窄到放不下时横向滚动。
@@ -1828,17 +2029,10 @@ class _PersonalFmSection extends StatelessWidget {
 /// 个性化新歌区块（桌面）：横向新歌卡片列。遵守本文件「横向条不用
 /// ListView」（无障碍桥缺陷），故限量 + SingleChildScrollView + Row。
 class _NewSongsSection extends StatelessWidget {
-  const _NewSongsSection({
-    required this.tracks,
-    required this.onPlay,
-    this.title = '个性化新歌',
-  });
+  const _NewSongsSection({required this.tracks, required this.onPlay});
 
   final List<Track> tracks;
   final void Function(Track track, List<Track> queue) onPlay;
-
-  /// 区块标题。个性化分区会用后端给的标题（如「你收藏的音乐」）覆盖默认值。
-  final String title;
 
   @override
   Widget build(BuildContext context) {
@@ -1847,7 +2041,7 @@ class _NewSongsSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionHeader(title: title),
+        const _SectionHeader(title: '个性化新歌'),
         const SizedBox(height: 12),
         SizedBox(
           height: 200,
@@ -1910,371 +2104,6 @@ class _NewSongCard extends StatelessWidget {
               style: theme.textStyles.footnote2.copyWith(
                 color: theme.colors.onSurfaceVariantSummary,
               ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 榜单区块（桌面）：标题 + 「查看全部」+ 前 5 首歌曲行。
-typedef _LeaderboardEntry = ({Toplist toplist, List<Track> tracks});
-
-class _LeaderboardDashboard extends StatelessWidget {
-  const _LeaderboardDashboard({
-    required this.entries,
-    required this.onPlay,
-    required this.onOpen,
-    required this.source,
-    required this.onSourceChanged,
-    this.loading = false,
-    this.errorMessage,
-    this.onRetry,
-  });
-
-  final List<_LeaderboardEntry> entries;
-  final void Function(Track track, List<Track> queue) onPlay;
-  final ValueChanged<Toplist> onOpen;
-  final _LeaderboardSource source;
-  final ValueChanged<_LeaderboardSource> onSourceChanged;
-  final bool loading;
-  final String? errorMessage;
-  final VoidCallback? onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = MiuixTheme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '热门榜单',
-                    style: theme.textStyles.headline1.copyWith(
-                      color: theme.colors.onBackground,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    source == _LeaderboardSource.spotify
-                        ? '探索 Spotify 全球与地区热门音乐'
-                        : '实时发现正在流行的音乐与高热度作品',
-                    style: theme.textStyles.body2.copyWith(
-                      color: theme.colors.onSurfaceVariantSummary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 20),
-            SizedBox(
-              width: 158,
-              child: MiuixWindowDropdownMenu(
-                title: source == _LeaderboardSource.spotify
-                    ? 'Spotify'
-                    : '网易云音乐',
-                insideMargin: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 8,
-                ),
-                entry: MiuixDropdownEntry(
-                  items: [
-                    // 网易云榜单入口暂时下线，保留代码以便恢复。
-                    // MiuixDropdownItem(
-                    //   text: '网易云音乐',
-                    //   selected: source == _LeaderboardSource.netease,
-                    //   onClick: () =>
-                    //       onSourceChanged(_LeaderboardSource.netease),
-                    // ),
-                    MiuixDropdownItem(
-                      text: 'Spotify',
-                      selected: source == _LeaderboardSource.spotify,
-                      onClick: () =>
-                          onSourceChanged(_LeaderboardSource.spotify),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 18),
-        if (loading)
-          const SizedBox(
-            height: 220,
-            child: Center(child: MiuixCircularProgressIndicator()),
-          )
-        else if (entries.isEmpty)
-          Column(
-            children: [
-              _EmptyHint(
-                icon: Icons.emoji_events_outlined,
-                text: errorMessage ?? '暂无榜单内容，稍后刷新再试',
-              ),
-              if (onRetry != null) ...[
-                const SizedBox(height: 12),
-                MiuixButton(onPressed: onRetry, child: const MiuixText('重新加载')),
-              ],
-            ],
-          )
-        else
-          LayoutBuilder(
-            builder: (context, constraints) {
-              const gap = 18.0;
-              final columns = constraints.maxWidth >= 980 ? 2 : 1;
-              final cardWidth = columns == 2
-                  ? (constraints.maxWidth - gap) / 2
-                  : constraints.maxWidth;
-              return Wrap(
-                spacing: gap,
-                runSpacing: gap,
-                children: [
-                  for (final entry in entries)
-                    SizedBox(
-                      width: cardWidth,
-                      child: _LeaderboardCard(
-                        entry: entry,
-                        onPlay: onPlay,
-                        onOpen: () => onOpen(entry.toplist),
-                      ),
-                    ),
-                ],
-              );
-            },
-          ),
-      ],
-    );
-  }
-}
-
-class _LeaderboardCard extends StatelessWidget {
-  const _LeaderboardCard({
-    required this.entry,
-    required this.onPlay,
-    required this.onOpen,
-  });
-
-  final _LeaderboardEntry entry;
-  final void Function(Track track, List<Track> queue) onPlay;
-  final VoidCallback onOpen;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = MiuixTheme.of(context);
-    final colors = theme.colors;
-    final toplist = entry.toplist;
-    final tracks = entry.tracks;
-    final visibleTracks = tracks.take(4).toList(growable: false);
-    return MiuixCard(
-      cornerRadius: 20,
-      insideMargin: const EdgeInsets.fromLTRB(16, 16, 16, 10),
-      child: Column(
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _Cover(url: toplist.coverImgUrl, size: 104, cornerRadius: 16),
-              const SizedBox(width: 16),
-              Expanded(
-                child: SizedBox(
-                  height: 104,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        toplist.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textStyles.title4.copyWith(
-                          color: colors.onSurfaceContainer,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        toplist.description.trim().isEmpty
-                            ? '精选当下热门歌曲'
-                            : toplist.description.trim(),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textStyles.footnote1.copyWith(
-                          color: colors.onSurfaceVariantSummary,
-                          height: 1.35,
-                        ),
-                      ),
-                      const Spacer(),
-                      Row(
-                        children: [
-                          _LeaderboardAction(
-                            icon: Icons.play_arrow_rounded,
-                            label: '播放',
-                            primary: true,
-                            onPressed: tracks.isEmpty
-                                ? null
-                                : () => onPlay(tracks.first, tracks),
-                          ),
-                          const SizedBox(width: 8),
-                          _LeaderboardAction(
-                            icon: Icons.open_in_new_rounded,
-                            label: '查看',
-                            onPressed: onOpen,
-                          ),
-                          const Spacer(),
-                          Text(
-                            '${tracks.length} 首',
-                            style: theme.textStyles.footnote1.copyWith(
-                              color: colors.onSurfaceVariantSummary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          for (final (index, track) in visibleTracks.indexed)
-            _LeaderboardTrackRow(
-              rank: index + 1,
-              track: track,
-              onPressed: () => onPlay(track, tracks),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _LeaderboardAction extends StatelessWidget {
-  const _LeaderboardAction({
-    required this.icon,
-    required this.label,
-    required this.onPressed,
-    this.primary = false,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback? onPressed;
-  final bool primary;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = MiuixTheme.of(context);
-    return MiuixButton(
-      onPressed: onPressed,
-      minWidth: 0,
-      minHeight: 30,
-      cornerRadius: 10,
-      insideMargin: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      colors: primary ? MiuixButtonDefaults.buttonColorsPrimary(context) : null,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          MiuixIcon(icon: icon, size: 15),
-          const SizedBox(width: 5),
-          MiuixText(
-            label,
-            style: theme.textStyles.footnote1.copyWith(
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _LeaderboardTrackRow extends StatelessWidget {
-  const _LeaderboardTrackRow({
-    required this.rank,
-    required this.track,
-    required this.onPressed,
-  });
-
-  final int rank;
-  final Track track;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = MiuixTheme.of(context);
-    final colors = theme.colors;
-    return MiuixPressable(
-      onPressed: onPressed,
-      borderRadius: BorderRadius.circular(10),
-      child: SizedBox(
-        height: 52,
-        child: Row(
-          children: [
-            SizedBox(
-              width: 30,
-              child: Text(
-                rank.toString().padLeft(2, '0'),
-                textAlign: TextAlign.center,
-                style: theme.textStyles.footnote1.copyWith(
-                  color: rank <= 3
-                      ? colors.primary
-                      : colors.onSurfaceVariantSummary,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-            const SizedBox(width: 6),
-            _Cover(url: track.picUrl, size: 38, cornerRadius: 9),
-            const SizedBox(width: 11),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    track.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textStyles.body2.copyWith(
-                      color: colors.onSurfaceContainer,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    track.artists,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textStyles.footnote1.copyWith(
-                      color: colors.onSurfaceVariantSummary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                track.album,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textStyles.footnote1.copyWith(
-                  color: colors.onSurfaceVariantSummary,
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            MiuixIcon(
-              icon: Icons.play_arrow_rounded,
-              size: 18,
-              tint: colors.onSurfaceVariantActions,
             ),
           ],
         ),
@@ -2421,114 +2250,5 @@ class _Cover extends StatelessWidget {
       cover = SizedBox.square(dimension: size, child: cover);
     }
     return cover;
-  }
-}
-
-/// 个性化首页里「一排卡片」的通用区块（歌单 / 电台 / 专辑共用）。
-///
-/// 三者的卡片信息结构完全一致（封面 + 主标题 + 副标题），差别只在点开后的去处，
-/// 由调用方通过 [onOpen] 分流，故不再按类型各写一套区块。
-class _SpotifyCollectionSection extends StatelessWidget {
-  const _SpotifyCollectionSection({
-    required this.title,
-    required this.description,
-    required this.items,
-    required this.onOpen,
-  });
-
-  final String title;
-  final String description;
-  final List<SpotifyPlaylistPreview> items;
-  final ValueChanged<SpotifyPlaylistPreview> onOpen;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = MiuixTheme.of(context);
-    // 空分区由调用方过滤掉，这里不再画 spinner——画了就会永远停在转圈。
-    if (items.isEmpty) return const SizedBox.shrink();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: theme.textStyles.headline1.copyWith(
-            color: theme.colors.onBackground,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        if (description.isNotEmpty) ...[
-          const SizedBox(height: 5),
-          Text(
-            description,
-            style: theme.textStyles.body2.copyWith(
-              color: theme.colors.onSurfaceVariantSummary,
-            ),
-          ),
-        ],
-        const SizedBox(height: 16),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            const columnsWide = 4;
-            const gap = 16.0;
-            final columns = constraints.maxWidth >= 980 ? columnsWide : 2;
-            final cardWidth =
-                (constraints.maxWidth - (columns - 1) * gap) / columns;
-            return Wrap(
-              spacing: gap,
-              runSpacing: gap,
-              children: [
-                // 一屏最多两行，再多就挤掉下方的榜单；后端也已按分区限量。
-                for (final item in items.take(columns * 2))
-                  SizedBox(
-                    width: cardWidth,
-                    child: _SpotifyPlaylistCard(preview: item, onOpen: onOpen),
-                  ),
-              ],
-            );
-          },
-        ),
-      ],
-    );
-  }
-}
-
-/// 个性化分区里的单张卡片（歌单 / 电台 / 专辑共用）。
-class _SpotifyPlaylistCard extends StatelessWidget {
-  const _SpotifyPlaylistCard({required this.preview, required this.onOpen});
-
-  final SpotifyPlaylistPreview preview;
-  final ValueChanged<SpotifyPlaylistPreview> onOpen;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = MiuixTheme.of(context);
-    return MiuixCard(
-      cornerRadius: 18,
-      insideMargin: const EdgeInsets.all(12),
-      feedbackType: MiuixPressFeedbackType.sink,
-      onPressed: () => onOpen(preview),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _Cover(url: preview.coverImgUrl, size: 120, cornerRadius: 14),
-          const SizedBox(height: 10),
-          MiuixText(
-            preview.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textStyles.body1.copyWith(fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 4),
-          MiuixText(
-            preview.description,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textStyles.footnote2.copyWith(
-              color: theme.colors.onSurfaceVariantSummary,
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }

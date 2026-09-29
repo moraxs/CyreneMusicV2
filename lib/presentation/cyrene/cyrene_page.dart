@@ -166,8 +166,14 @@ class _CyrenePageState extends State<CyrenePage> {
           // 之上），玻璃才不会采样到自己。脚手架的 containerColor 画在捕获树
           // 之外，捕获到的是透明底，故这里补一层同样的页面底色——否则玻璃糊
           // 的是一张透明图，出不来材质。
+          //
+          // pixelRatio 固定 1（与外壳底部导航的捕获一致）：快照只用于高斯
+          // 模糊/低频折射取样，全分辨率纯属浪费。Android adjustResize 键盘
+          // 动画期间整页每帧重绘，捕获层会跟着每帧 toImageSync；按设备
+          // dpr（≈3）录全屏快照是卡顿主因，1x 分辨率光栅成本降约 9 倍。
           content = MiuixLayerBackdropCapture(
             backdrop: _backdrop,
+            pixelRatio: 1,
             child: ColoredBox(
               color: widget.containerColor ?? colors.surface,
               child: content,
@@ -587,7 +593,8 @@ class CyreneMenuRow extends StatelessWidget {
       insideMargin: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       startAction: Padding(
         padding: const EdgeInsets.only(right: 12),
-        child: leading ??
+        child:
+            leading ??
             CyreneIconBox(
               icon: icon,
               vector: vector,

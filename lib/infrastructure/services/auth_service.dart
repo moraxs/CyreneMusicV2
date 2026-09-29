@@ -149,6 +149,7 @@ class AuthService implements AuthRepository {
 
   // --- Password Reset ---
 
+  @override
   Future<AuthResponse> sendResetCode(String email) async {
     try {
       final response = await _apiClient.apiFetch(
@@ -167,6 +168,7 @@ class AuthService implements AuthRepository {
     }
   }
 
+  @override
   Future<AuthResponse> resetPassword(
     String email,
     String code,

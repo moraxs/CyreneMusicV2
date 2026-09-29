@@ -144,6 +144,11 @@ class _MusicAppShellState extends State<MusicAppShell> {
     return Scaffold(
       // HyperOS 灰底白卡：页面底用 surface 灰，卡片才浮得出来。
       backgroundColor: theme.colors.surface,
+      // 外壳自身没有输入框；键盘只来自压在上面的搜索页/对话框/抽屉，它们各自
+      // 避让。留着默认的 true，键盘动画每一帧都会把整个外壳（三个标签页 +
+      // 背景捕获 + 玻璃导航栏）重新布局重绘一遍——对话框是非不透明路由，外壳
+      // 在它底下照样参与布局。
+      resizeToAvoidBottomInset: false,
       // 内容边到边：不给外层 SafeArea，让列表一直滚进状态栏区域，顶部玻璃
       // 顶栏的 BackdropFilter 才有内容可糊（HyperOS 4 原生形态）。各页滚动
       // 内容的顶部留白靠下方注入的 MediaQuery.padding.top 承担；底部导航栏
@@ -177,14 +182,7 @@ class _MusicAppShellState extends State<MusicAppShell> {
                           // MediaQuery.padding：这里把「状态栏 + 玻璃顶栏」高度
                           // 注入为内容上内边距，静止时内容停在栏下，上滑时滚入
                           // 模糊区。显式传 padding 的页（如我的）需自行加回。
-                          child: MediaQuery(
-                            data: MediaQuery.of(context).copyWith(
-                              padding: MediaQuery.of(context).padding.copyWith(
-                                top:
-                                    MediaQuery.of(context).padding.top +
-                                    MiuixTopAppBarDefaults.collapsedHeight,
-                              ),
-                            ),
+                          child: _ContentTopInset(
                             child: IndexedStack(
                               index: _selectedIndex,
                               children: [
@@ -342,6 +340,8 @@ class _MusicAppShellState extends State<MusicAppShell> {
               backdrop: _navigationBackdrop,
               isContentScrolled: _contentScrolled,
               bandOverhang: 40,
+              // 模糊带原高度盖住了半屏顶部内容，压到一半。
+              bandHeightFactor: 0.5,
             ),
           ),
           Positioned(top: 0, left: 0, child: _buildMoreMenu(context)),
@@ -539,6 +539,33 @@ class _MusicAppShellState extends State<MusicAppShell> {
           account: widget.account,
         ),
       ),
+    );
+  }
+}
+
+/// 把「状态栏 + 玻璃顶栏」高度注入为标签页内容的 MediaQuery.padding.top。
+///
+/// 单独成一个叶子 widget：注入要拿整份 MediaQueryData 做 copyWith，也就依赖了
+/// 全部字段，viewInsets 在键盘动画期间逐帧变化。放在外壳 build 里时，整个外壳
+/// ——连同 IndexedStack 下三个标签页——每帧都要重建一遍；外壳在所有路由底下
+/// 常驻，于是任何页面弹键盘都卡（平台线程与 UI 线程合并后，系统键盘动画本身
+/// 也跟着卡）。挪到这里后每帧只重建这一层，[child] 是外壳传进来的同一实例，
+/// 不会往下传导。
+class _ContentTopInset extends StatelessWidget {
+  const _ContentTopInset({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    return MediaQuery(
+      data: media.copyWith(
+        padding: media.padding.copyWith(
+          top: media.padding.top + MiuixTopAppBarDefaults.collapsedHeight,
+        ),
+      ),
+      child: child,
     );
   }
 }

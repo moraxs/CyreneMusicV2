@@ -26,10 +26,15 @@ class ForYouPalette {
     final dark = theme.brightness == Brightness.dark;
     Color tint(Color base, Color light, Color night, double amount) =>
         Color.lerp(base, dark ? night : light, amount)!;
+    // 桌面外壳把内容区 surface 压成透明以透出 Mica；拿透明色插值会得到发灰的
+    // 半透明色（按钮文字也会变透明），此时退回不透明的 surfaceContainer 作底。
+    final surface = colors.surface.a < 1
+        ? colors.surfaceContainer
+        : colors.surface;
 
     return ForYouPalette._(
       background: tint(
-        colors.surface,
+        surface,
         const Color(0xFFF8F3ED),
         const Color(0xFF231E22),
         0.72,
@@ -52,7 +57,7 @@ class ForYouPalette {
         const Color(0xFFE7BAA5),
         0.86,
       ),
-      onAccent: dark ? colors.surface : Colors.white,
+      onAccent: dark ? surface : Colors.white,
       peach: tint(
         colors.surfaceContainer,
         const Color(0xFFF2DDCB),

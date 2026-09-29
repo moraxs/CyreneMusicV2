@@ -61,8 +61,10 @@ class _SearchPageState extends State<SearchPage> {
   final _suggestionService = SearchSuggestionService.instance;
   late String _query = widget.initialQuery;
 
-  /// 空关键词进入（首页搜索入口跳来）时立即聚焦弹键盘。
-  late bool _expanded = widget.initialQuery.trim().isEmpty;
+  /// 空关键词进入（首页搜索入口跳来）时自动聚焦弹键盘。不在首帧直接置 true：
+  /// Android adjustResize 下键盘弹出会逐帧 resize 整棵树，若与 push 转场（双层
+  /// 合成 + 外壳玻璃捕获）重叠，键盘动画会明显掉帧；改为等转场结束后再展开。
+  late bool _expanded = false;
   _SearchTab _tab = _SearchTab.aggregate;
 
   /// 输入防抖 300ms（与 Next.js useDebounce 一致）；seq 丢弃过期响应。
@@ -84,7 +86,38 @@ class _SearchPageState extends State<SearchPage> {
     // MiuixInputField 只在获得焦点时上报 expanded=true，失焦这里自己收：
     // 否则空关键词失焦后占位标签不会恢复显示。
     _searchFocusNode.addListener(_onSearchFocusChanged);
+    if (widget.initialQuery.trim().isEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _autoExpandAfterRoute(),
+      );
+    }
     _loadDiscoverData();
+  }
+
+  /// 等路由转场动画结束后再弹键盘（MiuixInputField 见 expanded=true 会自动
+  /// requestFocus）。转场已结束/无转场（如桌面嵌入）则立即展开。
+  void _autoExpandAfterRoute() {
+    if (!mounted) return;
+    final animation = ModalRoute.of(context)?.animation;
+    if (animation == null || animation.status == AnimationStatus.completed) {
+      _expandSearchField();
+      return;
+    }
+    late final AnimationStatusListener listener;
+    listener = (status) {
+      if (status != AnimationStatus.completed) return;
+      animation.removeStatusListener(listener);
+      _expandSearchField();
+    };
+    animation.addStatusListener(listener);
+  }
+
+  void _expandSearchField() {
+    // 等待期间用户已手动聚焦或输入过则不再打扰。
+    if (!mounted || _searchFocusNode.hasFocus || _query.trim().isNotEmpty) {
+      return;
+    }
+    setState(() => _expanded = true);
   }
 
   Future<void> _loadDiscoverData() async {
@@ -139,56 +172,57 @@ class _SearchPageState extends State<SearchPage> {
       title: '搜索',
       body: AnimatedBuilder(
         animation: widget.search,
-      builder: (context, _) {
-        final state = widget.search.state;
-        final tabs = _searchTabs(
-          DeveloperModeService.instance.isSearchResultMergeEnabled,
-        );
-        if (!tabs.contains(_tab)) _tab = tabs.first;
-        final typed = _query.trim();
-        // 输入中且与已提交关键词不同 → 展示搜索建议（与 Web 弹层条件一致）。
-        final showSuggestions =
-            typed.isNotEmpty &&
-            typed != state.keyword &&
-            _suggestions.isNotEmpty;
-        final showDiscover = typed.isEmpty && state.keyword.isEmpty;
-        return Column(
-          children: [
-            // Miuix 专用搜索框：键盘搜索键提交，自带搜索图标与清除按钮。
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: MiuixInputField(
-                query: _query,
-                onQueryChange: _onQueryChanged,
-                onSearch: (_) => _submit(),
-                expanded: _expanded,
-                onExpandedChange: (value) => setState(() => _expanded = value),
-                focusNode: _searchFocusNode,
-                label: '搜索歌曲、歌手或专辑',
+        builder: (context, _) {
+          final state = widget.search.state;
+          final tabs = _searchTabs(
+            DeveloperModeService.instance.isSearchResultMergeEnabled,
+          );
+          if (!tabs.contains(_tab)) _tab = tabs.first;
+          final typed = _query.trim();
+          // 输入中且与已提交关键词不同 → 展示搜索建议（与 Web 弹层条件一致）。
+          final showSuggestions =
+              typed.isNotEmpty &&
+              typed != state.keyword &&
+              _suggestions.isNotEmpty;
+          final showDiscover = typed.isEmpty && state.keyword.isEmpty;
+          return Column(
+            children: [
+              // Miuix 专用搜索框：键盘搜索键提交，自带搜索图标与清除按钮。
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: MiuixInputField(
+                  query: _query,
+                  onQueryChange: _onQueryChanged,
+                  onSearch: (_) => _submit(),
+                  expanded: _expanded,
+                  onExpandedChange: (value) =>
+                      setState(() => _expanded = value),
+                  focusNode: _searchFocusNode,
+                  label: '搜索歌曲、歌手或专辑',
+                ),
               ),
-            ),
-            if (state.keyword.isNotEmpty && !showSuggestions && !showDiscover)
-              _PlatformTabs(
-                tabs: tabs,
-                selected: _tab,
-                result: state.result,
-                onSelected: (tab) => setState(() => _tab = tab),
-                onPlayAll: () => _playAllFor(state.result),
-                canPlayAll: _tracksFor(state.result, _tab).isNotEmpty,
+              if (state.keyword.isNotEmpty && !showSuggestions && !showDiscover)
+                _PlatformTabs(
+                  tabs: tabs,
+                  selected: _tab,
+                  result: state.result,
+                  onSelected: (tab) => setState(() => _tab = tab),
+                  onPlayAll: () => _playAllFor(state.result),
+                  canPlayAll: _tracksFor(state.result, _tab).isNotEmpty,
+                ),
+              const SizedBox(height: 6),
+              Expanded(
+                child: showSuggestions
+                    ? _buildSuggestions()
+                    : showDiscover
+                    ? _buildDiscover()
+                    : _buildContent(state),
               ),
-            const SizedBox(height: 6),
-            Expanded(
-              child: showSuggestions
-                  ? _buildSuggestions()
-                  : showDiscover
-                  ? _buildDiscover()
-                  : _buildContent(state),
-            ),
-          ],
-        );
-      },
-    ),
-  );
+            ],
+          );
+        },
+      ),
+    );
   }
 
   Widget _buildContent(dynamic state) {
@@ -313,10 +347,7 @@ class _SearchPageState extends State<SearchPage> {
       itemCount: artists.length,
       itemBuilder: (context, index) {
         final artist = artists[index];
-        return _ArtistCard(
-          artist: artist,
-          onTap: () => _openArtist(artist),
-        );
+        return _ArtistCard(artist: artist, onTap: () => _openArtist(artist));
       },
     );
   }
@@ -750,10 +781,7 @@ class _PlatformTabs extends StatelessWidget {
         children: [
           Expanded(
             child: ListView.separated(
-              padding: EdgeInsets.only(
-                left: 16,
-                right: showPlayAll ? 8 : 16,
-              ),
+              padding: EdgeInsets.only(left: 16, right: showPlayAll ? 8 : 16),
               scrollDirection: Axis.horizontal,
               physics: const BouncingScrollPhysics(),
               itemCount: tabs.length,

@@ -120,8 +120,12 @@ class ApiClient {
     return headers.keys.any((k) => k.toLowerCase() == 'authorization');
   }
 
-  /// HTTP 401 / 403 视为鉴权失败。
-  static bool isAuthFailureStatus(int status) => status == 401 || status == 403;
+  /// 只有 HTTP 401 视为鉴权失败。
+  ///
+  /// 403 不算：后端 token 无效一律回 401（verifyAuthToken 失败处），403 只用于
+  /// 「已登录但不许做」的业务拒绝——邀请活动关闭、未绑定网易云/QQ 账号等。
+  /// 把 403 当失效会让用户点进个人中心（拉 /invite/summary）就被登出。
+  static bool isAuthFailureStatus(int status) => status == 401;
 
   /// 部分接口 HTTP 200，用 body.code / message 表达鉴权失败。
   static bool isAuthFailurePayload(Map data) {

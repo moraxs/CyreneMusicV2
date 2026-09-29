@@ -11,12 +11,21 @@ import '../core/url_service.dart';
 /// `GET /config/public` 的响应体。
 ///
 /// 后端只在这个端点下发「允许公开的配置项」（见 backend/src/routes/health.ts），
-/// 目前是公告与 QQ 群两块。任一块解析失败/缺失时该字段为 null，其余照常可用。
+/// 目前是公告、QQ 群与邀请有礼开关。任一块解析失败/缺失时该字段为 null，
+/// 其余照常可用。
 class PublicConfig {
-  const PublicConfig({this.announcement, this.qqGroup});
+  const PublicConfig({
+    this.announcement,
+    this.qqGroup,
+    this.inviteEnabled = true,
+  });
 
   final Announcement? announcement;
   final QqGroup? qqGroup;
+
+  /// 「邀请有礼」是否开放（`data.invite.enabled`）。旧后端没有这个字段时为
+  /// true，与后端「没配视为开启」同一口径。
+  final bool inviteEnabled;
 }
 
 /// 公共配置服务：`/config/public` 的唯一客户端。
@@ -55,7 +64,9 @@ class PublicConfigService {
 
       final announcementRaw = data['announcement'];
       final qqGroupRaw = data['qq_group'];
+      final inviteRaw = data['invite'];
       return PublicConfig(
+        inviteEnabled: !(inviteRaw is Map && inviteRaw['enabled'] == false),
         announcement: announcementRaw is Map
             ? Announcement.fromJson(Map<String, Object?>.from(announcementRaw))
             : null,
@@ -73,4 +84,11 @@ class PublicConfigService {
 
   /// 仅取 QQ 群配置。取不到（网络失败 / 后端没配）返回 null。
   Future<QqGroup?> fetchQqGroup() async => (await fetch())?.qqGroup;
+
+  /// 「邀请有礼」入口是否该显示。
+  ///
+  /// 拉取失败时返回 true：入口不该因为网络抖动消失，活动真关了的话后端
+  /// /invite/* 会直接拒绝，点进去也只是一句提示。
+  Future<bool> fetchInviteEnabled() async =>
+      (await fetch())?.inviteEnabled ?? true;
 }

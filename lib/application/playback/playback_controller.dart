@@ -225,6 +225,9 @@ class PlaybackController extends ChangeNotifier {
             }
             break;
           } catch (error) {
+            // 加载失败也要先看请求是否过期：否则用户已经切到别的歌了，这里还会
+            // 接着试本轮剩下的候选，把旧曲目播出来。
+            if (_isStale(request)) return;
             failures.add('${candidate.sourceId}: $error');
           }
         }
@@ -239,7 +242,10 @@ class PlaybackController extends ChangeNotifier {
       }
 
       throw AudioSourceResolutionFailure('所有音源均无法加载。', causes: failures);
-    } catch (_) {
+    } catch (error) {
+      // 取流失败的真正原因（libmpv 的报错、HTTP 状态）只在这里能看到，不打出来
+      // 就只剩界面上那句「音频加载失败」，无从排查。
+      debugPrint('[PlaybackController] 播放「${track.name}」失败: $error');
       if (_isStale(request)) return;
       _loadedTrackKey = null;
       _pendingResume = null;

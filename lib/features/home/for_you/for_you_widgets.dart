@@ -612,15 +612,18 @@ class ForYouSectionHeading extends StatelessWidget {
                     color: palette.ink,
                   ),
                 ),
-                const SizedBox(height: 5),
-                Text(
-                  subtitle,
-                  style: theme.textStyles.footnote1.copyWith(
-                    fontSize: 12,
-                    height: 1.5,
-                    color: palette.muted,
+                // Spotify 分区常常没有副标题，空串时不留一行空白。
+                if (subtitle.isNotEmpty) ...[
+                  const SizedBox(height: 5),
+                  Text(
+                    subtitle,
+                    style: theme.textStyles.footnote1.copyWith(
+                      fontSize: 12,
+                      height: 1.5,
+                      color: palette.muted,
+                    ),
                   ),
-                ),
+                ],
               ],
             ),
           ),

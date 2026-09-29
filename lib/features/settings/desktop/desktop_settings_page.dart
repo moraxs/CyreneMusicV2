@@ -19,6 +19,7 @@ import '../cache_settings_page.dart';
 import '../developer_options_page.dart';
 import '../equalizer_page.dart';
 import '../login_page.dart';
+import '../membership_center_page.dart';
 import '../personal_center_page.dart';
 import '../settings_actions.dart';
 import '../together_settings_page.dart';
@@ -241,6 +242,7 @@ class _DesktopSettingsPageState extends State<DesktopSettingsPage> {
         animation: widget.account,
         builder: (context, _) => _AccountSection(
           account: widget.account,
+          audioSources: widget.audioSources,
           onOpenSecondary: widget.onOpenSecondary,
           onOpen: _openPage,
         ),
@@ -548,11 +550,13 @@ class _AnchorTabState extends State<_AnchorTab> {
 class _AccountSection extends StatelessWidget {
   const _AccountSection({
     required this.account,
+    required this.audioSources,
     required this.onOpenSecondary,
     required this.onOpen,
   });
 
   final AccountSessionController account;
+  final AudioSourcePreferencesController audioSources;
   final ValueChanged<Widget>? onOpenSecondary;
   final void Function(BuildContext context, Widget page) onOpen;
 
@@ -589,7 +593,7 @@ class _AccountSection extends StatelessWidget {
             subtitle: 'Cyrene Music 账号',
             onTap: () => _openLogin(context),
           )
-        else
+        else ...[
           CyreneMenuRow(
             key: const Key('open-personal-center'),
             leading: _AccountAvatar(user: user),
@@ -603,6 +607,26 @@ class _AccountSection extends StatelessWidget {
               ),
             ),
           ),
+          // 与移动端设置页保持同一组账号入口：会员中心（Premium 身份 + 我的订单）。
+          CyreneMenuRow(
+            key: const Key('open-membership-center'),
+            vector: MiuixIcons.extended.byName('bankCards')!,
+            iconBackground: const Color(0xFF8A64FF),
+            title: '会员中心',
+            subtitle: 'Cyrene Premium 身份与我的订单',
+            value: user.hasListeningCard
+                ? 'Premium'
+                : (user.isSponsor ? 'Sponsor' : null),
+            onTap: () => onOpen(
+              context,
+              MembershipCenterPage(
+                account: account,
+                audioSources: audioSources,
+                onOpenSecondary: onOpenSecondary,
+              ),
+            ),
+          ),
+        ],
       ],
     );
   }

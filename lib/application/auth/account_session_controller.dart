@@ -150,6 +150,17 @@ class AccountSessionController extends ChangeNotifier {
   Future<({bool success, bool enabled})> checkRegistrationStatus() =>
       _repository.checkRegistrationStatus();
 
+  /// 找回密码与注册同类：叶子操作，不触碰会话状态，仅透传到仓库层。
+  /// 重置成功后不自动登录——后端不返回 token，由调用方引导重新登录。
+  Future<AuthResponse> sendResetCode(String email) =>
+      _repository.sendResetCode(email);
+
+  Future<AuthResponse> resetPassword(
+    String email,
+    String code,
+    String newPassword,
+  ) => _repository.resetPassword(email, code, newPassword);
+
   Future<void> logout() async {
     ++_requestId;
     _setSignedOut();
