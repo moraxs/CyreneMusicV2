@@ -42,6 +42,11 @@ class MediaNotificationPlugin : FlutterPlugin, MethodCallHandler {
         private const val CHANNEL_NAME = "com.cyrene.media/notification"
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "media_playback"
+
+        /// 暂停后保留前台服务的时长。切歌间隙 Flutter 会短暂报告「未在播放」
+        /// （上一首 EOF → 解析下一首 → 打开，最长可到打开超时 25 秒），这期间
+        /// 掉出前台就会被断网冻结，自动续播又会失败。真正的长时间暂停才退出。
+        private const val FOREGROUND_GRACE_MS = 60_000L
     }
 
     private var context: Context? = null
@@ -64,6 +69,17 @@ class MediaNotificationPlugin : FlutterPlugin, MethodCallHandler {
     private val artCache = ConcurrentHashMap<String, Bitmap>()
     private var currentArtBitmap: Bitmap? = null
 
+    private var foregroundStopScheduled = false
+    private val stopForegroundRunnable = Runnable {
+        foregroundStopScheduled = false
+        MediaPlaybackService.stop(removeNotification = false)
+    }
+
+    private fun cancelForegroundStop() {
+        mainHandler.removeCallbacks(stopForegroundRunnable)
+        foregroundStopScheduled = false
+    }
+
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
         channel = MethodChannel(binding.binaryMessenger, CHANNEL_NAME).also {
@@ -78,6 +94,8 @@ class MediaNotificationPlugin : FlutterPlugin, MethodCallHandler {
         channel = null
         session?.release()
         session = null
+        cancelForegroundStop()
+        MediaPlaybackService.stop(removeNotification = true)
         context?.let { cancelNotification(it) }
         if (MediaNotificationPluginHolder.plugin === this) {
             MediaNotificationPluginHolder.plugin = null
@@ -188,6 +206,8 @@ class MediaNotificationPlugin : FlutterPlugin, MethodCallHandler {
                 result.success(null)
             }
             "hide" -> {
+                cancelForegroundStop()
+                MediaPlaybackService.stop(removeNotification = true)
                 context?.let { cancelNotification(it) }
                 session?.isActive = false
                 result.success(null)
@@ -255,8 +275,22 @@ class MediaNotificationPlugin : FlutterPlugin, MethodCallHandler {
         val ctx = context ?: return
         val s = session ?: return
         val notification = buildNotification(ctx, s)
+        // 前台服务挂的是同一个 ID，notify 即可原地更新它。
         val manager = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(NOTIFICATION_ID, notification)
+        syncForeground(ctx, notification)
+    }
+
+    /// 播放中进前台；暂停后宽限 [FOREGROUND_GRACE_MS] 再退出（通知保留）。
+    /// 宽限计时只在「进入暂停」时启动一次，期间的进度/封面更新不会把它往后推。
+    private fun syncForeground(ctx: Context, notification: Notification) {
+        if (isPlaying) {
+            cancelForegroundStop()
+            MediaPlaybackService.start(ctx, NOTIFICATION_ID, notification)
+        } else if (!foregroundStopScheduled) {
+            foregroundStopScheduled = true
+            mainHandler.postDelayed(stopForegroundRunnable, FOREGROUND_GRACE_MS)
+        }
     }
 
     private fun cancelNotification(ctx: Context) {

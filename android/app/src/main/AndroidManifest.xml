@@ -3,7 +3,11 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- 媒体通知：Android 13+ 需要运行时申请 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-    <!-- 前台服务：保持媒体通知在锁屏/后台存活（预留，当前用通知即可） -->
+    <!-- 媒体播放前台服务（MediaPlaybackService）：没有它，App 退到后台后一首歌
+         放完、声音一停，系统就断网并冻结进程，自动续播的下一首解析不了。
+         WAKE_LOCK 供它在切歌间隙持有 CPU / Wi-Fi 锁。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <!-- 应用内更新：Android 8.0+ 拉起系统安装器安装 APK 需要此权限。
          APK 下载到应用私有目录（getApplicationSupportDirectory），故不需要
@@ -36,6 +40,10 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <service
+            android:name=".MediaPlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback"/>
         <!-- 媒体通知按钮接收器：接收通知栏播放/暂停/上一首/下一首按钮事件 -->
         <receiver
             android:name=".MediaNotificationReceiver"
