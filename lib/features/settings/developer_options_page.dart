@@ -19,8 +19,9 @@ import 'account_pool_page.dart';
 import 'sponsor_admin_page.dart';
 
 /// 开发者选项（对应原版 developer_page.dart 在移动端有意义的核心子集：
-/// 性能叠加层开关 + 运行日志；另补充显示模式信息用于核对高刷是否生效）。
-/// 入口仅在开发者模式开启时出现在设置主页。
+/// 性能叠加层开关；另补充显示模式信息用于核对高刷是否生效）。
+/// 入口仅在开发者模式开启时出现在设置主页。运行日志已移到关于页
+/// （runtime_log_page.dart），普通用户排查问题时不必先开开发者模式。
 class DeveloperOptionsPage extends StatefulWidget {
   const DeveloperOptionsPage({super.key});
 
@@ -118,30 +119,6 @@ class _DeveloperOptionsPageState extends State<DeveloperOptionsPage> {
                 subtitle: _displayModeText,
                 trailing: const SizedBox.shrink(),
                 onTap: _loadDisplayMode,
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          const MiuixSmallTitle(
-            '日志',
-            insideMargin: EdgeInsets.fromLTRB(16, 8, 16, 8),
-          ),
-          CyreneMenuGroup(
-            children: [
-              ValueListenableBuilder<int>(
-                valueListenable: _developer.logRevision,
-                builder: (context, _, _) => CyreneMenuRow(
-                  vector: MiuixIcons.extended.byName('notes')!,
-                  iconBackground: _iconOrange,
-                  title: '运行日志',
-                  subtitle: '应用内 debugPrint 输出（上限 1000 条）',
-                  value: '${_developer.logs.length} 条',
-                  onTap: () => Navigator.of(context).push(
-                    CupertinoPageRoute<void>(
-                      builder: (_) => const _DeveloperLogPage(),
-                    ),
-                  ),
-                ),
               ),
             ],
           ),
@@ -462,75 +439,6 @@ class _PasswordGateState extends State<_PasswordGate> {
           ],
         ),
       ],
-    );
-  }
-}
-
-/// 运行日志查看页：等宽小字号逐行展示，支持复制全部与清空。
-class _DeveloperLogPage extends StatelessWidget {
-  const _DeveloperLogPage();
-
-  @override
-  Widget build(BuildContext context) {
-    final developer = DeveloperModeService.instance;
-    final theme = MiuixTheme.of(context);
-    return CyrenePage(
-      title: '运行日志',
-      largeTitle: false,
-      actions: [
-        MiuixIconButton(
-          onPressed: () async {
-            await Clipboard.setData(
-              ClipboardData(text: developer.logs.join('\n')),
-            );
-            CyreneToast.show('日志已复制到剪贴板');
-          },
-          child: MiuixIcon(
-            vector: MiuixIcons.extended.byName('copy')!,
-            size: 20,
-          ),
-        ),
-        MiuixIconButton(
-          onPressed: () {
-            developer.clearLogs();
-            CyreneToast.show('日志已清空');
-          },
-          child: MiuixIcon(
-            vector: MiuixIcons.extended.byName('delete')!,
-            size: 20,
-            tint: theme.colors.error,
-          ),
-        ),
-      ],
-      body: ValueListenableBuilder<int>(
-        valueListenable: developer.logRevision,
-        builder: (context, _, _) {
-          final logs = developer.logs;
-          if (logs.isEmpty) {
-            return CyreneEmptyState(
-              vector: MiuixIcons.extended.byName('notes')!,
-              title: '暂无日志',
-              description: '应用内的 debugPrint 输出会实时收集到这里。',
-            );
-          }
-          return ListView.builder(
-            physics: const BouncingScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
-            itemCount: logs.length,
-            itemBuilder: (context, index) => Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: SelectableText(
-                logs[index],
-                style: theme.textStyles.footnote1.copyWith(
-                  color: theme.colors.onSurfaceContainer,
-                  fontFamily: 'monospace',
-                  fontSize: 11,
-                ),
-              ),
-            ),
-          );
-        },
-      ),
     );
   }
 }

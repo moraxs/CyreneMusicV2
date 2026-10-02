@@ -6,19 +6,21 @@ import '../../app/app_version.dart';
 import '../../infrastructure/services/developer_mode_service.dart';
 import '../../presentation/cyrene/cyrene_page.dart';
 import '../../presentation/cyrene/cyrene_toast.dart';
+import 'runtime_log_page.dart';
 import 'user_agreement_page.dart';
 
 /// 关于页（对应原版 about_settings_page.dart 的移动端 Material 版）。
 ///
 /// 原版的「检查更新 / 自动更新」与新版设置主页的独立「检查更新」入口重复，
 /// 不再移植；保留头部 Logo/版本、版本信息（连点开发者模式彩蛋）、用户协议
-/// 与开放源代码许可。
+/// 与开放源代码许可。另加运行日志入口（原在开发者选项里），方便用户反馈问题。
 class AboutPage extends StatelessWidget {
   const AboutPage({super.key});
 
   static const _iconBlue = Color(0xFF3482FF);
   static const _iconGreen = Color(0xFF3CC756);
   static const _iconPurple = Color(0xFF8A64FF);
+  static const _iconOrange = Color(0xFFFF9F0A);
 
   void _onVersionClicked() {
     final message = DeveloperModeService.instance.onVersionClicked();
@@ -114,6 +116,26 @@ class AboutPage extends StatelessWidget {
                         width: 48,
                         height: 48,
                       ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          CyreneMenuGroup(
+            children: [
+              ValueListenableBuilder<int>(
+                valueListenable: DeveloperModeService.instance.logRevision,
+                builder: (context, _, _) => CyreneMenuRow(
+                  vector: MiuixIcons.extended.byName('notes')!,
+                  iconBackground: _iconOrange,
+                  title: '运行日志',
+                  subtitle: '遇到问题时可复制日志发给开发者',
+                  value: '${DeveloperModeService.instance.logs.length} 条',
+                  onTap: () => Navigator.of(context).push(
+                    CupertinoPageRoute<void>(
+                      builder: (_) => const RuntimeLogPage(),
                     ),
                   ),
                 ),

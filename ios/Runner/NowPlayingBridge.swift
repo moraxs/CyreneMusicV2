@@ -32,6 +32,15 @@ final class NowPlayingBridge {
   private var artImage: UIImage?
   private var artTask: URLSessionDataTask?
 
+  // 最近一次音频会话激活失败的原因。启动时 Flutter 端还没挂上 handler，
+  // 主动推送会丢，所以先存着，由 `ready` 的返回值带回去。
+  private var sessionError: String?
+
+  private var sessionObservers: [NSObjectProtocol] = []
+
+  // 停止出声期间申请的后台执行时间，见 [syncBackgroundTime]。
+  private var transitionTask: UIBackgroundTaskIdentifier = .invalid
+
   init(binaryMessenger: FlutterBinaryMessenger) {
     channel = FlutterMethodChannel(name: Self.channelName, binaryMessenger: binaryMessenger)
     channel.setMethodCallHandler { [weak self] call, result in
@@ -39,9 +48,15 @@ final class NowPlayingBridge {
     }
     configureAudioSession()
     registerRemoteCommands()
+    observeAudioSession()
   }
 
   func dispose() {
+    endTransitionTask()
+    for observer in sessionObservers {
+      NotificationCenter.default.removeObserver(observer)
+    }
+    sessionObservers.removeAll()
     channel.setMethodCallHandler(nil)
     // 清空锁屏媒体信息并移除远程命令，避免后台悬挂。
     MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
@@ -59,7 +74,17 @@ final class NowPlayingBridge {
   private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     switch call.method {
     case "ready":
-      result(nil)
+      // 回传会话现状（进运行日志）与启动时攒下的激活错误（进 crash.log）。
+      let session = AVAudioSession.sharedInstance()
+      var status: [String: Any] = [
+        "category": session.category.rawValue,
+        "mode": session.mode.rawValue,
+        "otherAudioPlaying": session.isOtherAudioPlaying,
+      ]
+      if let sessionError = sessionError {
+        status["sessionError"] = sessionError
+      }
+      result(status)
     case "updateTrack":
       guard let args = call.arguments as? [String: Any] else {
         result(nil)
@@ -75,6 +100,7 @@ final class NowPlayingBridge {
       // 播放前确保会话处于 active（空闲一段时间后系统可能已停用会话，
       // 不重新激活会导致声音无法输出或后台被挂起）。
       activateSessionIfNeeded()
+      syncBackgroundTime()
       updateNowPlayingInfo()
       loadArtwork(url)
       result(nil)
@@ -88,6 +114,7 @@ final class NowPlayingBridge {
       if isPlaying {
         activateSessionIfNeeded()
       }
+      syncBackgroundTime()
       updateNowPlayingInfo()
       result(nil)
     case "updatePosition":
@@ -106,6 +133,8 @@ final class NowPlayingBridge {
       artImage = nil
       MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
       artTask?.cancel()
+      isPlaying = false
+      endTransitionTask()
       result(nil)
     default:
       result(FlutterMethodNotImplemented)
@@ -176,8 +205,16 @@ final class NowPlayingBridge {
       )
     }
 
-    let task = URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
-      guard let self = self, let data = data, let image = UIImage(data: data) else { return }
+    let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+      guard let self = self else { return }
+      guard let data = data, let image = UIImage(data: data) else {
+        // 被新曲目取消的请求不算失败。
+        if (error as? URLError)?.code == .cancelled { return }
+        let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+        let reason = error?.localizedDescription ?? "HTTP \(code)，无法解码"
+        DispatchQueue.main.async { self.log("封面加载失败（\(reason)）: \(url)") }
+        return
+      }
       DispatchQueue.main.async {
         guard self.artUrl == url else { return }
         self.artImage = image
@@ -192,6 +229,11 @@ final class NowPlayingBridge {
 
   private func send(_ method: String, _ arguments: Any? = nil) {
     channel.invokeMethod(method, arguments: arguments)
+  }
+
+  /// 普通运行日志：Flutter 端只写进「运行日志」，不进 crash.log。
+  private func log(_ message: String) {
+    send("log", message)
   }
 
   private func registerRemoteCommands() {
@@ -226,7 +268,63 @@ final class NowPlayingBridge {
     }
   }
 
+  // ==================== 切歌间隙的后台执行时间 ====================
+
+  /// `UIBackgroundModes = audio` 只在「真的在出声」时保 App 不被挂起。一首歌
+  /// 放完、libmpv 停止输出，系统几秒内就会挂起 App：下一首的解析请求挂在半路，
+  /// 界面切到了下一首却不出声——和 Android 后台被断网冻结是同一个病。
+  ///
+  /// 所以从停止出声起申请一段后台执行时间（系统一般给 30 秒左右），够把下一首
+  /// 解析完、重新出声；出声后立刻归还。用户手动暂停也会走到这里，到期系统
+  /// 收回、照常挂起，不影响省电。
+  private func syncBackgroundTime() {
+    if isPlaying {
+      endTransitionTask()
+      return
+    }
+    guard transitionTask == .invalid else { return }
+    transitionTask = UIApplication.shared.beginBackgroundTask(
+      withName: "CyreneTrackTransition"
+    ) { [weak self] in
+      self?.endTransitionTask()
+    }
+  }
+
+  private func endTransitionTask() {
+    guard transitionTask != .invalid else { return }
+    UIApplication.shared.endBackgroundTask(transitionTask)
+    transitionTask = .invalid
+  }
+
   // ==================== 音频会话 ====================
+
+  /// 只记录不干预：打断、音频服务重置都可能让锁屏卡片消失，排查时要能在
+  /// 运行日志里看到发生过。
+  private func observeAudioSession() {
+    let center = NotificationCenter.default
+    sessionObservers.append(
+      center.addObserver(
+        forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+      ) { [weak self] notification in
+        guard let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+          let type = AVAudioSession.InterruptionType(rawValue: raw)
+        else { return }
+        switch type {
+        case .began:
+          self?.log("音频会话被打断（来电、闹钟或其他 App 占用）")
+        case .ended:
+          self?.log("音频会话打断结束")
+        @unknown default:
+          break
+        }
+      })
+    sessionObservers.append(
+      center.addObserver(
+        forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
+      ) { [weak self] _ in
+        self?.log("系统音频服务已重置")
+      })
+  }
 
   /// 激活播放会话：`AVAudioSession.Category.playback` 允许锁屏/后台出声。
   /// 不加 `.mixWithOthers`——音乐播放器应独占音频（其他 App 出声时本播放应暂停）。
@@ -246,8 +344,15 @@ final class NowPlayingBridge {
         try session.setCategory(.playback, mode: .default)
       }
       try session.setActive(true)
+      sessionError = nil
     } catch {
-      NSLog("[Cyrene] AVAudioSession 激活失败: \(error.localizedDescription)")
+      let message = "AVAudioSession 激活失败: \(error.localizedDescription)"
+      NSLog("[Cyrene] \(message)")
+      // 同一原因只报一次：updatePlayback 每次播放都会走到这里。
+      if message != sessionError {
+        sessionError = message
+        send("diagnostic", message)
+      }
     }
   }
 }
