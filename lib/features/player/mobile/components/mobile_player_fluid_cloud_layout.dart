@@ -20,6 +20,8 @@ import 'dart:async';
 import 'dart:ui' show lerpDouble;
 import 'package:flutter/physics.dart' show SpringDescription, SpringSimulation;
 import 'mobile_player_background.dart';
+import 'mobile_player_canvas_layer.dart';
+import '../compat/player_background_service.dart';
 import '../compat/auto_collapse_service.dart';
 import '../compat/audio_services.dart';
 import '../compat/toast_utils.dart';
@@ -169,6 +171,42 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
       _pauseAnim.animateTo(0.0, curve: _pauseCurve);
     }
   }
+  // ── 全屏动态封面（Spotify Canvas）─────────────────────────────────
+  //
+  // 三段状态，各管一件事：
+  // - _canvasUrl：开关已开且当前曲目有 Canvas，挂上视频层开始加载；
+  // - _canvasReady：视频已出画，封面框淡出、遮罩淡入；
+  // - _canvasCovering：淡入走完、视频完全盖住了底下的背景，背景停绘省 GPU。
+  // 加载失败就停在第一段，封面框和背景都不动，看起来跟没有 Canvas 一样。
+  String? _canvasUrl;
+  bool _canvasReady = false;
+  bool _canvasCovering = false;
+  Timer? _canvasCoverTimer;
+
+  String? _resolveCanvasUrl() => PlayerBackgroundService().canvasEnabled
+      ? PlayerService().canvasUrlNotifier.value
+      : null;
+
+  void _onCanvasChanged() {
+    final url = _resolveCanvasUrl();
+    if (url == _canvasUrl) return;
+    _canvasCoverTimer?.cancel();
+    setState(() {
+      _canvasUrl = url;
+      _canvasReady = false;
+      _canvasCovering = false;
+    });
+  }
+
+  void _onCanvasReady(String url) {
+    if (!mounted || url != _canvasUrl) return;
+    setState(() => _canvasReady = true);
+    _canvasCoverTimer?.cancel();
+    _canvasCoverTimer = Timer(const Duration(milliseconds: 700), () {
+      if (mounted && url == _canvasUrl) setState(() => _canvasCovering = true);
+    });
+  }
+
   // 歌曲信息面板
   bool _showSongWikiPanel = false;
 
@@ -186,6 +224,9 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
     PlayerService().addListener(_onPlayerStateChanged);
     // 监听设置变化
     AutoCollapseService().addListener(_onSettingsChanged);
+    _canvasUrl = _resolveCanvasUrl();
+    PlayerService().canvasUrlNotifier.addListener(_onCanvasChanged);
+    PlayerBackgroundService().addListener(_onCanvasChanged);
     
     // 初始化时如果正在播放且开启了折叠，启动计时器
     if (_wasPlaying && AutoCollapseService().isAutoCollapseEnabled) {
@@ -209,6 +250,9 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
     _collapseTimer?.cancel();
     PlayerService().removeListener(_onPlayerStateChanged);
     AutoCollapseService().removeListener(_onSettingsChanged);
+    PlayerService().canvasUrlNotifier.removeListener(_onCanvasChanged);
+    PlayerBackgroundService().removeListener(_onCanvasChanged);
+    _canvasCoverTimer?.cancel();
     _snapController.dispose();
     _coverAnim.dispose();
     _pauseAnim.dispose();
@@ -404,7 +448,32 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
           child: Stack(
             children: [
               // 0. 背景层 (现在作为布局的一部分，以便同步平移)
-              MobilePlayerBackground(dragOffset: _dragOffset),
+              //
+              // 被 Canvas 完全盖住后撤掉绘制并停掉动画（动态背景是逐帧着色器）。
+              // 用 Offstage 而不是直接摘掉：保留它的取色状态，切到没有 Canvas
+              // 的歌时不用从头再提一遍色。
+              Positioned.fill(
+                child: Offstage(
+                  offstage: _canvasCovering,
+                  child: TickerMode(
+                    enabled: !_canvasCovering,
+                    child: MobilePlayerBackground(dragOffset: _dragOffset),
+                  ),
+                ),
+              ),
+
+              // 0.5 全屏动态封面：压在所有背景类型之上。
+              // 横屏没有大封面模式，按歌词模式整屏压暗。
+              if (_canvasUrl case final canvasUrl?)
+                Positioned.fill(
+                  child: MobilePlayerCanvasLayer(
+                    videoUrl: canvasUrl,
+                    paused: !player.isPlaying,
+                    lyricsAmount: isLandscape ? 1 : 1 - t,
+                    ready: _canvasReady,
+                    onReady: () => _onCanvasReady(canvasUrl),
+                  ),
+                ),
 
               // 1. 歌词模式布局或横屏布局 (底层)
               if (isLandscape)
@@ -516,43 +585,55 @@ class _MobilePlayerFluidCloudLayoutState extends State<MobilePlayerFluidCloudLay
                       // 点击切换模式
                       _setCoverMode(!_showCoverMode);
                     },
-                    child: Hero(
-                      tag: kPlayerCoverHeroTag,
-                      flightShuttleBuilder: _playerCoverFlightShuttle,
-                      child: Container(
-                        // 圆角与投影跟着同一条弹簧连续插值：小封面 r=8/浅投影，
-                        // 大封面 r=16/厚投影，中途不会有跳变。
-                        decoration: BoxDecoration(
-                          borderRadius:
-                              BorderRadius.circular(lerpDouble(8, 16, t)!),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black
-                                  .withValues(alpha: lerpDouble(0.3, 0.4, t)!),
-                              // 暂停时投影同步收拢：AMLL 的 y 由 1em 收到
-                              // 0.8em、模糊半径由 1.2em 收到 0.8em，这里按同
-                              // 样比例缩。只在封面模式生效（按 t 加权）。
-                              blurRadius: lerpDouble(10, 40, t)! *
-                                  lerpDouble(1.0, lerpDouble(0.8 / 1.2, 1.0, pausedT)!, t)!,
-                              offset: Offset(
-                                0,
-                                lerpDouble(4, 20, t)! *
-                                    lerpDouble(1.0, lerpDouble(0.8, 1.0, pausedT)!, t)!,
-                              ),
-                            ),
-                          ],
-                        ),
-                        clipBehavior: Clip.antiAlias,
-                        child: imageUrl.isNotEmpty
-                            ? _buildCoverImage(imageUrl)
-                            : Container(
-                                color: Colors.grey[900],
-                                child: Icon(
-                                  Icons.music_note,
-                                  color: Colors.white54,
-                                  size: lerpDouble(30, 120, t)!,
+                    // 有 Canvas 时封面框让位给全屏视频：封面模式完全隐去，
+                    // 往歌词模式走时随弹簧渐显成左上角的小封面。点击区域保留，
+                    // 点视频中央照样能切到歌词模式。
+                    child: TweenAnimationBuilder<double>(
+                      tween: Tween(end: _canvasReady ? 1.0 : 0.0),
+                      duration: const Duration(milliseconds: 600),
+                      curve: Curves.easeOut,
+                      builder: (context, canvasT, child) => Opacity(
+                        opacity: lerpDouble(1, (1 - t).clamp(0.0, 1.0), canvasT)!,
+                        child: child,
+                      ),
+                      child: Hero(
+                        tag: kPlayerCoverHeroTag,
+                        flightShuttleBuilder: _playerCoverFlightShuttle,
+                        child: Container(
+                          // 圆角与投影跟着同一条弹簧连续插值：小封面 r=8/浅投影，
+                          // 大封面 r=16/厚投影，中途不会有跳变。
+                          decoration: BoxDecoration(
+                            borderRadius:
+                                BorderRadius.circular(lerpDouble(8, 16, t)!),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black
+                                    .withValues(alpha: lerpDouble(0.3, 0.4, t)!),
+                                // 暂停时投影同步收拢：AMLL 的 y 由 1em 收到
+                                // 0.8em、模糊半径由 1.2em 收到 0.8em，这里按同
+                                // 样比例缩。只在封面模式生效（按 t 加权）。
+                                blurRadius: lerpDouble(10, 40, t)! *
+                                    lerpDouble(1.0, lerpDouble(0.8 / 1.2, 1.0, pausedT)!, t)!,
+                                offset: Offset(
+                                  0,
+                                  lerpDouble(4, 20, t)! *
+                                      lerpDouble(1.0, lerpDouble(0.8, 1.0, pausedT)!, t)!,
                                 ),
                               ),
+                            ],
+                          ),
+                          clipBehavior: Clip.antiAlias,
+                          child: imageUrl.isNotEmpty
+                              ? _buildCoverImage(imageUrl)
+                              : Container(
+                                  color: Colors.grey[900],
+                                  child: Icon(
+                                    Icons.music_note,
+                                    color: Colors.white54,
+                                    size: lerpDouble(30, 120, t)!,
+                                  ),
+                                ),
+                        ),
                       ),
                     ),
                   ),

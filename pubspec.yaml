@@ -77,6 +77,10 @@ dependencies:
   path: ^1.9.0
   charset: ^2.0.1
   tray_manager: ^0.5.3
+  # 动态封面（Spotify Canvas / 视频背景）。不能走 media_kit：我们的 libmpv 是
+  # 纯音频构建，没有视频解码器。video_player 用系统解码（ExoPlayer / AVPlayer），
+  # 与 libmpv 互不相干。Windows/Linux 无实现，那里回退静态封面。
+  video_player: ^2.14.0
 
   # 暂时停用：该版本在 Windows 上触发 Kotlin 增量编译跨盘符路径异常。
   # adaptive_platform_ui: ^0.1.110

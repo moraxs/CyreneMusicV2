@@ -24,6 +24,7 @@ class PlayerBackgroundService extends ChangeNotifier {
   static const String _keyImagePath = 'player_background_image_path'; // 兼容旧版本
   static const String _keyBlurAmount = 'player_background_blur_amount';
   static const String _keyEnableGradient = 'player_background_enable_gradient';
+  static const String _keyCanvasEnabled = 'player_canvas_enabled';
 
   // 当前设置
   PlayerBackgroundType _backgroundType = PlayerBackgroundType.adaptive;
@@ -31,6 +32,7 @@ class PlayerBackgroundService extends ChangeNotifier {
   String? _mediaPath; // 图片或视频路径
   double _blurAmount = 10.0; // 默认模糊程度（sigma值）
   bool _enableGradient = false; // 是否启用封面渐变效果
+  bool _canvasEnabled = true; // 动态封面（Spotify Canvas）全屏播放
 
   // Getters
   PlayerBackgroundType get backgroundType => _backgroundType;
@@ -44,6 +46,9 @@ class PlayerBackgroundService extends ChangeNotifier {
   bool get isImage => _backgroundType == PlayerBackgroundType.image;
   bool get isVideo => _backgroundType == PlayerBackgroundType.video;
   bool get isDynamic => _backgroundType == PlayerBackgroundType.dynamic;
+
+  /// 动态封面开关。开启且当前曲目有动态封面时，全屏视频压过所有背景类型。
+  bool get canvasEnabled => _canvasEnabled;
 
   /// 初始化服务
   Future<void> initialize() async {
@@ -81,6 +86,8 @@ class PlayerBackgroundService extends ChangeNotifier {
     
     // 读取渐变开关
     _enableGradient = prefs.getBool(_keyEnableGradient) ?? false;
+
+    _canvasEnabled = prefs.getBool(_keyCanvasEnabled) ?? true;
     
     notifyListeners();
     debugPrint('🎨 [PlayerBackground] 已初始化: $_backgroundType, 模糊: $_blurAmount, 渐变: $_enableGradient');
@@ -206,6 +213,18 @@ class PlayerBackgroundService extends ChangeNotifier {
     
     notifyListeners();
     debugPrint('🎨 [PlayerBackground] 渐变开关已更改: $enabled');
+  }
+
+  /// 设置动态封面开关
+  Future<void> setCanvasEnabled(bool enabled) async {
+    if (_canvasEnabled == enabled) return;
+
+    _canvasEnabled = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyCanvasEnabled, enabled);
+
+    notifyListeners();
+    debugPrint('🎨 [PlayerBackground] 动态封面开关已更改: $enabled');
   }
 
   /// 获取背景类型的描述

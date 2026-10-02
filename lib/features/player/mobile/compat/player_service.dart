@@ -4,9 +4,11 @@ import 'package:flutter/material.dart' hide RepeatMode;
 import '../../../../application/audio_sources/audio_source_preferences_controller.dart';
 import '../../../../application/auth/account_session_controller.dart';
 import '../../../../application/playback/playback_controller.dart';
+import '../../../../domain/models/music_source.dart';
 import '../../../../domain/models/track.dart';
 import '../../../../domain/playback/queue_navigation.dart';
 import '../../../../domain/playback/repeat_mode.dart';
+import '../../../../infrastructure/services/spotify_canvas_service.dart';
 import 'image_utils.dart';
 import 'song_detail.dart';
 
@@ -31,6 +33,12 @@ class PlayerService extends ChangeNotifier {
   final ValueNotifier<String?> dynamicCoverUrlNotifier = ValueNotifier<String?>(
     null,
   );
+
+  /// 当前曲目的 Spotify Canvas（9:16 竖屏循环视频），没有则为 null。
+  /// 与方形的 [dynamicCoverUrlNotifier] 分开：它铺满整个播放器，不进封面框。
+  /// 这里只管「有没有」，开关由 `PlayerBackgroundService.canvasEnabled` 在显示侧把关，
+  /// 这样切开关立即生效、不用重新请求。
+  final ValueNotifier<String?> canvasUrlNotifier = ValueNotifier<String?>(null);
   final ValueNotifier<List<Map<String, int>>?> chorusTimesNotifier =
       ValueNotifier<List<Map<String, int>>?>(null);
 
@@ -96,6 +104,7 @@ class PlayerService extends ChangeNotifier {
             },
           )
           .toList();
+      _loadCanvas(state.currentTrack);
       structural = true;
     }
     if (state.isPlaying != _lastIsPlaying ||
@@ -109,6 +118,19 @@ class PlayerService extends ChangeNotifier {
       structural = true;
     }
     if (structural) notifyListeners();
+  }
+
+  /// 切歌时换 Canvas。先清空，取回来时还是这首歌才写入，避免快速切歌时
+  /// 旧请求晚到盖掉新歌。
+  void _loadCanvas(Track? track) {
+    canvasUrlNotifier.value = null;
+    if (track == null || track.source != MusicSource.spotify) return;
+    final key = track.key;
+    SpotifyCanvasService.instance.fetchVideoUrl(track.id).then((url) {
+      if (url != null && _lastTrackKey == key) {
+        canvasUrlNotifier.value = url;
+      }
+    });
   }
 
   // ==================== 原版只读接口 ====================

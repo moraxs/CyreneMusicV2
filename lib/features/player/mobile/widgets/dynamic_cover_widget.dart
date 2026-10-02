@@ -82,8 +82,12 @@ class _DynamicCoverWidgetState extends State<DynamicCoverWidget> {
           child: hasVideo
               ? RepaintBoundary(
                   key: ValueKey('dynamic_cover_$videoUrl'),
-                  child: VideoBackgroundPlayer(
-                    videoPath: videoUrl,
+                  child: ListenableBuilder(
+                    listenable: PlayerService(),
+                    builder: (context, _) => VideoBackgroundPlayer(
+                      videoPath: videoUrl,
+                      paused: !PlayerService().isPlaying,
+                    ),
                   ),
                 )
               : const SizedBox.shrink(key: ValueKey('no_video')),

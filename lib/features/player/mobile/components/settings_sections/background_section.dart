@@ -36,6 +36,18 @@ class BackgroundSection extends StatelessWidget {
           children: [
             const MiuixSmallTitle('播放器背景', insideMargin: EdgeInsets.zero),
             const SizedBox(height: 4),
+            // 单独成组：它压在下面所有背景类型之上，不是其中的一个选项。
+            CyreneMenuGroup(
+              children: [
+                MiuixSwitchPreference(
+                  title: '动态封面',
+                  summary: '歌曲有动态封面时全屏播放，优先于下方背景设置',
+                  value: bg.canvasEnabled,
+                  onChanged: bg.setCanvasEnabled,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
             CyreneMenuGroup(
                 children: [
                   CyreneMenuRow(
